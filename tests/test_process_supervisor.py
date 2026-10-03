@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from pathlib import Path
 
@@ -92,10 +93,11 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         return process
 
     killpg_calls: list[tuple[int, object]] = []
-    monkeypatch.setattr(
-        "voiceink_win.infrastructure.process.os.killpg",
-        lambda pid, sig: killpg_calls.append((pid, sig)),
-    )
+    if os.name != "nt":
+        monkeypatch.setattr(
+            "voiceink_win.infrastructure.process.os.killpg",
+            lambda pid, sig: killpg_calls.append((pid, sig)),
+        )
     supervisor = SubprocessSupervisor(
         config,
         readiness_probe=FakeProbe(),
@@ -119,9 +121,13 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "2",
     ]
     assert calls[0][1]["shell"] is False
-    assert supervisor.process_tree_mode == "posix-process-group"
+    expected_mode = "windows-taskkill" if os.name == "nt" else "posix-process-group"
+    assert supervisor.process_tree_mode == expected_mode
     supervisor.terminate(time.monotonic() + 1.0)
-    assert killpg_calls
+    if os.name == "nt":
+        assert process.terminated
+    else:
+        assert killpg_calls
 
 
 def test_subprocess_config_rejects_non_loopback_endpoint(tmp_path: Path) -> None:
