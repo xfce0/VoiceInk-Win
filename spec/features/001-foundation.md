@@ -14,7 +14,7 @@ This feature establishes the repository quality gates and validates the proposed
 
 ## Functional Requirements
 
-- The repository must contain a canonical agent contract.
+- The repository must contain the tracked public project context; a local `AGENTS.md` contract may be supplied by the maintainer and is intentionally ignored.
 - Product and architecture requirements must live under `spec/` and be catalogued.
 - `make spec-check` must fail when a catalogued specification is missing or empty.
 - `make check` must run specification validation, formatting, linting, tests, and source compilation.
@@ -33,7 +33,7 @@ This feature establishes the repository quality gates and validates the proposed
 
 ## Acceptance Criteria
 
-- `AGENTS.md`, `README.md`, `Makefile`, `pyproject.toml`, and the catalogued specifications exist.
+- `PROJECT_CONTEXT.md`, `README.md`, `Makefile`, `pyproject.toml`, and the catalogued specifications exist.
 - `make spec-check` passes.
 - `make check` passes on the development machine.
 - No existing macOS VoiceInk working-tree files are changed.

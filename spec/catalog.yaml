@@ -13,3 +13,6 @@ documents:
   - path: spec/templates/feature-spec.md
     kind: template
     status: active
+  - path: rfcs/foundation-runtime-spike.md
+    kind: rfc
+    status: proposed

@@ -12,7 +12,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test build check run clean install-hooks
+.PHONY: help setup format format-check lint spec-check test build check run clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -38,7 +38,7 @@ lint:
 
 ## spec-check: Validate the living specification catalog and required sections
 spec-check:
-	$(PYTHON) scripts/spec_check.py
+	$(VENV_PYTHON) scripts/spec_check.py
 
 ## test: Run behavior-focused automated tests
 test:
@@ -65,3 +65,18 @@ install-hooks:
 	cp scripts/githooks/pre-push .git/hooks/pre-push
 	chmod +x .git/hooks/pre-commit .git/hooks/pre-push
 	@printf '%s\n' 'Git hooks installed: pre-commit and pre-push run make check.'
+
+## verify-branch: Verify that the current branch is publishable through a pull request
+verify-branch:
+	@branch="$$(git branch --show-current)"; \
+	test -n "$$branch" || (printf '%s\n' 'Push rejected: detached HEAD is not publishable.' >&2; exit 1); \
+	case "$$branch" in \
+		feature/*|fix/*|refactor/*|docs/*|test/*|chore/*) ;; \
+		*) printf '%s\n' "Push rejected: branch '$$branch' must use a feature, fix, refactor, docs, test, or chore prefix." >&2; exit 1 ;; \
+	esac
+	@test "$$(git branch --show-current)" != "main" || (printf '%s\n' 'Push rejected: main is protected; use a feature branch and a pull request.' >&2; exit 1)
+	@test -z "$$(git status --porcelain)" || (printf '%s\n' 'Push rejected: the worktree must be clean and all changes committed.' >&2; exit 1)
+
+## push: Run all checks and push the current non-main branch for a pull request
+push: install-hooks check verify-branch
+	@branch="$$(git branch --show-current)"; printf '%s\n' "Pushing $$branch for PR review"; git push -u origin "$$branch"
