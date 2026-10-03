@@ -1,4 +1,20 @@
 #!/bin/sh
 set -eu
 
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        printf '%s\n' 'Push rejected: direct pushes to main are forbidden. Open a pull request.' >&2
+        exit 1
+    fi
+done
+
+branch="$(git branch --show-current)"
+case "$branch" in
+    feature/*|fix/*|refactor/*|docs/*|test/*|chore/*) ;;
+    *)
+        printf '%s\n' "Push rejected: branch '$branch' is not a PR branch." >&2
+        exit 1
+        ;;
+esac
+
 make check

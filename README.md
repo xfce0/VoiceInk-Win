@@ -7,7 +7,8 @@ The project is in the specification and architecture stage. The macOS VoiceInk r
 ## Repository Layout
 
 ```text
-AGENTS.md                  Agent and engineering contract
+PROJECT_CONTEXT.md         Public project description and current status
+AGENTS.md                  Local agent and engineering contract (ignored)
 Makefile                   Development and quality commands
 spec/                      Living product and architecture specifications
 src/voiceink_win/          Application source
@@ -26,12 +27,15 @@ Python 3.15 is not a requirement until PySide6, packaging, audio, and ASR depend
 
 ## Workflow
 
-1. Read `AGENTS.md` and the affected specifications.
+1. Read `PROJECT_CONTEXT.md`, local `AGENTS.md`, and the affected specifications.
 2. Create or update a feature specification under `spec/features/`.
 3. Implement the smallest behavior covered by the specification.
 4. Add or update behavior-focused tests.
 5. Run `make check`.
 6. Commit the complete logical change with a conventional commit message.
+7. Run `make push` from the feature branch to publish it for a pull request.
+8. Open a pull request into `main` and wait for GitHub checks and review.
+9. A human maintainer merges the pull request; agents never merge into `main`.
 
 ## Commands
 
@@ -41,4 +45,7 @@ Run `make help` for the current command list. The important gates are:
 make spec-check
 make test
 make check
+make push
 ```
+
+Direct pushes to `main` are forbidden by local hooks, `make push`, and the repository branch protection policy. `AGENTS.md` contains local agent instructions and is intentionally not published; `PROJECT_CONTEXT.md` is the public project passport for new clones.
