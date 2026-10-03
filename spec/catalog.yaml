@@ -9,7 +9,7 @@ documents:
     status: proposed
   - path: spec/features/001-foundation.md
     kind: feature
-    status: draft
+    status: approved
   - path: spec/features/002-imported-media-transcription.md
     kind: feature
     status: draft
@@ -18,7 +18,7 @@ documents:
     status: active
   - path: rfcs/foundation-runtime-spike.md
     kind: rfc
-    status: proposed
+    status: approved
   - path: rfcs/imported-media-transcription.md
     kind: rfc
     status: proposed

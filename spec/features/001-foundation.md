@@ -2,7 +2,7 @@
 
 ## Status and Scope
 
-Status: draft.
+Status: approved.
 
 This feature establishes the repository quality gates and validates the proposed Windows ASR runtime before product implementation. It does not provide the user-facing application yet.
 
