@@ -51,5 +51,5 @@ This feature establishes the repository quality gates and validates the proposed
 ## Open Questions and Deferred Work
 
 - Add the Parakeet benchmark specification after the Windows runtime spike.
-- Add the file-import specification before implementing FFmpeg integration.
+- Implement `spec/features/002-imported-media-transcription.md` only after this foundation RFC and `rfcs/imported-media-transcription.md` are approved.
 - Add the recording, paste, history, modes, and enhancement specifications before their implementations.
