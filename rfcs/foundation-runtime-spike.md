@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Implementation is blocked until this RFC is reviewed, approved, and all blocking open questions are resolved.
+Approved / In Progress. The maintainer approved implementation on the feature branch. Windows-native runtime, CUDA, model pinning, and benchmark evidence remain explicit validation gates before this RFC can become Complete.
 
 ## Summary
 

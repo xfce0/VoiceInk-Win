@@ -1,0 +1,61 @@
+"""Public platform-independent ASR foundation."""
+
+from .cancellation import CancellationToken
+from .errors import (
+    AsrError,
+    AsrErrorCode,
+    AsrTimeoutError,
+    BackendUnavailableError,
+    CancellationError,
+    ConfigurationError,
+    DeadlineExceededError,
+    ExecutionError,
+    InvalidInputError,
+    MissingModelError,
+    ProcessCrashedError,
+    ProtocolError,
+    QueueFullError,
+    RuntimeUnavailableError,
+)
+from .models import (
+    MAX_CANONICAL_AUDIO_BYTES,
+    AsrCapabilities,
+    AsrRequest,
+    CanonicalAudio,
+    HealthStatus,
+    RuntimeHealth,
+    Timestamp,
+    TranscriptResult,
+    TranscriptSegment,
+    WordTimestamp,
+)
+from .ports import AsrRuntime
+
+__all__ = [
+    "AsrCapabilities",
+    "AsrError",
+    "AsrErrorCode",
+    "AsrRequest",
+    "AsrRuntime",
+    "AsrTimeoutError",
+    "BackendUnavailableError",
+    "CancellationError",
+    "CancellationToken",
+    "CanonicalAudio",
+    "ConfigurationError",
+    "DeadlineExceededError",
+    "ExecutionError",
+    "HealthStatus",
+    "InvalidInputError",
+    "MissingModelError",
+    "ProcessCrashedError",
+    "ProtocolError",
+    "QueueFullError",
+    "RuntimeUnavailableError",
+    "RuntimeHealth",
+    "Timestamp",
+    "TranscriptResult",
+    "TranscriptSegment",
+    "WordTimestamp",
+    "MAX_CANONICAL_AUDIO_BYTES",
+]
