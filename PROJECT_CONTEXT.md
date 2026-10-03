@@ -73,8 +73,9 @@ Parakeet V3 is treated as offline/batch transcription in the first milestone. Re
 6. Commit the complete logical change.
 7. Run `make push`; it verifies the branch and quality gates and publishes only the feature branch.
 8. Open a pull request into `main`.
-9. Wait for GitHub checks and review.
-10. A human maintainer merges the PR. Agents do not merge into `main`.
+9. Wait for all GitHub checks to pass.
+10. A human maintainer selects `Squash and merge`.
+11. Agents do not merge into `main`.
 
 Direct pushes to `main` are prohibited by project policy. The local hook and Makefile are developer safeguards; GitHub branch protection is the authoritative remote safeguard.
 
