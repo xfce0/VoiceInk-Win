@@ -527,10 +527,17 @@ def test_ffmpeg_reaper_generation_cannot_clear_the_next_run() -> None:
 def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
     tmp_path: Path, monkeypatch
 ) -> None:
-    if os.name == "nt":
+    host_is_windows = os.name == "nt"
+    if host_is_windows:
         # This test exercises argv construction with a fake process. The real
         # Windows Job Object launch path is covered by native smoke.
-        monkeypatch.setattr(process_module.os, "name", "posix")
+        class PosixOsProxy:
+            name = "posix"
+
+            def __getattr__(self, name):
+                return getattr(os, name)
+
+        monkeypatch.setattr(process_module, "os", PosixOsProxy())
     executable = tmp_path / "sidecar"
     model = tmp_path / "model.gguf"
     executable_hash = write_artifact(executable, b"executable")
@@ -554,11 +561,10 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         return process
 
     killpg_calls: list[tuple[int, object]] = []
-    if os.name != "nt":
-        monkeypatch.setattr(
-            "voiceink_win.infrastructure.process.os.killpg",
-            lambda pid, sig: killpg_calls.append((pid, sig)),
-        )
+    monkeypatch.setattr(
+        "voiceink_win.infrastructure.process.os.killpg",
+        lambda pid, sig: killpg_calls.append((pid, sig)),
+    )
     supervisor = SubprocessSupervisor(
         config,
         readiness_probe=FakeProbe(),
@@ -582,13 +588,9 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "2",
     ]
     assert calls[0][1]["shell"] is False
-    expected_mode = "windows-taskkill" if os.name == "nt" else "posix-process-group"
-    assert supervisor.process_tree_mode == expected_mode
+    assert supervisor.process_tree_mode == "posix-process-group"
     supervisor.terminate(time.monotonic() + 1.0)
-    if os.name == "nt":
-        assert process.terminated
-    else:
-        assert killpg_calls
+    assert killpg_calls
 
 
 def test_subprocess_config_rejects_non_loopback_endpoint(tmp_path: Path) -> None:
