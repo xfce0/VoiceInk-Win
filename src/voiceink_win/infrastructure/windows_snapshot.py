@@ -105,6 +105,15 @@ def _check_handle(result, function, arguments):
     return result
 
 
+def _path_key(value: Path | str) -> str:
+    normalized = str(value).replace("/", "\\").casefold()
+    if normalized.startswith("\\\\?\\"):
+        normalized = normalized[4:]
+    if not normalized.endswith(":\\"):
+        normalized = normalized.rstrip("\\")
+    return normalized
+
+
 _CANCEL_DRAIN_TIMEOUT_MS = 1000
 _ERROR_NO_MORE_FILES = 18
 _ERROR_HANDLE_EOF = 38
@@ -1303,7 +1312,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             if path is None or (getattr(error, "winerror", None) or error.errno) != 87:
                 raise
         self._assert_contained_handle(handle)
-        if self._canonical_handle(handle) != self._canonical(path):
+        if _path_key(self._canonical_handle(handle)) != _path_key(path):
             raise OSError("delete fallback handle does not match its path")
         delete = self._api.dll.RemoveDirectoryW if directory else self._api.dll.DeleteFileW
         if not delete(str(path)):
