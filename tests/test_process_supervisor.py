@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import signal
 import time
 from pathlib import Path
 from threading import Event
@@ -63,6 +64,16 @@ def force_posix_os(monkeypatch, module) -> None:
             return getattr(real_os, name)
 
     monkeypatch.setattr(module, "os", PosixOsProxy())
+
+    class PosixSignalProxy:
+        SIGTERM = signal.SIGTERM
+        SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+        def __getattr__(self, name):
+            return getattr(signal, name)
+
+    if module is media_process_module:
+        monkeypatch.setattr(module, "signal", PosixSignalProxy())
 
 
 def write_artifact(path: Path, content: bytes) -> str:

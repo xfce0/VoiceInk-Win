@@ -83,11 +83,18 @@ jobs:
         shell: pwsh
         run: |
           $fixture = Join-Path $env:RUNNER_TEMP "diagnostic-fixture.wav"
+          $logs = Join-Path $env:RUNNER_TEMP "diagnostic-logs"
           python -c "import wave,sys; w=wave.open(sys.argv[1], 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b'\x00\x00' * 1600); w.close()" $fixture
-           & .\dist\voiceink-diagnostic.exe $fixture --logs-dir (Join-Path $env:RUNNER_TEMP "diagnostic-logs")
-          if ($LASTEXITCODE -ne 0) { throw "Frozen diagnostic executable failed with exit code $LASTEXITCODE" }
+          & .\dist\voiceink-diagnostic.exe $fixture --logs-dir $logs 2>&1 | Tee-Object (Join-Path $env:RUNNER_TEMP "diagnostic.stdout.log")
+          $exitCode = $LASTEXITCODE
+          if (Test-Path $logs) { Get-ChildItem $logs -Recurse -File | Get-Content }
+          if ($exitCode -ne 0) { throw "Frozen diagnostic executable failed with exit code $exitCode" }
       - name: Upload diagnostic bundle
+        if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
         with:
           name: voiceink-diagnostic-windows-x64
-          path: dist/
+          path: |
+            dist/
+            ${{ runner.temp }}/diagnostic-logs/
+            ${{ runner.temp }}/diagnostic.stdout.log

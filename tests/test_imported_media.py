@@ -736,11 +736,11 @@ def test_deadline_cleanup_failure_publishes_terminal_warning_and_releases_capaci
         BlockingNormalizer(),
         AsrApplicationService(FakeAsrRuntime()),
         store,
-        processing_deadline_seconds=0.01,
+        processing_deadline_seconds=0.2,
     )
     job_id = application.submit(str(source_file(tmp_path)))
-    assert started.wait(1.0)
-    time.sleep(0.03)
+    assert started.wait(2.0)
+    time.sleep(0.25)
     application.check_deadlines()
     release.set()
 
