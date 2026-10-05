@@ -155,9 +155,9 @@ jobs:
       - name: Upload native smoke report
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
-         with:
-           name: native-smoke-report
-           path: |
-             native-smoke-report.json
-             native-smoke-events.jsonl
-           if-no-files-found: warn
+        with:
+          name: native-smoke-report
+          path: |
+            native-smoke-report.json
+            native-smoke-events.jsonl
+          if-no-files-found: warn
