@@ -1620,6 +1620,19 @@ def test_windows_snapshot_directory_names_accepts_end_of_directory(
     assert closed == [7]
 
 
+def test_bounded_pcm_sink_accepts_streaming_wav_sizes() -> None:
+    wav = bytearray(make_wav(b"\x00\x00" * 4))
+    wav[4:8] = b"\xff\xff\xff\xff"
+    wav[40:44] = b"\xff\xff\xff\xff"
+    sink = BoundedPcmSink(max_bytes=64 * 1024, max_samples=4, max_pcm_bytes=8)
+
+    sink.write(bytes(wav[:17]))
+    sink.write(bytes(wav[17:]))
+
+    result = sink.normalized_audio(WavLimits(pcm_bytes=8, sample_count=4))
+    assert result.audio.pcm16le == b"\x00\x00" * 4
+
+
 def test_windows_snapshot_delete_ignores_readonly_attribute() -> None:
     class Function:
         def __init__(self, value=True) -> None:

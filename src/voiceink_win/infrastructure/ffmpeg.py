@@ -267,10 +267,13 @@ class BoundedPcmSink:
             raise ValueError("PCM byte quota must be positive")
         self._pending = bytearray()
         self._pcm = bytearray()
+        self._header_parsed = False
+        self._riff_size_unknown = False
         self._expected_size: int | None = None
         self._received = 0
         self._chunk_id: bytes | None = None
         self._chunk_remaining = 0
+        self._chunk_unknown = False
         self._chunk_padding = False
         self._chunk_data = bytearray()
         self._format: tuple[int, int, int, int, int, int] | None = None
@@ -283,20 +286,40 @@ class BoundedPcmSink:
         self._pending.extend(chunk)
         self._parse()
 
-    def _parse(self) -> None:
-        if self._expected_size is None:
+    def _parse(self, *, final: bool = False) -> None:
+        if not self._header_parsed:
             if len(self._pending) < 12:
                 return
             if self._pending[:4] != b"RIFF" or self._pending[8:12] != b"WAVE":
                 raise MalformedWavError("normalized output is not RIFF/WAV")
-            self._expected_size = int.from_bytes(self._pending[4:8], "little") + 8
-            if self._expected_size > self.max_bytes:
+            riff_size = int.from_bytes(self._pending[4:8], "little")
+            self._riff_size_unknown = riff_size == 0xFFFFFFFF
+            if not self._riff_size_unknown:
+                self._expected_size = riff_size + 8
+            if self._expected_size is not None and self._expected_size > self.max_bytes:
                 raise ResourceLimitExceededError("normalized WAV exceeds the configured quota")
             del self._pending[:12]
+            self._header_parsed = True
 
         while True:
             if self._chunk_id is not None:
-                if self._chunk_remaining:
+                if self._chunk_unknown:
+                    if self._pending:
+                        payload = bytes(self._pending)
+                        del self._pending[:]
+                        self._pcm.extend(payload)
+                        if (
+                            len(self._pcm) > self.max_pcm_bytes
+                            or len(self._pcm) // 2 > self.max_samples
+                        ):
+                            raise ResourceLimitExceededError(
+                                "normalized PCM exceeds the configured quota"
+                            )
+                    if not final:
+                        return
+                    self._chunk_unknown = False
+                    self._chunk_remaining = 0
+                elif self._chunk_remaining:
                     if not self._pending:
                         return
                     count = min(self._chunk_remaining, len(self._pending))
@@ -348,14 +371,24 @@ class BoundedPcmSink:
                 if self._data_seen:
                     raise MalformedWavError("normalized WAV contains multiple data chunks")
                 self._data_seen = True
-            self._chunk_remaining = size
-            self._chunk_padding = bool(size & 1)
+            if size == 0xFFFFFFFF:
+                if self._chunk_id != b"data":
+                    raise MalformedWavError(
+                        "normalized WAV contains an unknown-size non-data chunk"
+                    )
+                self._chunk_unknown = True
+                self._chunk_remaining = 0
+                self._chunk_padding = False
+            else:
+                self._chunk_unknown = False
+                self._chunk_remaining = size
+                self._chunk_padding = bool(size & 1)
 
     def normalized_audio(self, limits: WavLimits) -> NormalizedAudio:
-        self._parse()
+        self._parse(final=True)
         if (
-            self._expected_size is None
-            or self._received != self._expected_size
+            not self._header_parsed
+            or (not self._riff_size_unknown and self._received != self._expected_size)
             or self._pending
             or self._chunk_id is not None
             or self._format is None
