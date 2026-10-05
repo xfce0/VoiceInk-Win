@@ -88,6 +88,7 @@ def _check_handle(result, function, arguments):
 
 
 _CANCEL_DRAIN_TIMEOUT_MS = 1000
+_STATUS_INVALID_PARAMETER = 0xC000000D
 
 
 class _DetachedOverlapped(Exception):
@@ -1258,12 +1259,24 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         try:
             if self._identity(directory_handle)[0] != expected_directory_identity:
                 raise OSError("workspace identity changed before manifest read")
-            handle = self._open_relative(
-                directory_handle,
-                "manifest.json",
-                access=self._api.GENERIC_READ | self._api.GENERIC_WRITE,
-                disposition=self._api.FILE_OPEN_IF,
-            )
+            try:
+                handle = self._open_relative(
+                    directory_handle,
+                    "manifest.json",
+                    access=self._api.GENERIC_READ | self._api.GENERIC_WRITE,
+                    disposition=self._api.FILE_OPEN_IF,
+                )
+            except OSError as error:
+                if error.errno != _STATUS_INVALID_PARAMETER:
+                    raise
+                handle = self._open(
+                    workspace / "manifest.json",
+                    self._api.GENERIC_READ | self._api.GENERIC_WRITE,
+                    self._api.OPEN_ALWAYS,
+                )
+                self._assert_contained_handle(handle)
+                if Path(self._canonical_handle(handle)).parent != Path(self._canonical(workspace)):
+                    raise OSError("manifest handle does not belong to the workspace") from None
             info = _WindowsFileInformation()
             self._api.dll.GetFileInformationByHandle(handle, ctypes.byref(info))
             if (
