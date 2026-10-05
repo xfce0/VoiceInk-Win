@@ -499,7 +499,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         )
         manifest_directory = self._open(
             workspace.path,
-            self._api.GENERIC_READ,
+            self._api.GENERIC_READ | self._api.GENERIC_WRITE,
             self._api.OPEN_EXISTING,
             directory=True,
         )
