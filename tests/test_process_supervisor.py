@@ -50,6 +50,21 @@ class FakeProcess:
         return 0
 
 
+def force_posix_os(monkeypatch, module) -> None:
+    if os.name != "nt":
+        return
+
+    real_os = os
+
+    class PosixOsProxy:
+        name = "posix"
+
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+    monkeypatch.setattr(module, "os", PosixOsProxy())
+
+
 def write_artifact(path: Path, content: bytes) -> str:
     path.write_bytes(content)
     return hashlib.sha256(content).hexdigest()
@@ -388,6 +403,8 @@ def test_ffmpeg_reaper_observes_attached_job_before_finishing_generation() -> No
 
 
 def test_job_handle_recovery_does_not_block_process_generation_completion() -> None:
+    release_retry = Event()
+
     class Process:
         pid = 792
 
@@ -400,6 +417,7 @@ def test_job_handle_recovery_does_not_block_process_generation_completion() -> N
             if self.failures:
                 self.failures -= 1
                 raise OSError("simulated CloseHandle failure")
+            release_retry.wait(1.0)
             self.closed = True
 
     runner = object.__new__(media_process_module.WindowsJobObjectProcessRunner)
@@ -421,6 +439,7 @@ def test_job_handle_recovery_does_not_block_process_generation_completion() -> N
     assert generation.done.is_set()
     assert runner.reaper_done.is_set()
     assert job in runner._job_recovery
+    release_retry.set()
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline and not job.closed:
         time.sleep(0.01)
@@ -438,6 +457,8 @@ def test_supervisor_wait_ready_uses_injected_monotonic_clock() -> None:
 
 
 def test_process_cleanup_uses_no_time_after_absolute_deadline(monkeypatch) -> None:
+    force_posix_os(monkeypatch, media_process_module)
+
     class StubbornProcess:
         pid = 456
 
@@ -473,6 +494,8 @@ def test_process_cleanup_uses_no_time_after_absolute_deadline(monkeypatch) -> No
 def test_unexpected_wait_failure_keeps_generation_owned_reaper_until_process_exits(
     monkeypatch,
 ) -> None:
+    force_posix_os(monkeypatch, media_process_module)
+
     released = process_module.Event()
 
     class WaitFailsWhileAlive:
@@ -527,17 +550,10 @@ def test_ffmpeg_reaper_generation_cannot_clear_the_next_run() -> None:
 def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
     tmp_path: Path, monkeypatch
 ) -> None:
-    host_is_windows = os.name == "nt"
-    if host_is_windows:
+    if os.name == "nt":
         # This test exercises argv construction with a fake process. The real
         # Windows Job Object launch path is covered by native smoke.
-        class PosixOsProxy:
-            name = "posix"
-
-            def __getattr__(self, name):
-                return getattr(os, name)
-
-        monkeypatch.setattr(process_module, "os", PosixOsProxy())
+        force_posix_os(monkeypatch, process_module)
     executable = tmp_path / "sidecar"
     model = tmp_path / "model.gguf"
     executable_hash = write_artifact(executable, b"executable")
@@ -562,8 +578,10 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
 
     killpg_calls: list[tuple[int, object]] = []
     monkeypatch.setattr(
-        "voiceink_win.infrastructure.process.os.killpg",
+        process_module.os,
+        "killpg",
         lambda pid, sig: killpg_calls.append((pid, sig)),
+        raising=False,
     )
     supervisor = SubprocessSupervisor(
         config,

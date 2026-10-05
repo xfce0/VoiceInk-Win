@@ -261,14 +261,16 @@ def test_application_close_preserves_pending_runtime_error_and_retries_with_new_
 
     runtime = PendingOnceRuntime()
     service = AsrApplicationService(runtime)
+    first_deadline = time.monotonic() + 1.0
+    second_deadline = first_deadline + 1.0
 
     with pytest.raises(RuntimeRecoveryPendingError):
-        service.close(deadline=time.monotonic() + 1.0)
+        service.close(deadline=first_deadline)
 
     assert service._state.value == "closing"
     assert not service._runtime_close_started
 
-    service.close(deadline=time.monotonic() + 1.0)
+    service.close(deadline=second_deadline)
 
     assert runtime.close_attempts == 2
     assert runtime.close_deadlines[0] < runtime.close_deadlines[1]
