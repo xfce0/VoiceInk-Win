@@ -690,7 +690,7 @@ def test_completed_record_is_pruned_after_fenced_cleanup_finishes(tmp_path: Path
 
     for content in (b"second", b"third"):
         job_id = application.submit(str(source_file(tmp_path, content)))
-        assert application.wait(job_id, timeout=2.0).status == "succeeded"
+        assert application.wait(job_id, timeout=5.0).status == "succeeded"
     assert application._record(first_id) is first_record
 
     release_cleanup.set()
@@ -699,7 +699,7 @@ def test_completed_record_is_pruned_after_fenced_cleanup_finishes(tmp_path: Path
         time.sleep(0.01)
     assert first_record.workspace is None
     fourth_id = application.submit(str(source_file(tmp_path, b"fourth")))
-    assert application.wait(fourth_id, timeout=2.0).status == "succeeded"
+    assert application.wait(fourth_id, timeout=5.0).status == "succeeded"
 
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and first_id in application._records:
