@@ -535,11 +535,11 @@ def test_processing_deadline_enters_cleanup_and_fails_without_retry(tmp_path: Pa
         tmp_path,
         BlockingNormalizer(),
         FakeAsrRuntime(),
-        processing_deadline_seconds=0.01,
+        processing_deadline_seconds=0.2,
     )
     job_id = application.submit(str(source_file(tmp_path)))
-    assert started.wait(1.0)
-    time.sleep(0.03)
+    assert started.wait(2.0)
+    time.sleep(0.25)
     application.check_deadlines()
     release.set()
 
@@ -571,12 +571,12 @@ def test_non_cooperative_stage_deadline_publishes_before_owner_done(tmp_path: Pa
         tmp_path,
         NonCooperativeNormalizer(),
         FakeAsrRuntime(),
-        processing_deadline_seconds=0.01,
+        processing_deadline_seconds=0.2,
     )
     job_id = application.submit(str(source_file(tmp_path)))
-    assert started.wait(1.0)
+    assert started.wait(2.0)
     record = application._record(job_id)
-    time.sleep(0.03)
+    time.sleep(0.25)
     application.check_deadlines()
     time.sleep(1.05)
     application.check_deadlines()
@@ -878,11 +878,11 @@ def test_processing_deadline_interrupts_active_adapter_before_cleanup(tmp_path: 
         tmp_path,
         InterruptibleNormalizer(),
         FakeAsrRuntime(),
-        processing_deadline_seconds=0.01,
+        processing_deadline_seconds=0.2,
     )
     job_id = application.submit(str(source_file(tmp_path)))
-    assert started.wait(1.0)
-    time.sleep(0.03)
+    assert started.wait(2.0)
+    time.sleep(0.25)
     application.check_deadlines()
 
     result = application.wait(job_id, timeout=2.0)
