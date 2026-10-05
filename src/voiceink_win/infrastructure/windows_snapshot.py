@@ -1300,7 +1300,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             )
             return
         except OSError as error:
-            if path is None or (getattr(error, "winerror", None) or error.errno) != 87:
+            if path is None or (getattr(error, "winerror", None) or error.errno) not in {5, 87}:
                 raise
         self._assert_contained_handle(handle)
         delete_path = self._canonical_handle(handle)
