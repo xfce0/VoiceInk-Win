@@ -968,7 +968,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         access: int,
         disposition: int,
         *,
-        directory: bool = False,
+        directory: bool | None = False,
         share: int | None = None,
         overlapped: bool = False,
     ) -> int:
@@ -1032,7 +1032,9 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             value.startswith("\\\\") and not value.startswith("\\\\?\\")
         ):
             raise InvalidSourceError("network paths are not permitted")
-        return value.rstrip("\\").casefold()
+        if not value.endswith(":\\"):
+            value = value.rstrip("\\")
+        return value.casefold()
 
     def _canonical(self, path: Path) -> str:
         handle = self._open(path, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True)
@@ -1249,6 +1251,28 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             )
         if result < 0:
             status = result & 0xFFFFFFFF
+            if status == _STATUS_INVALID_PARAMETER and disposition == self._api.FILE_OPEN:
+                parent_identity = self._identity(parent)[0]
+                parent_canonical = self._canonical_handle(parent)
+                fallback_path = Path(self._canonical_handle(parent)) / name
+                self._assert_no_reparse_components(fallback_path)
+                fallback_handle = self._open(
+                    fallback_path,
+                    desired_access,
+                    self._api.OPEN_EXISTING,
+                    directory=None,
+                    share=share,
+                )
+                try:
+                    if self._identity(parent)[0] != parent_identity:
+                        raise OSError("relative-open parent identity changed")
+                    if self._canonical_handle(parent) != parent_canonical:
+                        raise OSError("relative-open parent path changed")
+                    self._assert_contained_handle(fallback_handle)
+                    return fallback_handle
+                except BaseException:
+                    self._close_or_recover(fallback_handle)
+                    raise
             raise OSError(status, f"NtOpenFile failed with NTSTATUS 0x{status:08x}")
         return int(handle.value)
 
@@ -1294,14 +1318,28 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             except OSError as error:
                 if error.errno != _STATUS_INVALID_PARAMETER:
                     raise
+                if self._identity(directory_handle)[0] != expected_directory_identity:
+                    raise OSError("workspace identity changed before manifest fallback") from None
+                workspace_canonical = self._canonical(workspace)
+                self._assert_no_reparse_components(workspace / "manifest.json")
                 handle = self._open(
                     workspace / "manifest.json",
                     self._api.GENERIC_READ | self._api.GENERIC_WRITE,
                     self._api.OPEN_ALWAYS,
+                    directory=False,
                 )
-                self._assert_contained_handle(handle)
-                if Path(self._canonical_handle(handle)).parent != Path(self._canonical(workspace)):
-                    raise OSError("manifest handle does not belong to the workspace") from None
+                try:
+                    self._assert_contained_handle(handle)
+                    if self._identity(directory_handle)[0] != expected_directory_identity:
+                        raise OSError("workspace identity changed during manifest fallback")
+                    if self._canonical_handle(directory_handle) != workspace_canonical:
+                        raise OSError("workspace path changed during manifest fallback")
+                    if Path(self._canonical_handle(handle)).parent != Path(workspace_canonical):
+                        raise OSError("manifest handle does not belong to the workspace")
+                except BaseException:
+                    self._close_or_recover(handle)
+                    handle = None
+                    raise
             info = _WindowsFileInformation()
             self._api.dll.GetFileInformationByHandle(handle, ctypes.byref(info))
             if (
@@ -1345,7 +1383,12 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         )
         handle: int | None = None
         try:
-            handle = self._open_relative(directory, "manifest.json")
+            handle = self._open_relative(
+                directory,
+                "manifest.json",
+                access=self._api.GENERIC_READ,
+                share=self._api.FILE_SHARE_READ,
+            )
             info = _WindowsFileInformation()
             self._api.dll.GetFileInformationByHandle(handle, ctypes.byref(info))
             if (
