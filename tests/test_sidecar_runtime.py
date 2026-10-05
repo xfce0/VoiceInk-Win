@@ -16,9 +16,15 @@ from voiceink_win.domain import (
     MissingModelError,
     ProcessCrashedError,
     ProtocolError,
+    RuntimeRecoveryPendingError,
     RuntimeUnavailableError,
 )
-from voiceink_win.infrastructure import NeMoSidecarRuntime, SidecarConfig, TransportResponse
+from voiceink_win.infrastructure import (
+    FakeClock,
+    NeMoSidecarRuntime,
+    SidecarConfig,
+    TransportResponse,
+)
 
 
 class FakeTransport:
@@ -33,6 +39,21 @@ class FakeTransport:
         self.calls.append((path, body, timeout))
         return self.response
 
+    def post_audio(
+        self,
+        path: str,
+        metadata: bytes,
+        pcm: memoryview,
+        timeout: float | None,
+        max_response_bytes: int,
+        cancellation=None,
+        deadline: float | None = None,
+    ) -> TransportResponse:
+        del cancellation, deadline
+        payload = json.loads(metadata)
+        payload["audio_pcm16le"] = bytes(pcm).hex()
+        return self.post(path, json.dumps(payload).encode(), timeout, max_response_bytes)
+
     def close(self) -> None:
         self.closed = True
 
@@ -43,12 +64,16 @@ class FakeSupervisor:
         self.running = running
         self.stubborn = stubborn
         self.fail_kill = False
+        self.fail_terminate = False
         self.started = False
         self.terminated = False
         self.killed = False
+        self.start_count = 0
 
     def start(self) -> None:
         self.started = True
+        self.start_count += 1
+        self.running = True
 
     def wait_ready(self, deadline: float) -> bool:
         assert deadline > time.monotonic()
@@ -60,6 +85,8 @@ class FakeSupervisor:
     def terminate(self, deadline: float) -> None:
         assert deadline > time.monotonic()
         self.terminated = True
+        if self.fail_terminate:
+            raise OSError("simulated terminate failure")
         if not self.stubborn:
             self.running = False
 
@@ -122,6 +149,7 @@ def test_sidecar_start_transcribe_and_close_use_injected_boundaries() -> None:
         (408, "timeout", AsrTimeoutError),
         (503, "backend_unavailable", BackendUnavailableError),
         (500, "execution", ExecutionError),
+        (500, "process_crashed", ProcessCrashedError),
     ],
 )
 def test_sidecar_maps_protocol_codes_to_typed_errors(status: int, code: str, error_type) -> None:
@@ -131,6 +159,10 @@ def test_sidecar_maps_protocol_codes_to_typed_errors(status: int, code: str, err
 
     with pytest.raises(error_type):
         runtime.transcribe(request())
+
+
+def test_process_crashed_error_is_retryable() -> None:
+    assert ProcessCrashedError.retryable
 
 
 def test_sidecar_does_not_infer_missing_model_or_backend_from_http_status() -> None:
@@ -211,6 +243,157 @@ def test_sidecar_reports_process_crash_and_kills_unready_process() -> None:
     assert unready_supervisor.killed
 
 
+def test_sidecar_restarts_after_crash_for_the_retry_attempt() -> None:
+    class SequencedTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__(TransportResponse(500, error_body("process_crashed")))
+            self.responses = [self.response, TransportResponse(200, result_body())]
+
+        def post_audio(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return self.responses.pop(0)
+
+    supervisor = FakeSupervisor()
+    transport = SequencedTransport()
+    runtime = NeMoSidecarRuntime(config(), transport, supervisor)
+    runtime.start()
+
+    with pytest.raises(ProcessCrashedError):
+        runtime.transcribe(request())
+    assert supervisor.start_count == 2
+    assert supervisor.terminated
+    assert supervisor.running
+
+    assert runtime.transcribe(request()).text == "hello"
+
+
+def test_sidecar_forces_old_process_down_after_terminate_failure_before_restart() -> None:
+    supervisor = FakeSupervisor()
+    supervisor.fail_terminate = True
+    runtime = NeMoSidecarRuntime(
+        config(),
+        FakeTransport(TransportResponse(500, error_body("process_crashed"))),
+        supervisor,
+    )
+    runtime.start()
+
+    with pytest.raises(ProcessCrashedError):
+        runtime.transcribe(request())
+
+    assert supervisor.killed
+    assert supervisor.start_count == 2
+    assert supervisor.running
+
+
+def test_sidecar_failed_restart_rolls_back_the_new_process_transactionally() -> None:
+    class FailsReadinessOnRestart(FakeSupervisor):
+        def start(self) -> None:
+            super().start()
+            if self.start_count == 2:
+                self.ready = False
+
+    supervisor = FailsReadinessOnRestart()
+    runtime = NeMoSidecarRuntime(
+        config(),
+        FakeTransport(TransportResponse(500, error_body("process_crashed"))),
+        supervisor,
+    )
+    runtime.start()
+
+    with pytest.raises(RuntimeUnavailableError):
+        runtime.transcribe(request())
+
+    assert supervisor.start_count == 2
+    assert supervisor.terminated
+    assert supervisor.killed
+    assert not supervisor.running
+    assert not runtime._started
+
+
+def test_sidecar_failed_restart_uses_request_deadline_and_injected_clock() -> None:
+    class FailsReadinessAndCleanup(FakeSupervisor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.terminate_deadlines: list[float] = []
+            self.kill_deadlines: list[float | None] = []
+            self.cleanup_pending = False
+
+        def start(self) -> None:
+            super().start()
+            if self.start_count == 2:
+                self.ready = False
+                self.cleanup_pending = True
+
+        def wait_ready(self, deadline: float) -> bool:
+            return self.start_count == 1 and deadline > 100.0
+
+        def terminate(self, deadline: float) -> None:
+            self.terminate_deadlines.append(deadline)
+            self.terminated = True
+            self.running = False
+
+        def kill(self, deadline: float | None = None) -> None:
+            self.kill_deadlines.append(deadline)
+            self.killed = True
+            self.running = False
+
+        def cleanup_complete(self) -> bool:
+            return not self.cleanup_pending
+
+    clock = FakeClock(100.0)
+    supervisor = FailsReadinessAndCleanup()
+    runtime = NeMoSidecarRuntime(
+        config(),
+        FakeTransport(TransportResponse(500, error_body("process_crashed"))),
+        supervisor,
+        clock=clock,
+    )
+    runtime.start()
+    request_deadline = clock.monotonic() + 0.05
+    request_with_deadline = AsrRequest(
+        CanonicalAudio(b"\x00\x00" * 16),
+        request_id="sidecar-deadline-test",
+        deadline=request_deadline,
+    )
+
+    with pytest.raises(AsrTimeoutError, match="deadline"):
+        runtime.transcribe(request_with_deadline)
+
+    assert supervisor.start_count == 2
+    assert supervisor.terminate_deadlines
+    assert all(deadline == request_deadline for deadline in supervisor.terminate_deadlines)
+    assert supervisor.kill_deadlines
+    assert all(deadline == request_deadline for deadline in supervisor.kill_deadlines)
+    assert clock.monotonic() >= request_deadline
+    assert not runtime._started
+
+
+def test_sidecar_timeout_closes_and_restarts_before_a_retry_attempt() -> None:
+    class TimeoutThenSuccessTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__(TransportResponse(200, result_body()))
+            self.attempts = 0
+
+        def post_audio(self, *args, **kwargs) -> TransportResponse:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise TimeoutError("simulated request timeout")
+            return super().post_audio(*args, **kwargs)
+
+    supervisor = FakeSupervisor()
+    transport = TimeoutThenSuccessTransport()
+    runtime = NeMoSidecarRuntime(config(), transport, supervisor)
+    runtime.start()
+
+    with pytest.raises(AsrTimeoutError):
+        runtime.transcribe(request())
+
+    assert transport.closed
+    assert supervisor.start_count == 2
+    assert supervisor.running
+    assert runtime.transcribe(request()).text == "hello"
+
+
 def test_sidecar_startup_cleanup_failure_is_typed_and_health_is_sanitized() -> None:
     supervisor = FakeSupervisor(ready=False)
     supervisor.fail_kill = True
@@ -242,3 +425,28 @@ def test_sidecar_kills_stubborn_process_during_close() -> None:
 
     assert supervisor.terminated
     assert supervisor.killed
+
+
+def test_sidecar_preserves_pending_cleanup_for_a_later_close_retry() -> None:
+    class PendingCleanupSupervisor(FakeSupervisor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cleanup_ready = False
+
+        def cleanup_complete(self) -> bool:
+            return self.cleanup_ready
+
+    supervisor = PendingCleanupSupervisor()
+    runtime = NeMoSidecarRuntime(
+        config(), FakeTransport(TransportResponse(200, result_body())), supervisor
+    )
+    runtime.start()
+
+    with pytest.raises(RuntimeRecoveryPendingError):
+        runtime.close(deadline=time.monotonic() + 1.0)
+    assert not runtime._closed
+
+    supervisor.cleanup_ready = True
+    runtime.close(deadline=time.monotonic() + 1.0)
+
+    assert runtime._closed

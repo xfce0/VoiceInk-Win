@@ -12,7 +12,7 @@ documents:
     status: approved
   - path: spec/features/002-imported-media-transcription.md
     kind: feature
-    status: draft
+    status: implemented
   - path: spec/templates/feature-spec.md
     kind: template
     status: active
@@ -21,4 +21,4 @@ documents:
     status: approved
   - path: rfcs/imported-media-transcription.md
     kind: rfc
-    status: proposed
+    status: implemented

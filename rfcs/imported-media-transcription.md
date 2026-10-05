@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. This RFC depends on `rfcs/foundation-runtime-spike.md`. Implementation is blocked until the foundation RFC is approved, implemented, and its ASR/audio contracts are stable.
+Implemented locally. The fake/injected workflow and security contracts are implemented and tested; the native Windows smoke remains required evidence and has not been run on this macOS workstation. Future codec support, distribution policy, and native performance validation remain open.
 
 ## Summary
 
@@ -66,14 +66,14 @@ Development continues on macOS, so application behavior must be testable with fa
 
 ## Dependencies
 
-### Blocking dependency
+### Resolved dependency
 
-`foundation-runtime-spike.md` must be approved and implemented with:
+`foundation-runtime-spike.md` is approved and provides:
 
 - a stable typed ASR port;
 - a stable canonical audio contract;
 - a deterministic fake runtime;
-- a validated Windows CPU runtime path;
+- a defined Windows CPU runtime path whose native validation remains a Windows-only evidence gate;
 - documented error, timeout, and cancellation behavior.
 
 ### Future dependencies
@@ -194,7 +194,7 @@ Arguments must be passed as an array without shell interpolation. Version 1 sele
 
 Permanent normalization failures include missing source, non-regular file, missing audio stream, unsupported/corrupt media, missing FFmpeg, invalid normalized WAV, empty audio, and admission-limit violations. These failures are not retried automatically.
 
-The first implementation must enforce these proposed v1 limits: source snapshot `2 GiB`, derived workspace artifacts `768 MiB`, decoded duration `4 hours` (`230,400,000` samples), normalized PCM payload `512 MiB`, captured stderr `64 KiB`, queue capacity `8`, stage timeout `30 minutes`, cleanup timeout `5 minutes`, and processing deadline `45 minutes`. Source snapshot and derived-artifact quotas are disjoint; the maximum per-job disk budget is `2.75 GiB`. Derived quota accounts for every workspace byte except the source snapshot; PCM quota accounts only for the WAV `data` payload and sample count. A quota-enforcing sink rejects a chunk that would cross either PCM bytes or sample-count limit, terminates FFmpeg, accepts zero bytes beyond the limit, and returns `ResourceLimitExceeded`; before admission the same code is returned as `ResourceLimitExceededError` inside `RejectedRequest`. The supported container/codec matrix and final limit approval remain blocking decisions.
+The first implementation must enforce these v1 limits: source snapshot `2 GiB`, derived workspace artifacts `768 MiB`, decoded duration `32 minutes` (`30,720,000` samples), normalized PCM payload `64 MiB`, captured stderr `64 KiB`, queue capacity `8`, stage timeout `30 minutes`, cleanup timeout `5 minutes`, and processing deadline `45 minutes`. Source snapshot and derived-artifact quotas are disjoint and enforced independently per attempt workspace; they are not global pools, so two jobs may each use their full configured per-workspace limit. The maximum per-job disk budget is `2.75 GiB`. Derived quota accounts for every workspace byte except the source snapshot; PCM quota accounts only for the WAV `data` payload and sample count. A quota-enforcing sink rejects a chunk that would cross either PCM bytes or sample-count limit, terminates FFmpeg, accepts zero bytes beyond the limit, and returns `ResourceLimitExceeded`; before admission the same code is returned as `ResourceLimitRejectedError` inside `RejectedRequest`. The supported container/codec matrix remains a separate decision.
 
 ## FFmpeg Port
 
@@ -211,7 +211,7 @@ class MediaNormalizer(Protocol):
     ) -> NormalizedAudio: ...
 ```
 
-The adapter owns process startup, safe arguments, timeout, process-tree termination, exit-code handling, WAV validation, error classification, and safe diagnostics. Application code must not parse FFmpeg stderr or construct commands. The adapter must read an immutable input snapshot in the private workspace, reject UNC paths/reparse points and network protocols, enforce the stdout quota sink, bound captured stderr, and use a Windows Job Object with kill-on-close and resource limits. FFmpeg must be pinned and checksum-verified before execution. The artifact manifest must record version, provenance URL, SHA-256, license, and allowed executable path.
+The adapter owns process startup, safe arguments, timeout, process-tree termination, exit-code handling, WAV validation, error classification, and safe diagnostics. Application code must not parse FFmpeg stderr or construct commands. The adapter must read an immutable input snapshot in the private workspace, reject UNC paths/reparse points and network protocols, enforce the stdout quota sink, bound captured stderr, and use a Windows Job Object with kill-on-close and resource limits. FFmpeg must be pinned and checksum-verified before execution. The artifact manifest must record version, provenance URL, SHA-256, license, and allowed executable path. The normal Windows launch path uses `Popen` with `CREATE_SUSPENDED`, assigns the Job Object before resuming the primary thread, and on timeout, cancellation, or collector failure invokes `TerminateJobObject`, waits or kills the root, then closes the Job Object handle.
 
 ## ASR Integration
 
@@ -223,8 +223,9 @@ The file workflow must use the foundation ASR port and must not introduce a seco
 - Runtime diagnostics are separate from transcript text.
 - Runtime exceptions cannot become successful empty transcripts.
 - A result completed after cancellation is discarded and never published.
+- The native sidecar transport sends compact JSON metadata in `X-VoiceInk-ASR-Metadata` and the canonical PCM16 bytes as an `application/octet-stream` body; it must not hex/base64-expand the audio payload.
 
-The foundation contract requires contiguous samples. The application reads the bounded normalized WAV stream from the quota sink into one immutable `CanonicalAudio` value before calling ASR. `CanonicalAudio` owns exactly one bounded contiguous PCM16 allocation and exposes `sample_count`, `byte_length`, and `duration`; the ASR request borrows it for the duration of the call and never contains a filesystem path. This is batch processing, not streaming transcription.
+The foundation contract requires contiguous samples. The application reads the bounded normalized WAV stream from the quota sink into one immutable `CanonicalAudio` value before calling ASR. The sink retains only bounded parser state and PCM data, then transfers one final owned contiguous PCM16 allocation to `CanonicalAudio`; the ASR request borrows it for the duration of the call and never contains a filesystem path. This is batch processing, not streaming transcription.
 
 ## Queue, Cancellation, and Retry
 
@@ -255,7 +256,7 @@ Cancellation intent and deadline expiry are linearized by the same job lock/tran
 
 ### Retry
 
-Retries are allowed only for transient runtime unavailability, startup/readiness failure, transport timeout, or runtime crash without invalid-input evidence.
+Retries are allowed only for transient runtime unavailability, startup/readiness failure, transport timeout, or runtime crash without invalid-input evidence. Before a crash retry is published, the sidecar supervisor closes the crashed process, starts a fresh process, and completes its readiness handshake within the remaining processing deadline; the fake runtime does not need native lifecycle behavior.
 
 Retries are forbidden for invalid media, missing audio, malformed output, cancellation, missing model/configuration, and protocol/schema failures.
 
@@ -364,13 +365,19 @@ This RFC is complete when the foundation RFC is stable, the imported-media use c
 
 Supported media limits and FFmpeg distribution policy must be documented before this RFC changes to `Complete`.
 
+## Implementation Evidence
+
+- Local evidence: fake/injected behavior tests cover admission, replacement fencing, cleanup recovery, sidecar restart/readiness, absolute deadlines, and artifact identity checks.
+- Local quality gate: must be recorded from the current `make check` run; this RFC does not claim a passing result before that run.
+- Native evidence: not run locally because the current workstation is macOS. The Windows workflow is the authoritative evidence path and requires all pinned artifact manifest variables.
+
 ## Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
 | Foundation ASR contract changes | Block implementation until foundation is approved |
 | Codec/container variability | Pin FFmpeg, publish a support matrix, and run native smoke |
-| Long files exhaust memory | Use disk-backed normalized artifacts and a bounded contiguous-sample buffer |
+| Long files exhaust memory | Enforce the 64 MiB PCM and 32-minute sample limits with one bounded contiguous-sample allocation |
 | FFmpeg hangs | Enforce deadlines and process-tree termination |
 | Runtime cancellation is delayed | Discard late results and supervise cleanup |
 | Retry duplicates work | Use a new workspace per attempt, attempt fencing, and publish once |
@@ -385,11 +392,11 @@ Supported media limits and FFmpeg distribution policy must be documented before 
 
 ### Blocking
 
-1. Are the proposed v1 limits approved: source `2 GiB`, decoded duration `4 hours`, normalized WAV `512 MiB`, workspace `768 MiB`, stderr `64 KiB`, queue capacity `8`, stage timeout `30 minutes`, and total deadline `45 minutes`?
-2. Which FFmpeg build, version, checksum policy, and distribution/license policy are used?
+1. Resolved: v1 limits are source `2 GiB`, decoded duration `32 minutes` (`30,720,000` samples), normalized PCM `64 MiB`, workspace `768 MiB`, stderr `64 KiB`, queue capacity `8`, stage timeout `30 minutes`, and total deadline `45 minutes`.
+2. Resolved for the smoke contract: FFmpeg and sidecar/model artifacts require version, HTTPS provenance URL, SHA-256, license, and allowed absolute path manifests. Exact distributable builds remain an operations decision.
 3. Which containers/codecs are supported in the first release?
-4. Version 1 selects the first audio stream (`0:a:0`); is explicit track selection required instead?
-5. What cancellation guarantee does the runtime supervisor provide for the contiguous-sample request?
+4. Resolved for v1: select the first audio stream (`0:a:0`). Explicit track selection remains future work.
+5. The runtime supervisor closes and restarts the sidecar and completes readiness before a timeout/crash retry. Hard native cancellation guarantees and native performance remain future validation work.
 
 ### Deferred
 

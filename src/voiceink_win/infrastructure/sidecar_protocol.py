@@ -11,6 +11,7 @@ from voiceink_win.domain import (
     ExecutionError,
     InvalidInputError,
     MissingModelError,
+    ProcessCrashedError,
     ProtocolError,
     Timestamp,
     TranscriptResult,
@@ -23,6 +24,8 @@ from .transport import TransportResponse
 PROTOCOL_VERSION = 1
 REQUEST_SCHEMA = "voiceink.asr.request.v1"
 RESULT_SCHEMA = "voiceink.asr.result.v1"
+AUDIO_CONTENT_TYPE = "application/octet-stream"
+AUDIO_METADATA_HEADER = "X-VoiceInk-ASR-Metadata"
 
 
 def map_error_response(response: TransportResponse):
@@ -49,7 +52,9 @@ def map_error_response(response: TransportResponse):
         return AsrTimeoutError("sidecar request timed out")
     if code in {"invalid_input", "bad_request"}:
         return InvalidInputError("sidecar rejected the ASR input")
-    if code in {"execution", "runtime_error", "process_crashed"}:
+    if code == "process_crashed":
+        return ProcessCrashedError("sidecar process crashed")
+    if code in {"execution", "runtime_error"}:
         return ExecutionError("sidecar execution failed")
     return ProtocolError("sidecar returned an unknown protocol error")
 

@@ -2,9 +2,9 @@
 
 ## Status and Scope
 
-Status: draft.
+Status: implemented.
 
-This feature accepts local audio/video files, normalizes them to the canonical audio contract, transcribes them through the foundation ASR port, and returns typed results. It excludes the PySide6 UI, microphone recording, streaming, history, and AI enhancement. Implementation is blocked by `rfcs/foundation-runtime-spike.md` and `rfcs/imported-media-transcription.md`.
+This feature accepts local audio/video files, normalizes them to the canonical audio contract, transcribes them through the foundation ASR port, and returns typed results. It excludes the PySide6 UI, microphone recording, streaming, history, and AI enhancement. The local implementation is intentional and covered by fake/injected behavior tests; native Windows smoke evidence is still pending and is not claimed by local macOS runs.
 
 ## User Scenarios
 
@@ -20,11 +20,11 @@ This feature accepts local audio/video files, normalizes them to the canonical a
 2. The application must reserve queue capacity before creating a temporary workspace using a per-job `ReservationToken` with atomic states `held -> committed -> released`; workspace/enqueue failure may release `held`, while only the job-level terminal CAS or supervisor recovery may release `committed`. All releases are idempotent and owner-checked. Capacity counts all admitted non-terminal jobs, including queued, running, and `retry_waiting` jobs.
 3. The queue must be FIFO, bounded, and initially limited to one active worker.
 4. FFmpeg must produce one non-empty RIFF/WAV artifact with mono, 16 kHz, signed PCM S16LE samples.
-5. The normalizer must enforce these v1 limits: source snapshot `2 GiB`, derived workspace artifacts `768 MiB`, decoded duration `4 hours` (`230,400,000` samples), normalized PCM payload `512 MiB`, stderr `64 KiB`, queue capacity `8`, stage timeout `30 minutes`, cleanup timeout `5 minutes`, and processing deadline `45 minutes`. A quota-enforcing pipe must reject the first chunk that crosses the normalized PCM byte or sample-count quota; derived quota accounts for every workspace byte except the source snapshot.
-6. The application must copy the source through a no-follow read-only handle into an immutable workspace snapshot. The manifest must store `snapshot_identity` (Windows volume serial plus file ID), `snapshot_size`, and `snapshot_sha256` for the snapshot itself; the snapshot must be write-protected and reopened no-follow with all three fields verified before FFmpeg. Any mismatch returns `SourceChanged`.
+5. The normalizer must enforce these v1 limits: source snapshot `2 GiB`, derived workspace artifacts `768 MiB`, decoded duration `32 minutes` (`30,720,000` samples), normalized PCM payload `64 MiB`, stderr `64 KiB`, queue capacity `8`, stage timeout `30 minutes`, cleanup timeout `5 minutes`, and processing deadline `45 minutes`. Source snapshot and derived-artifact quotas are independent per attempt workspace, not global pools. A quota-enforcing pipe must reject the first chunk that crosses the normalized PCM byte or sample-count quota; derived quota accounts for every workspace byte except the source snapshot.
+6. The application must copy the source through a no-follow read-only handle into an immutable workspace snapshot. The manifest must store `snapshot_identity` (Windows volume serial plus file ID), `snapshot_size`, and `snapshot_sha256` for the snapshot itself; on Windows, manifest creation/update must be relative to an already verified workspace directory handle and reject reparse or hard-linked manifest entries. The snapshot must be write-protected and reopened no-follow with all three fields verified before FFmpeg. Any mismatch returns `SourceChanged`.
 7. `CanonicalAudio` must own one bounded PCM16 allocation with `sample_count`, `byte_length`, and `duration`; the ASR request must not contain paths or runtime-specific types.
 8. A job must have one terminal outcome: succeeded, failed, or cancelled. Publication must use `transition(job_id, expected_attempt, expected_state, new_state) -> bool` under a lock/transaction so late results cannot overwrite a newer attempt.
-9. Only classified transient runtime failures may retry, with a default maximum of two total attempts and capped backoff. The retry returns to the FIFO tail only after the previous attempt workspace is cleaned; at most one attempt workspace is live, and retry cannot begin after the absolute deadline. Queued and waiting jobs expire as `DeadlineExceeded`.
+9. Only classified transient runtime failures may retry, with a default maximum of two total attempts and capped backoff. A crash retry must first close the old sidecar process, restart it, and complete a readiness handshake within the remaining processing deadline. The retry returns to the FIFO tail only after the previous attempt workspace is cleaned; at most one attempt workspace is live, and retry cannot begin after the absolute deadline. Queued and waiting jobs expire as `DeadlineExceeded`.
 10. Temporary workspace cleanup must run for success, failure, cancellation, process timeout, and process crash paths. Pre-admission rejection performs only idempotent rollback of a held reservation and has no workspace or cleanup state; a startup no-follow sweep removes private workspaces older than 24 hours and fails closed on containment uncertainty.
 11. The terminal result must be the typed union `Success | Failed | Cancelled`, discriminated by `status` and sharing typed `job_id` and `attempt` values.
 12. `Success` must include the transcript, normalized duration, attempt count, stage timings, safe diagnostics, and warnings; `Failed` must include terminal stages `normalization`, `transcription`, or `cleanup`, stable code values, safe message, and retryable flag; `Cancelled` must include stage and reason. Pre-admission errors use the separate `RejectedRequest` union with `InvalidSourceError`, `QueueFullError`, or `ResourceLimitExceededError`; they do not create a job or reservation.
@@ -54,7 +54,7 @@ accepted -> queued -> normalizing -> transcribing -> cleaning_up -> succeeded
            cancelled
 ```
 
-For admitted jobs, normalization, timeout, runtime, protocol, and deadline failures transition to `failed` after cleanup. A transient runtime failure may return from `transcribing` to `retry_waiting` and then the FIFO tail. The processing deadline applies only before `cleaning_up`; on entry, `cleanup_deadline = cleanup_entered_at + 5 minutes`, after which the result is `Failed(code=CleanupWarning)`. Cleanup occurs before publication and never changes a published result. Shutdown cancels queued jobs and requests cancellation for active jobs. Pre-admission invalid input, queue full, and source-size rejection are `RejectedRequest` values and create no job, reservation, workspace, or cleanup state.
+For admitted jobs, normalization, timeout, runtime, protocol, and deadline failures transition to `failed` after cleanup. A transient runtime failure may return from `transcribing` to `retry_waiting` and then the FIFO tail. The processing deadline applies only before `cleaning_up`; the supervisor interrupts the active adapter, waits for its stage owner, and then CAS-transitions to cleanup. On entry, `cleanup_deadline = cleanup_entered_at + 5 minutes`; expiry fences a terminal `Failed(code=CleanupWarning)` and releases reservation/source exactly once while residual workspace recovery proceeds separately. Cleanup occurs before publication and never changes a published result. Shutdown cancels queued jobs and requests cancellation for active jobs. Pre-admission invalid input, queue full, and source-size rejection are `RejectedRequest` values and create no job, reservation, workspace, or cleanup state.
 
 Queued cancellation marks the job cancelled, runs cleanup, publishes `Cancelled`, and releases the committed reservation before any worker execution. Running cancellation sets the token, terminates the FFmpeg process tree when applicable, asks the ASR runtime to cancel according to the foundation best-effort policy, and discards late output. A cancelled job never publishes partial text.
 
@@ -74,22 +74,22 @@ Minimum terminal failure codes are `SourceChanged`, `ResourceLimitExceeded`, `No
 - Given a permanent input error, when processing ends, then the job is not retried.
 - Given any terminal state or a simulated process crash, when cleanup/sweep completes, then no-follow cleanup removes the workspace and partial artifacts within the 24-hour retention policy, fails closed on an external junction/symlink, and leaves the source file hash unchanged.
 - Given macOS without Windows APIs, CUDA, model weights, or a real runtime, when the fake-adapter suite runs, then all application tests pass.
-- Given a Windows runner with pinned FFmpeg and Parakeet CPU artifacts, when the native smoke command runs, then normalization, non-empty transcription, diagnostics, immutable snapshot checks, and cleanup all pass.
+- Given a Windows runner with pinned FFmpeg, Parakeet CPU artifacts, and a licensed fixture, when the native smoke command runs, then normalization, non-empty transcription, diagnostics, immutable snapshot checks, and cleanup all pass. Missing runtime, model, endpoint, or fixture configuration fails the smoke with a required-environment error and never reports a synthetic-only pass.
 
 ## Test Plan
 
 - Unit tests for admission, path policy, display-name normalization, resource limits, queue capacity, retry classification, state transitions, fencing, error mapping, WAV validation, and diagnostics redaction.
 - Integration tests with fake FFmpeg and fake ASR for success, invalid input, timeout, cancellation, deadline, retry, late result, process crash, queue rejection, reservation rollback/recovery, and cleanup failure.
 - Property-based or table-driven malformed RIFF/WAV tests covering truncated chunks, invalid PCM tags, block alignment, overflow, and inconsistent data sizes.
-- Windows native smoke tests with pinned FFmpeg/runtime checksums, supported container/codec fixtures, process-tree termination, immutable snapshot mutation detection, and cleanup verification.
+- Windows native smoke tests with pinned FFmpeg/runtime checksums, supported container/codec fixtures, process-tree termination, source mutation/path replacement/reparse-point rejection, readonly/identity/hash verification before normalization, and cleanup verification. macOS runs must fail as non-native and never report native evidence.
 - Security tests for no-follow junction/symlink cleanup, root-containment failure, permission races, path replacement, reparse replacement, and same-size source mutation.
 - Benchmark matrix for short/long files and supported codecs recording p50/p95 latency, real-time factor, peak RSS, peak workspace bytes, cancellation latency, and queue wait time.
 
 ## Open Questions and Deferred Work
 
-- Approve exact source byte, duration, output byte, workspace, and stage-time limits.
-- Approve the supported container/codec matrix and confirm the v1 first-audio-stream policy (`0:a:0`).
-- Approve the pinned FFmpeg build, checksum storage, and distribution/license policy.
-- Approve exact foundation contiguous-sample request limits and lifetime ownership.
+- Keep the resolved source byte, duration, output byte, workspace, and stage-time limits synchronized with implementation.
+- Approve the supported container/codec matrix; v1 selects the first audio stream (`0:a:0`).
+- Configure the pinned FFmpeg and sidecar/model manifests in the Windows smoke workflow; local macOS runs cannot provide native evidence.
+- Keep exact foundation contiguous-sample request limits and lifetime ownership aligned with the foundation contract.
 - Keep the 24-hour startup orphan cleanup policy aligned with the future operations specification.
 - Defer persistent queue recovery, SQLite history, UI progress, partial results, streaming, automatic downloads, CUDA benchmarks, and installer packaging.
