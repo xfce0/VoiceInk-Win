@@ -23,7 +23,7 @@ from urllib.request import Request, urlopen
 
 from voiceink_win.domain import ConfigurationError, MissingModelError, RuntimeUnavailableError
 
-from .authentication import ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce, validate_nonce
+from .authentication import ASR_API_KEY_ENV, ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce
 
 
 class ProcessHandle(Protocol):
@@ -267,25 +267,29 @@ class SubprocessConfig:
 
     def argv(self) -> list[str]:
         host, port = _validate_loopback_endpoint(self.endpoint)
-        return [
+        args = [
             str(self.executable),
-            "--model",
+            "serve",
+            "--asr-model",
             str(self.model),
             "--host",
             host,
             "--port",
             str(port),
-            "--backend",
-            self.backend,
-            *self.extra_args,
+            "--no-ui",
         ]
+        if self.backend.startswith("cuda:"):
+            args.extend(["--asr.backend.gpu", self.backend.partition(":")[2]])
+        args.extend(self.extra_args)
+        return args
 
 
 class UrllibReadinessProbe:
-    def __init__(self, endpoint: str, path: str = "/health") -> None:
+    def __init__(self, endpoint: str, path: str = "/ready") -> None:
         _validate_loopback_endpoint(endpoint)
         self._url = f"{endpoint.rstrip('/')}/{path.lstrip('/')}"
         self._nonce: str | None = None
+        self._api_key: str | None = None
         self._attestation: dict[str, object] | None = None
 
     def set_nonce(self, nonce: str) -> None:
@@ -293,39 +297,37 @@ class UrllibReadinessProbe:
             raise ConfigurationError("sidecar readiness nonce must be non-empty")
         self._nonce = nonce
 
+    def set_api_key(self, api_key: str) -> None:
+        if not isinstance(api_key, str) or not api_key:
+            raise ConfigurationError("sidecar readiness API key must be non-empty")
+        self._api_key = api_key
+
     def configure_attestation(
         self, *, pid: int, nonce: str, model_id: str, model_sha256: str, backend: str
     ) -> None:
         self.set_nonce(nonce)
         self._attestation = {
             "pid": pid,
-            "nonce": nonce,
             "model_id": model_id,
-            "model_sha256": model_sha256.lower(),
             "backend": backend,
         }
 
     def ready(self, timeout: float) -> bool:
         if self._nonce is None or self._attestation is None:
             return False
-        request = Request(self._url, headers={ASR_NONCE_HEADER: self._nonce}, method="GET")
+        headers = {ASR_NONCE_HEADER: self._nonce}
+        if self._api_key is not None:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        request = Request(self._url, headers=headers, method="GET")
         try:
             with urlopen(request, timeout=timeout) as response:
                 if not 200 <= response.status < 300:
                     return False
                 payload = json.loads(response.read(64 * 1024).decode("utf-8"))
-                expected = self._attestation
                 return (
                     isinstance(payload, dict)
-                    and payload.get("schema") == "voiceink.asr.health.v1"
-                    and payload.get("protocol_version") == 1
                     and payload.get("ready") is True
-                    and isinstance(payload.get("pid"), int)
-                    and payload["pid"] == expected["pid"]
-                    and validate_nonce(payload.get("nonce"), expected["nonce"])
-                    and payload.get("model_id") == expected["model_id"]
-                    and str(payload.get("model_sha256", "")).lower() == expected["model_sha256"]
-                    and payload.get("backend") == expected["backend"]
+                    and ("capabilities" not in payload or isinstance(payload["capabilities"], dict))
                 )
         except (HTTPError, URLError, OSError, TimeoutError, ValueError, UnicodeDecodeError):
             return False
@@ -363,11 +365,16 @@ class SubprocessSupervisor:
         self._process_reaper_done = Event()
         self._process_reaper_done.set()
         self._nonce: str | None = None
+        self._api_key: str | None = None
         self.process_tree_mode = "windows-taskkill" if os.name == "nt" else "posix-process-group"
 
     @property
     def nonce(self) -> str | None:
         return self._nonce
+
+    @property
+    def api_key(self) -> str | None:
+        return self._api_key
 
     def start(self) -> None:
         if self._has_pending_cleanup_resources():
@@ -391,9 +398,13 @@ class SubprocessSupervisor:
                 raise ExceptionGroup("previous sidecar cleanup failed", errors)
             self._process = None
         self._nonce = generate_nonce()
+        self._api_key = generate_nonce()
         set_probe_nonce = getattr(self._readiness_probe, "set_nonce", None)
         if set_probe_nonce is not None:
             set_probe_nonce(self._nonce)
+        set_probe_api_key = getattr(self._readiness_probe, "set_api_key", None)
+        if set_probe_api_key is not None:
+            set_probe_api_key(self._api_key)
         try:
             if os.name == "nt":
                 for artifact in (self.config.executable, self.config.model):
@@ -416,7 +427,11 @@ class SubprocessSupervisor:
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
-            "env": {**os.environ, ASR_NONCE_ENV: self._nonce},
+            "env": {
+                **os.environ,
+                ASR_API_KEY_ENV: self._api_key,
+                ASR_NONCE_ENV: self._nonce,
+            },
         }
         if os.name != "nt":
             kwargs["start_new_session"] = True

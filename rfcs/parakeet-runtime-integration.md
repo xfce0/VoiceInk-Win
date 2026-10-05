@@ -104,26 +104,21 @@ adapter test suite.
 
 Use the existing domain `AsrRuntime` port, implemented by
 `NeMoSidecarRuntime`, and the existing `SubprocessSupervisor` rather than
-importing a native inference library into Python. The sidecar binds only
-to `127.0.0.1` or `::1`, receives canonical PCM16 bytes, and returns the
-versioned `voiceink.asr.result.v1` payload.
+importing a native inference library into Python. The sidecar is the official
+`nemo-speech serve` process, bound only to `127.0.0.1` or `::1`. The adapter
+wraps canonical PCM16 bytes in a WAV multipart request and consumes the
+official OpenAI-compatible transcription response.
 
 The sidecar process is long-lived. Per-request process startup is rejected for
 the production path because it reloads the model and makes cancellation,
 latency, and resource ownership unreliable.
 
-The sidecar transport is authenticated even though it is local. The supervisor
-requests an OS-selected ephemeral loopback port and generates a per-start
-cryptographic nonce. The nonce is supplied to the sidecar through its inherited
-environment and sent in the `X-VoiceInk-ASR-Nonce` header. Readiness must prove
-the same nonce, sidecar PID, protocol version, model hash, and backend. The
-nonce header is required on every health and transcribe request, is validated
-before the request body is read, and is compared with a constant-time
-comparison. A listener
-that did not originate from the owned process must fail the handshake. If the
-selected sidecar cannot support this handshake, a local authenticated proxy or
-another transport must be used; an unauthenticated fixed-port HTTP endpoint is
-not an acceptable production boundary.
+The sidecar transport uses a per-start API key even though it is local. The key
+is supplied through the inherited `NEMO_SPEECH_HTTP_API_KEY` environment
+variable and sent as `Authorization: Bearer` on `/v1` requests. Readiness uses
+the official unauthenticated `/ready` endpoint, while the server remains
+loopback-only. The nonce is also sent in `X-VoiceInk-ASR-Nonce` for internal
+request correlation, but the official runtime does not validate that header.
 
 ### Model and backend
 
@@ -152,16 +147,16 @@ configuration may contain paths and hashes but must not contain secrets.
 
 ### Protocol
 
-Requests use:
+Requests use the official `POST /v1/audio/transcriptions` multipart contract:
 
-- `Content-Type: application/octet-stream`;
-- canonical PCM16 bytes as the body;
-- compact JSON metadata in `X-VoiceInk-ASR-Metadata`;
-- protocol version `1` and schema `voiceink.asr.request.v1`.
+- `file`: a mono 16 kHz PCM16 WAV generated from canonical audio;
+- `model`: the selected Parakeet model ID;
+- `response_format`: `json` or `verbose_json`;
+- optional `language`.
 
-Responses use JSON schema `voiceink.asr.result.v1` with text, duration,
-optional segment timestamps, and optional detected language. The adapter must
-validate the complete response before constructing `TranscriptResult`.
+Responses contain `text`, with `duration`, `language`, and `words` available in
+`verbose_json`. The adapter validates the complete response before constructing
+`TranscriptResult`.
 
 ### Cancellation
 

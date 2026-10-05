@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import errno
+import io
 import selectors
 import socket
+import wave
 from dataclasses import dataclass
 from time import monotonic
 from urllib.error import HTTPError
@@ -13,7 +15,7 @@ from urllib.request import Request, urlopen
 
 from voiceink_win.domain import CancellationError, ConfigurationError, MonotonicClock, ProtocolError
 
-from .authentication import ASR_NONCE_HEADER
+from .authentication import ASR_AUTHORIZATION_HEADER, ASR_NONCE_HEADER
 
 _MAX_RESPONSE_HEADER_BYTES = 64 * 1024
 _MAX_RESPONSE_CHUNK_OVERHEAD_BYTES = 64 * 1024
@@ -57,6 +59,7 @@ class UrllibLoopbackTransport:
         self._endpoint = endpoint.rstrip("/")
         self._clock = clock
         self._nonce = nonce
+        self._api_key: str | None = None
 
     def set_clock(self, clock: MonotonicClock) -> None:
         self._clock = clock
@@ -65,6 +68,65 @@ class UrllibLoopbackTransport:
         if not isinstance(nonce, str) or not nonce:
             raise ConfigurationError("sidecar nonce must be non-empty")
         self._nonce = nonce
+
+    def set_api_key(self, api_key: str) -> None:
+        if not isinstance(api_key, str) or not api_key:
+            raise ConfigurationError("sidecar API key must be non-empty")
+        self._api_key = api_key
+
+    def post_multipart_audio(
+        self,
+        path: str,
+        pcm: memoryview,
+        sample_rate: int,
+        model: str,
+        language: str | None,
+        response_format: str,
+        timeout: float | None,
+        max_response_bytes: int,
+        cancellation=None,
+        deadline: float | None = None,
+        nonce: str | None = None,
+    ) -> TransportResponse:
+        """Send canonical PCM as the WAV multipart form expected by NeMo-Speech.cpp."""
+        if cancellation is not None and cancellation.is_cancelled():
+            raise CancellationError("sidecar request was cancelled")
+        if deadline is not None and self._now() >= deadline:
+            raise TimeoutError("sidecar request timed out")
+        boundary = "----VoiceInkASR" + self._effective_nonce(nonce)[:16]
+        wav_body = _wav_bytes(pcm, sample_rate)
+        fields = {"model": model, "response_format": response_format}
+        if language is not None:
+            fields["language"] = language
+        body = bytearray()
+        for name, value in fields.items():
+            field_header = (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'
+            )
+            body.extend(field_header.encode())
+        file_header = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+            'filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n'
+        )
+        body.extend(file_header.encode())
+        body.extend(wav_body)
+        body.extend(f"\r\n--{boundary}--\r\n".encode())
+        request = Request(
+            f"{self._endpoint}{_origin_path(path)}",
+            data=bytes(body),
+            headers={
+                **self._headers(f"multipart/form-data; boundary={boundary}", nonce),
+                "Content-Length": str(len(body)),
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return TransportResponse(
+                    response.status, self._read_bounded(response, max_response_bytes)
+                )
+        except HTTPError as error:
+            return TransportResponse(error.code, self._read_bounded(error, max_response_bytes))
 
     def post(
         self,
@@ -389,4 +451,17 @@ class UrllibLoopbackTransport:
         return value
 
     def _headers(self, content_type: str, nonce: str | None) -> dict[str, str]:
-        return {"Content-Type": content_type, ASR_NONCE_HEADER: self._effective_nonce(nonce)}
+        headers = {"Content-Type": content_type, ASR_NONCE_HEADER: self._effective_nonce(nonce)}
+        if self._api_key is not None:
+            headers[ASR_AUTHORIZATION_HEADER] = f"Bearer {self._api_key}"
+        return headers
+
+
+def _wav_bytes(pcm: memoryview, sample_rate: int) -> bytes:
+    stream = io.BytesIO()
+    with wave.open(stream, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(pcm)
+    return stream.getvalue()

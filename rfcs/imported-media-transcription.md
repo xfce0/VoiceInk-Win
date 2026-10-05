@@ -223,7 +223,7 @@ The file workflow must use the foundation ASR port and must not introduce a seco
 - Runtime diagnostics are separate from transcript text.
 - Runtime exceptions cannot become successful empty transcripts.
 - A result completed after cancellation is discarded and never published.
-- The native sidecar transport sends compact JSON metadata in `X-VoiceInk-ASR-Metadata` and the canonical PCM16 bytes as an `application/octet-stream` body; it must not hex/base64-expand the audio payload.
+- The native sidecar transport wraps canonical PCM16 bytes in a mono 16 kHz WAV multipart request for the official NeMo-Speech.cpp `/v1/audio/transcriptions` endpoint; it must not hex/base64-expand the audio payload.
 
 The foundation contract requires contiguous samples. The application reads the bounded normalized WAV stream from the quota sink into one immutable `CanonicalAudio` value before calling ASR. The sink retains only bounded parser state and PCM data, then transfers one final owned contiguous PCM16 allocation to `CanonicalAudio`; the ASR request borrows it for the duration of the call and never contains a filesystem path. This is batch processing, not streaming transcription.
 

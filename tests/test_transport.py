@@ -118,7 +118,7 @@ def test_readiness_probe_rejects_forged_health_payload(monkeypatch) -> None:
 
         def read(self, amount: int) -> bytes:
             del amount
-            return b'{"ready": true, "pid": 999}'
+            return b'{"ready": false}'
 
     monkeypatch.setattr(
         "voiceink_win.infrastructure.process.urlopen",

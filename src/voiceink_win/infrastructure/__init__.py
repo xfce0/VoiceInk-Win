@@ -1,6 +1,13 @@
 """Infrastructure adapters for the ASR foundation."""
 
-from .authentication import ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce, validate_nonce
+from .authentication import (
+    ASR_API_KEY_ENV,
+    ASR_AUTHORIZATION_HEADER,
+    ASR_NONCE_ENV,
+    ASR_NONCE_HEADER,
+    generate_nonce,
+    validate_nonce,
+)
 from .fake_asr import FakeAsrRuntime, FakeAsrScenario
 from .fake_clock import FakeClock
 from .fake_media import FakeMediaNormalizer, FakeMediaScenario, FakeSnapshotStore, make_wav
@@ -64,6 +71,8 @@ __all__ = [
     "FakeAsrScenario",
     "ASR_NONCE_ENV",
     "ASR_NONCE_HEADER",
+    "ASR_API_KEY_ENV",
+    "ASR_AUTHORIZATION_HEADER",
     "generate_nonce",
     "validate_nonce",
     "FakeClock",

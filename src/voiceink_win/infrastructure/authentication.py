@@ -7,6 +7,8 @@ import secrets
 
 ASR_NONCE_HEADER = "X-VoiceInk-ASR-Nonce"
 ASR_NONCE_ENV = "VOICEINK_ASR_NONCE"
+ASR_API_KEY_ENV = "NEMO_SPEECH_HTTP_API_KEY"
+ASR_AUTHORIZATION_HEADER = "Authorization"
 
 
 def generate_nonce() -> str:

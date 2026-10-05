@@ -33,8 +33,9 @@ performance claims.
 4. The runtime must launch one loopback-only sidecar using an argument array,
    never a shell command.
 5. The runtime must complete a readiness handshake before accepting requests.
-6. The runtime must decode and validate `voiceink.asr.result.v1` into the
-   existing `TranscriptResult` domain value.
+6. The runtime must decode and validate the official NeMo-Speech.cpp
+   `json`/`verbose_json` transcription response into the existing
+   `TranscriptResult` domain value.
 7. The runtime must expose capabilities and health separately from transcript text.
 8. The runtime must classify missing model, unavailable backend, timeout,
    cancellation, crash, protocol, and execution failures distinctly.
@@ -45,10 +46,12 @@ performance claims.
     `asr.not_configured`.
 12. Native smoke must fail when requested real ASR configuration is missing or
     invalid.
-13. The runtime must authenticate the loopback handshake with a per-start nonce
-    in `X-VoiceInk-ASR-Nonce`, require that header on every health/transcribe
-    request before reading the body, compare it in constant time, and verify
-    PID, protocol version, model hash, and backend.
+13. The runtime must bind the server to loopback and generate a per-start API
+     key through `NEMO_SPEECH_HTTP_API_KEY`; all `/v1` transcription requests
+     must use `Authorization: Bearer`. Readiness must use the official `/ready`
+     contract. The nonce header may be sent as an internal correlation value but
+     is not treated as server-side authentication because the official runtime
+     does not validate it.
 14. The runtime must terminate and reap all owned sidecar resources on shutdown,
     timeout, crash recovery, and failed readiness.
 15. `scripts/native_smoke.py` must be the native validation entrypoint and

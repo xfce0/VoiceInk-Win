@@ -607,14 +607,14 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
     assert supervisor.wait_ready(time.monotonic() + 1.0)
     assert calls[0][0] == [
         str(executable),
-        "--model",
+        "serve",
+        "--asr-model",
         str(model),
         "--host",
         "127.0.0.1",
         "--port",
         "8123",
-        "--backend",
-        "cpu",
+        "--no-ui",
         "--threads",
         "2",
     ]
