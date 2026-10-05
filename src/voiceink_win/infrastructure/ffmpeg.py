@@ -8,7 +8,7 @@ import os
 from contextlib import contextmanager, nullcontext
 from ctypes import wintypes
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
 
 from voiceink_win.domain import (
@@ -506,7 +506,10 @@ class SubprocessMediaNormalizer:
             return value[8:].isdigit()
         if "://" in value or value.startswith(("pipe:", "http:", "https:")):
             return False
-        return Path(value).is_absolute() and not urlsplit(value).scheme
+        is_windows_drive_path = len(value) >= 3 and value[1] == ":" and value[2] in "\\/"
+        if urlsplit(value).scheme and not is_windows_drive_path:
+            return False
+        return Path(value).is_absolute() or PureWindowsPath(value).is_absolute()
 
 
 def validate_wav(data: bytes | memoryview, limits: WavLimits | None = None) -> NormalizedAudio:

@@ -2161,3 +2161,8 @@ def test_ffmpeg_normalizer_builds_safe_first_audio_stream_argv(tmp_path: Path) -
     assert runner.argv[0] == "ffmpeg"
     assert runner.argv[runner.argv.index("-map") + 1] == "0:a:0"
     assert "shell=True" not in runner.argv
+
+
+def test_ffmpeg_normalizer_accepts_windows_drive_paths() -> None:
+    assert SubprocessMediaNormalizer._is_allowed_input(r"C:\workspace\input.wav")
+    assert not SubprocessMediaNormalizer._is_allowed_input("https://example.test/input.wav")
