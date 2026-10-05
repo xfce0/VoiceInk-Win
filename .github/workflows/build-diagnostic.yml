@@ -1,0 +1,104 @@
+name: Windows Diagnostic Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "diagnostic-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      VOICEINK_FFMPEG_URL: ${{ vars.VOICEINK_FFMPEG_URL }}
+      VOICEINK_FFMPEG_ARCHIVE_SHA256: ${{ vars.VOICEINK_FFMPEG_ARCHIVE_SHA256 }}
+      VOICEINK_FFMPEG_SHA256: ${{ vars.VOICEINK_FFMPEG_SHA256 }}
+      VOICEINK_FFMPEG_VERSION: ${{ vars.VOICEINK_FFMPEG_VERSION }}
+      VOICEINK_FFMPEG_PROVENANCE_URL: ${{ vars.VOICEINK_FFMPEG_PROVENANCE_URL }}
+      VOICEINK_FFMPEG_LICENSE: ${{ vars.VOICEINK_FFMPEG_LICENSE }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Download and verify FFmpeg
+        shell: pwsh
+        run: |
+          $required = @(
+            "VOICEINK_FFMPEG_URL",
+            "VOICEINK_FFMPEG_ARCHIVE_SHA256",
+            "VOICEINK_FFMPEG_SHA256",
+            "VOICEINK_FFMPEG_VERSION",
+            "VOICEINK_FFMPEG_PROVENANCE_URL",
+            "VOICEINK_FFMPEG_LICENSE"
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "$name repository variable is required"
+            }
+          }
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
+          Invoke-WebRequest -Uri $env:VOICEINK_FFMPEG_URL -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:VOICEINK_FFMPEG_ARCHIVE_SHA256.ToLowerInvariant()) {
+            throw "FFmpeg archive checksum mismatch"
+          }
+          $root = Join-Path $env:RUNNER_TEMP "ffmpeg"
+          Expand-Archive $archive -DestinationPath $root -Force
+          $binary = Get-ChildItem $root -Filter ffmpeg.exe -Recurse | Select-Object -First 1
+          if ($null -eq $binary) { throw "ffmpeg.exe was not found" }
+          $binaryHash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($binaryHash -ne $env:VOICEINK_FFMPEG_SHA256.ToLowerInvariant()) {
+            throw "FFmpeg executable checksum mismatch"
+          }
+          $bytes = [IO.File]::ReadAllBytes($binary.FullName)
+          if ($bytes.Length -lt 256 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw "FFmpeg executable is not a PE image"
+          }
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ($peOffset -lt 0 -or $peOffset + 6 -gt $bytes.Length -or
+              $bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45 -or
+              $bytes[$peOffset + 2] -ne 0 -or $bytes[$peOffset + 3] -ne 0) {
+            throw "FFmpeg executable has an invalid PE header"
+          }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) {
+            throw "FFmpeg executable is not x64 (machine 0x$('{0:x4}' -f $machine))"
+          }
+          $manifest = Join-Path $env:RUNNER_TEMP "ffmpeg.manifest.json"
+          @{
+            version = $env:VOICEINK_FFMPEG_VERSION
+            provenance_url = $env:VOICEINK_FFMPEG_PROVENANCE_URL
+            sha256 = $env:VOICEINK_FFMPEG_SHA256
+            license = $env:VOICEINK_FFMPEG_LICENSE
+          } | ConvertTo-Json | Set-Content $manifest -Encoding utf8NoBOM
+          "VOICEINK_FFMPEG_PATH=$($binary.FullName)" | Out-File $env:GITHUB_ENV -Append
+          "VOICEINK_FFMPEG_MANIFEST=$manifest" | Out-File $env:GITHUB_ENV -Append
+      - name: Install package and build tools
+        run: python -m pip install --editable ".[build]"
+      - name: Build diagnostic executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm --onefile `
+            --name voiceink-diagnostic `
+            --add-binary "$env:VOICEINK_FFMPEG_PATH;." `
+            --add-data "$env:VOICEINK_FFMPEG_MANIFEST;." `
+            scripts/diagnostic_cli.py
+          Copy-Item README.md dist\README.md
+      - name: Run frozen diagnostic fixture
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP "diagnostic-fixture.wav"
+          python -c "import wave,sys; w=wave.open(sys.argv[1], 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b'\x00\x00' * 1600); w.close()" $fixture
+           & .\dist\voiceink-diagnostic.exe $fixture --logs-dir (Join-Path $env:RUNNER_TEMP "diagnostic-logs")
+          if ($LASTEXITCODE -ne 0) { throw "Frozen diagnostic executable failed with exit code $LASTEXITCODE" }
+      - name: Upload diagnostic bundle
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
+        with:
+          name: voiceink-diagnostic-windows-x64
+          path: dist/

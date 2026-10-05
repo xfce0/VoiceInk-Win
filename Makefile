@@ -12,7 +12,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test build check run clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check test build diagnostic-build native-smoke check run clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -47,6 +47,16 @@ test:
 ## build: Compile Python source without creating a distributable artifact
 build:
 	$(VENV_PYTHON) -m compileall -q src scripts
+
+## diagnostic-build: Build the Windows diagnostic executable (run on Windows)
+diagnostic-build:
+	@test -n "$(VOICEINK_FFMPEG_PATH)" || (printf '%s\n' 'VOICEINK_FFMPEG_PATH must point to an external ffmpeg.exe' >&2; exit 1)
+	@test -n "$(VOICEINK_FFMPEG_MANIFEST)" || (printf '%s\n' 'VOICEINK_FFMPEG_MANIFEST must point to ffmpeg.manifest.json' >&2; exit 1)
+	$(VENV_PYTHON) -m PyInstaller --clean --noconfirm --onefile --name voiceink-diagnostic --add-binary "$(VOICEINK_FFMPEG_PATH);." --add-data "$(VOICEINK_FFMPEG_MANIFEST);." scripts/diagnostic_cli.py
+
+## native-smoke: Run the real Windows snapshot and FFmpeg smoke contract
+native-smoke:
+	$(VENV_PYTHON) scripts/native_smoke.py
 
 ## check: Run the complete local quality gate
 check: spec-check format-check lint test build
