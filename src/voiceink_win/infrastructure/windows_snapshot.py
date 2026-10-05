@@ -1321,7 +1321,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 if self._identity(directory_handle)[0] != expected_directory_identity:
                     raise OSError("workspace identity changed before manifest fallback") from None
                 workspace_canonical = self._canonical(workspace)
-                self._assert_no_reparse_components(workspace / "manifest.json")
+                self._assert_no_reparse_components(workspace)
                 handle = self._open(
                     workspace / "manifest.json",
                     self._api.GENERIC_READ | self._api.GENERIC_WRITE,
