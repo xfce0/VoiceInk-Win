@@ -1425,6 +1425,8 @@ def test_windows_kernel32_binding_is_injectable() -> None:
         SetFileAttributesW = Function()
         DeleteFileW = Function()
         RemoveDirectoryW = Function()
+        FindNextFileW = Function()
+        GetOverlappedResult = Function()
 
     api = WindowsKernel32(FakeKernel32())
 
@@ -1434,6 +1436,188 @@ def test_windows_kernel32_binding_is_injectable() -> None:
     assert api.dll.GetFileInformationByHandle.restype is ctypes.wintypes.BOOL
     assert api.dll.CloseHandle.argtypes == [ctypes.wintypes.HANDLE]
     assert api.dll.CloseHandle.errcheck is windows_snapshot._check_bool
+    assert api.dll.ReadFile.errcheck is windows_snapshot._check_read_bool
+    assert api.dll.FindNextFileW.errcheck is windows_snapshot._check_find_next
+    assert api.dll.GetOverlappedResult.errcheck is windows_snapshot._check_overlapped_result
+
+
+@pytest.mark.parametrize(
+    ("checker", "error_code"),
+    [
+        (windows_snapshot._check_find_next, windows_snapshot._ERROR_NO_MORE_FILES),
+        (windows_snapshot._check_overlapped_result, windows_snapshot._ERROR_HANDLE_EOF),
+    ],
+)
+def test_windows_snapshot_allows_terminal_native_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    checker,
+    error_code: int,
+) -> None:
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: error_code, raising=False)
+
+    assert checker(False, None, None) is False
+
+
+def test_windows_snapshot_read_returns_partial_data_at_sync_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def read_file(handle, buffer, size, count, overlapped):
+        del handle, size, overlapped
+        nonlocal calls
+        calls += 1
+        count_value = ctypes.cast(count, ctypes.POINTER(ctypes.wintypes.DWORD)).contents
+        if calls == 1:
+            ctypes.memmove(buffer, b"abc", 3)
+            count_value.value = 3
+            return True
+        count_value.value = 0
+        return False
+
+    monkeypatch.setattr(
+        ctypes,
+        "get_last_error",
+        lambda: windows_snapshot._ERROR_HANDLE_EOF,
+        raising=False,
+    )
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._api = SimpleNamespace(dll=SimpleNamespace(ReadFile=read_file))
+
+    assert store._read(123, 5) == b"abc"
+    assert calls == 2
+
+
+def test_windows_snapshot_overlapped_read_treats_eof_as_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get_overlapped_result(handle, overlapped, count, wait):
+        del handle, overlapped, count, wait
+        return False
+
+    api = SimpleNamespace(
+        dll=SimpleNamespace(
+            WaitForSingleObject=lambda handle, timeout: 0,
+            GetOverlappedResult=get_overlapped_result,
+        )
+    )
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._api = api
+    count = ctypes.wintypes.DWORD(5)
+    monkeypatch.setattr(
+        ctypes,
+        "get_last_error",
+        lambda: windows_snapshot._ERROR_HANDLE_EOF,
+        raising=False,
+    )
+
+    result = store._wait_overlapped(
+        1,
+        windows_snapshot._WindowsOverlapped(),
+        2,
+        count,
+        None,
+        None,
+        b"data",
+        allow_eof=True,
+    )
+
+    assert result is False
+    assert count.value == 0
+
+
+def test_windows_snapshot_overlapped_read_closes_handles_on_initial_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[int] = []
+
+    def read_file(handle, buffer, size, count, overlapped):
+        del handle, buffer, size, count, overlapped
+        return False
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._api = SimpleNamespace(dll=SimpleNamespace(ReadFile=read_file))
+    store._duplicate = lambda handle: 2
+    store._new_overlapped = lambda: (windows_snapshot._WindowsOverlapped(), 3)
+    store._close_handles = lambda handles: closed.extend(handles) or []
+    monkeypatch.setattr(
+        ctypes,
+        "get_last_error",
+        lambda: windows_snapshot._ERROR_HANDLE_EOF,
+        raising=False,
+    )
+
+    assert store._read_overlapped(1, 4, 0, None, None) == b""
+    assert closed == [3, 2]
+
+
+def test_windows_snapshot_overlapped_write_rejects_eof_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = SimpleNamespace(
+        dll=SimpleNamespace(
+            WaitForSingleObject=lambda handle, timeout: 0,
+            GetOverlappedResult=lambda handle, overlapped, count, wait: False,
+        )
+    )
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._api = api
+    count = ctypes.wintypes.DWORD()
+    monkeypatch.setattr(
+        ctypes,
+        "get_last_error",
+        lambda: windows_snapshot._ERROR_HANDLE_EOF,
+        raising=False,
+    )
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(code, "native"), raising=False)
+
+    with pytest.raises(OSError):
+        store._wait_overlapped(
+            1,
+            windows_snapshot._WindowsOverlapped(),
+            2,
+            count,
+            None,
+            None,
+            b"data",
+        )
+
+
+def test_windows_snapshot_directory_names_accepts_end_of_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[int] = []
+
+    def find_first(pattern, data_pointer):
+        del pattern
+        data = ctypes.cast(data_pointer, ctypes.POINTER(windows_snapshot._WindowsFindData))
+        data.contents.name = "entry"
+        return 7
+
+    def find_next(handle, data_pointer):
+        del handle, data_pointer
+        return False
+
+    api = SimpleNamespace(
+        dll=SimpleNamespace(
+            FindFirstFileW=find_first,
+            FindNextFileW=find_next,
+            FindClose=lambda handle: closed.append(handle) or True,
+        ),
+        INVALID_HANDLE_VALUE=-1,
+        ERROR_NO_MORE_FILES=windows_snapshot._ERROR_NO_MORE_FILES,
+    )
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._api = api
+    monkeypatch.setattr(
+        ctypes,
+        "get_last_error",
+        lambda: windows_snapshot._ERROR_NO_MORE_FILES,
+        raising=False,
+    )
+
+    assert store._directory_names(Path("C:/workspace")) == ("entry",)
+    assert closed == [7]
 
 
 def test_windows_snapshot_delete_ignores_readonly_attribute() -> None:

@@ -68,6 +68,18 @@ def _check_bool(result, function, arguments):
     return result
 
 
+def _check_find_next(result, function, arguments):
+    if result or ctypes.get_last_error() == _ERROR_NO_MORE_FILES:
+        return result
+    raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _check_overlapped_result(result, function, arguments):
+    if result or ctypes.get_last_error() == _ERROR_HANDLE_EOF:
+        return result
+    raise ctypes.WinError(ctypes.get_last_error())
+
+
 def _check_cancel(result, function, arguments):
     if result or ctypes.get_last_error() == 1168:  # ERROR_NOT_FOUND: operation already completed.
         return result
@@ -80,6 +92,12 @@ def _check_io_bool(result, function, arguments):
     raise ctypes.WinError(ctypes.get_last_error())
 
 
+def _check_read_bool(result, function, arguments):
+    if result or ctypes.get_last_error() in (997, _ERROR_HANDLE_EOF):
+        return result
+    raise ctypes.WinError(ctypes.get_last_error())
+
+
 def _check_handle(result, function, arguments):
     value = getattr(result, "value", result)
     if value in (None, ctypes.c_void_p(-1).value):
@@ -88,6 +106,8 @@ def _check_handle(result, function, arguments):
 
 
 _CANCEL_DRAIN_TIMEOUT_MS = 1000
+_ERROR_NO_MORE_FILES = 18
+_ERROR_HANDLE_EOF = 38
 _STATUS_INVALID_PARAMETER = 0xC000000D
 
 
@@ -188,6 +208,7 @@ class WindowsKernel32:
     INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
     DUPLICATE_SAME_ACCESS = 0x2
     ERROR_NO_MORE_FILES = 18
+    ERROR_HANDLE_EOF = 38
     FILE_OPEN_REPARSE_POINT = 0x00200000
     FILE_OPEN_FOR_BACKUP_INTENT = 0x00004000
     FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
@@ -266,7 +287,7 @@ class WindowsKernel32:
             ],
             wintypes.BOOL,
         )
-        self.dll.ReadFile.errcheck = _check_io_bool
+        self.dll.ReadFile.errcheck = _check_read_bool
         _signature(
             self.dll.WriteFile,
             [
@@ -347,7 +368,11 @@ class WindowsKernel32:
                 continue
             _signature(function, args, result)
             if result is wintypes.BOOL:
-                function.errcheck = _check_cancel if name == "CancelIoEx" else _check_bool
+                function.errcheck = {
+                    "CancelIoEx": _check_cancel,
+                    "FindNextFileW": _check_find_next,
+                    "GetOverlappedResult": _check_overlapped_result,
+                }.get(name, _check_bool)
 
 
 class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
@@ -1426,7 +1451,10 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             if not self._api.dll.ReadFile(
                 handle, ctypes.byref(buffer, len(data)), remaining, ctypes.byref(count), None
             ):
-                raise OSError(ctypes.get_last_error(), "ReadFile failed")
+                error = ctypes.get_last_error()
+                if error == _ERROR_HANDLE_EOF:
+                    break
+                raise OSError(error, "ReadFile failed")
             if count.value == 0:
                 break
             data.extend(buffer.raw[len(data) : len(data) + count.value])
@@ -1481,11 +1509,22 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 ctypes.byref(count),
                 ctypes.byref(overlapped),
             )
-            if pending and ctypes.get_last_error() != 997:
-                raise ctypes.WinError(ctypes.get_last_error())
+            if pending:
+                error = ctypes.get_last_error()
+                if error == _ERROR_HANDLE_EOF:
+                    return b""
+                if error != 997:
+                    raise ctypes.WinError(error)
             try:
                 detached = self._wait_overlapped(
-                    io_handle, overlapped, event, count, cancellation, deadline, buffer
+                    io_handle,
+                    overlapped,
+                    event,
+                    count,
+                    cancellation,
+                    deadline,
+                    buffer,
+                    allow_eof=True,
                 )
             except _DetachedOverlapped as error:
                 detached = True
@@ -1531,7 +1570,13 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 raise ctypes.WinError(ctypes.get_last_error())
             try:
                 detached = self._wait_overlapped(
-                    io_handle, overlapped, event, count, cancellation, deadline, data
+                    io_handle,
+                    overlapped,
+                    event,
+                    count,
+                    cancellation,
+                    deadline,
+                    data,
                 )
             except _DetachedOverlapped as error:
                 detached = True
@@ -1576,6 +1621,8 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         cancellation: CancellationToken | None,
         deadline: float | None,
         keepalive: object,
+        *,
+        allow_eof: bool = False,
     ) -> bool:
         while True:
             try:
@@ -1622,6 +1669,9 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             if not self._api.dll.GetOverlappedResult(
                 handle, ctypes.byref(overlapped), ctypes.byref(count), True
             ):
+                if allow_eof and ctypes.get_last_error() == _ERROR_HANDLE_EOF:
+                    count.value = 0
+                    return False
                 raise ctypes.WinError(ctypes.get_last_error())
             return False
 
