@@ -201,6 +201,7 @@ class WindowsKernel32:
     FILE_FLAG_OVERLAPPED = 0x40000000
     FILE_ATTRIBUTE_REPARSE_POINT = 0x400
     FILE_ATTRIBUTE_DIRECTORY = 0x10
+    FILE_ATTRIBUTE_NORMAL = 0x80
     FILE_TYPE_DISK = 0x1
     FILE_ATTRIBUTE_READONLY = 0x1
     FILE_BEGIN = 0
@@ -1321,6 +1322,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 raise
         self._assert_contained_handle(handle)
         delete_path = self._canonical_handle(handle)
+        self._api.dll.SetFileAttributesW(delete_path, self._api.FILE_ATTRIBUTE_NORMAL)
         delete = self._api.dll.RemoveDirectoryW if directory else self._api.dll.DeleteFileW
         if not delete(delete_path):
             raise OSError(ctypes.get_last_error(), "path-based delete fallback failed")
