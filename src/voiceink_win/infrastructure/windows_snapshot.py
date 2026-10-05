@@ -1222,7 +1222,8 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 options,
             )
         if result < 0:
-            raise OSError(f"NtOpenFile failed with NTSTATUS 0x{result & 0xFFFFFFFF:08x}")
+            status = result & 0xFFFFFFFF
+            raise OSError(status, f"NtOpenFile failed with NTSTATUS 0x{status:08x}")
         return int(handle.value)
 
     def _delete_handle(self, handle: int) -> None:

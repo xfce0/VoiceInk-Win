@@ -71,7 +71,11 @@ class DiagnosticLogger:
         self.event(
             name,
             error_type=type(error).__name__,
-            error_code=getattr(error, "code", None),
+            error_code=(
+                getattr(error, "code", None)
+                or getattr(error, "winerror", None)
+                or getattr(error, "errno", None)
+            ),
             traceback=stack,
         )
 
