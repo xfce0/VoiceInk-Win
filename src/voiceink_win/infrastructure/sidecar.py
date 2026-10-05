@@ -30,11 +30,14 @@ from voiceink_win.domain import (
     TranscriptResult,
 )
 
+from .authentication import generate_nonce
 from .sidecar_protocol import (
     PROTOCOL_VERSION,
     REQUEST_SCHEMA,
+    decode_nemo_result,
     decode_result,
     map_error_response,
+    map_nemo_error_response,
 )
 from .transport import TransportResponse
 
@@ -94,7 +97,7 @@ class SidecarConfig:
     backend: str = "cpu"
     readiness_timeout: float = 10.0
     shutdown_timeout: float = 5.0
-    transcribe_path: str = "/transcribe"
+    transcribe_path: str = "/v1/audio/transcriptions"
     max_audio_bytes: int = MAX_CANONICAL_AUDIO_BYTES
     max_response_bytes: int = 4 * 1024 * 1024
     default_deadline_seconds: float = 30.0
@@ -181,6 +184,14 @@ class NeMoSidecarRuntime:
         startup_error: AsrError | None = None
         try:
             self._supervisor.start()
+            nonce = getattr(self._supervisor, "nonce", None) or generate_nonce()
+            set_transport_nonce = getattr(self._transport, "set_nonce", None)
+            if set_transport_nonce is not None:
+                set_transport_nonce(nonce)
+            api_key = getattr(self._supervisor, "api_key", None)
+            set_transport_api_key = getattr(self._transport, "set_api_key", None)
+            if api_key is not None and set_transport_api_key is not None:
+                set_transport_api_key(api_key)
             ready = self._supervisor.wait_ready(
                 self._clock.monotonic() + self._config.readiness_timeout
             )
@@ -251,15 +262,30 @@ class NeMoSidecarRuntime:
             separators=(",", ":"),
         ).encode("utf-8")
         try:
-            response = self._transport.post_audio(
-                self._config.transcribe_path,
-                metadata,
-                memoryview(request.audio.pcm16le),
-                timeout,
-                self._config.max_response_bytes,
-                request.cancellation,
-                deadline=deadline,
-            )
+            post_multipart_audio = getattr(self._transport, "post_multipart_audio", None)
+            if post_multipart_audio is not None:
+                response = post_multipart_audio(
+                    self._config.transcribe_path,
+                    memoryview(request.audio.pcm16le),
+                    request.audio.sample_rate,
+                    self._config.model_id,
+                    request.language,
+                    "verbose_json" if request.include_timestamps else "json",
+                    timeout,
+                    self._config.max_response_bytes,
+                    request.cancellation,
+                    deadline=deadline,
+                )
+            else:
+                response = self._transport.post_audio(
+                    self._config.transcribe_path,
+                    metadata,
+                    memoryview(request.audio.pcm16le),
+                    timeout,
+                    self._config.max_response_bytes,
+                    request.cancellation,
+                    deadline=deadline,
+                )
         except AsrError:
             raise
         except TimeoutError as error:
@@ -278,11 +304,19 @@ class NeMoSidecarRuntime:
         if len(response.body) > self._config.max_response_bytes:
             raise ProtocolError("sidecar response exceeds the configured byte limit")
         if response.status_code != 200:
-            error = map_error_response(response)
+            error = (
+                map_nemo_error_response(response)
+                if post_multipart_audio is not None
+                else map_error_response(response)
+            )
             if isinstance(error, ProcessCrashedError):
                 self._restart_after_crash(deadline)
             raise error
-        return decode_result(response.body)
+        return (
+            decode_nemo_result(response.body, request.audio.duration)
+            if post_multipart_audio is not None
+            else decode_result(response.body)
+        )
 
     def close(self, deadline: float | None = None) -> None:
         if self._closed:

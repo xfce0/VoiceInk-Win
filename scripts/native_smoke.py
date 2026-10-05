@@ -6,6 +6,7 @@ import ctypes
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -29,8 +30,31 @@ def _hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _load_runtime_configuration():
+    from voiceink_win.infrastructure import load_runtime_manifest
+
+    manifest_path = Path(_required("VOICEINK_RUNTIME_MANIFEST"))
+    lock_path = Path(_required("VOICEINK_ARTIFACT_LOCK"))
+    return load_runtime_manifest(
+        manifest_path,
+        lock_path,
+        lock_sha256=_required("VOICEINK_ARTIFACT_LOCK_SHA256"),
+    )
+
+
+def _allocate_loopback_endpoint() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{listener.getsockname()[1]}"
+
+
 def _write_report(path: Path, report: dict[str, object]) -> None:
-    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    from voiceink_win.infrastructure import sanitize_report_value
+
+    path.write_text(
+        json.dumps(sanitize_report_value(report), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 class _NativeSmokeTemporaryDirectory:
@@ -94,23 +118,39 @@ def main() -> int:
     try:
         return _run(report_path, report)
     except Exception as error:
-        report["error"] = str(error)
+        from voiceink_win.infrastructure import safe_failure
+
+        report["failure"] = safe_failure(error)
         _write_report(report_path, report)
-        raise
+        if isinstance(error, (FileNotFoundError, ValueError)):
+            return 2
+        if getattr(error, "code", None) in {"configuration", "missing_model"}:
+            return 2
+        if any(
+            marker in str(error).casefold()
+            for marker in ("quality", "latency", "memory", "cleanup")
+        ):
+            return 4
+        return 3
 
 
 def _run(report_path: Path, report: dict[str, object]) -> int:
     if os.name != "nt":
-        report["error"] = "native smoke must run on Windows; Mac runs are not evidence"
+        error = RuntimeError("native smoke must run on Windows; Mac runs are not evidence")
+        from voiceink_win.infrastructure import safe_failure
+
+        report["failure"] = safe_failure(error)
         _write_report(report_path, report)
-        raise RuntimeError(str(report["error"]))
+        raise error
 
     from voiceink_win.application import AsrApplicationService
     from voiceink_win.domain import AsrRequest, JobId
     from voiceink_win.infrastructure import (
         FfmpegArtifactManifest,
+        JsonlEventWriter,
         NeMoSidecarRuntime,
         RuntimeArtifactManifest,
+        RuntimeArtifactVerifier,
         SidecarConfig,
         SubprocessConfig,
         SubprocessMediaNormalizer,
@@ -118,6 +158,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         UrllibLoopbackTransport,
         VerifiedFfmpegArtifact,
         WindowsMediaSnapshotStore,
+        safe_failure,
     )
 
     fixture = Path(_required("VOICEINK_NATIVE_SMOKE_FIXTURE")).resolve(strict=True)
@@ -125,8 +166,9 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     fixture_license = _required("VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE")
     ffmpeg_path = Path(_required("VOICEINK_FFMPEG_PATH")).resolve(strict=True)
     ffmpeg_sha256 = _required("VOICEINK_FFMPEG_SHA256")
-    runtime_path = Path(_required("VOICEINK_SIDECAR_EXECUTABLE")).resolve(strict=True)
-    model_path = Path(_required("VOICEINK_SIDECAR_MODEL")).resolve(strict=True)
+    runtime_configuration = _load_runtime_configuration()
+    runtime_path = runtime_configuration.executable
+    model_path = runtime_configuration.model
     source_sha256 = _hash(fixture)
     if source_sha256.lower() != fixture_sha256.lower():
         raise RuntimeError("native smoke fixture checksum mismatch")
@@ -141,36 +183,60 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     if _hash(ffmpeg_path).lower() != ffmpeg_sha256.lower():
         raise RuntimeError("FFmpeg checksum changed between verification and smoke setup")
 
+    endpoint = _allocate_loopback_endpoint()
     sidecar_config = SidecarConfig(
-        endpoint=_required("VOICEINK_SIDECAR_ENDPOINT"),
-        model_id=_required("VOICEINK_SIDECAR_MODEL_ID"),
-        backend=os.environ.get("VOICEINK_SIDECAR_BACKEND", "cpu"),
+        endpoint=endpoint,
+        model_id=runtime_configuration.model_id,
+        backend=runtime_configuration.backend,
     )
     executable_manifest = RuntimeArtifactManifest(
-        version=_required("VOICEINK_SIDECAR_VERSION"),
-        provenance_url=_required("VOICEINK_SIDECAR_PROVENANCE_URL"),
-        sha256=_required("VOICEINK_SIDECAR_EXECUTABLE_SHA256"),
-        license=_required("VOICEINK_SIDECAR_LICENSE"),
-        allowed_path=runtime_path,
+        version=runtime_configuration.executable_artifact.version,
+        provenance_url=runtime_configuration.executable_artifact.provenance_url,
+        sha256=runtime_configuration.executable_artifact.sha256,
+        license=runtime_configuration.executable_artifact.license,
+        allowed_path=runtime_configuration.executable_artifact.allowed_path,
     )
     model_manifest = RuntimeArtifactManifest(
-        version=_required("VOICEINK_SIDECAR_MODEL_VERSION"),
-        provenance_url=_required("VOICEINK_SIDECAR_MODEL_PROVENANCE_URL"),
-        sha256=_required("VOICEINK_SIDECAR_MODEL_SHA256"),
-        license=_required("VOICEINK_SIDECAR_MODEL_LICENSE"),
-        allowed_path=model_path,
+        version=runtime_configuration.model_artifact.version,
+        provenance_url=runtime_configuration.model_artifact.provenance_url,
+        sha256=runtime_configuration.model_artifact.sha256,
+        license=runtime_configuration.model_artifact.license,
+        allowed_path=runtime_configuration.model_artifact.allowed_path,
     )
+    RuntimeArtifactVerifier().verify_manifest(
+        runtime_path, executable_manifest, label="runtime executable"
+    )
+    RuntimeArtifactVerifier().verify_manifest(model_path, model_manifest, label="runtime model")
     supervisor = SubprocessSupervisor(
         SubprocessConfig(
             executable=runtime_path,
             model=model_path,
-            executable_sha256=_required("VOICEINK_SIDECAR_EXECUTABLE_SHA256"),
-            model_sha256=_required("VOICEINK_SIDECAR_MODEL_SHA256"),
+            executable_sha256=executable_manifest.sha256,
+            model_sha256=model_manifest.sha256,
             executable_manifest=executable_manifest,
             model_manifest=model_manifest,
             endpoint=sidecar_config.endpoint,
             backend=sidecar_config.backend,
         )
+    )
+    events = JsonlEventWriter(
+        Path(os.environ.get("VOICEINK_NATIVE_SMOKE_EVENTS", "native-smoke-events.jsonl"))
+    )
+    events.event(
+        "runtime.verified",
+        artifact_id=runtime_configuration.manifest.executable_artifact_id,
+        version=executable_manifest.version,
+        provenance_url=executable_manifest.provenance_url,
+        sha256=executable_manifest.sha256,
+        license=executable_manifest.license,
+    )
+    events.event(
+        "model.verified",
+        artifact_id=runtime_configuration.manifest.model_artifact_id,
+        version=model_manifest.version,
+        provenance_url=model_manifest.provenance_url,
+        sha256=model_manifest.sha256,
+        license=model_manifest.license,
     )
     runtime = NeMoSidecarRuntime(
         sidecar_config,
@@ -182,8 +248,13 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     source = None
     workspace = None
     snapshot = None
+    runtime_started = False
     try:
         runtime.start()
+        runtime_started = True
+        events.event(
+            "sidecar.ready", backend=sidecar_config.backend, model_id=sidecar_config.model_id
+        )
         asr = AsrApplicationService(runtime)
         temporary_directory = _NativeSmokeTemporaryDirectory(report)
         with temporary_directory as temporary:
@@ -215,6 +286,13 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             )
             if not result.text.strip():
                 raise RuntimeError("configured ASR returned an empty transcript")
+            events.event(
+                "asr.completed",
+                backend=sidecar_config.backend,
+                model_id=sidecar_config.model_id,
+                duration_seconds=result.duration,
+                transcript_length=len(result.text),
+            )
             health = runtime.health()
             if health.status.value != "ready":
                 raise RuntimeError(f"configured ASR health is {health.status.value}")
@@ -235,14 +313,12 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                             "provenance_url": executable_manifest.provenance_url,
                             "sha256": executable_manifest.sha256,
                             "license": executable_manifest.license,
-                            "allowed_path": str(executable_manifest.allowed_path),
                         },
                         "model": {
                             "version": model_manifest.version,
                             "provenance_url": model_manifest.provenance_url,
                             "sha256": model_manifest.sha256,
                             "license": model_manifest.license,
-                            "allowed_path": str(model_manifest.allowed_path),
                         },
                     },
                     "ffmpeg": {
@@ -268,7 +344,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             except Exception as error:
                 cancellation_report["ffmpeg_process_tree"] = {
                     "status": "failed",
-                    "error": str(error),
+                    **safe_failure(error),
                 }
                 report["cancellation"] = cancellation_report
                 raise
@@ -278,7 +354,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             except Exception as error:
                 cancellation_report["snapshot_normalization"] = {
                     "status": "failed",
-                    "error": str(error),
+                    **safe_failure(error),
                 }
                 report["cancellation"] = cancellation_report
                 raise
@@ -292,7 +368,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             except Exception as error:
                 cancellation_report["asr_late_result_barrier"] = {
                     "status": "failed",
-                    "error": str(error),
+                    **safe_failure(error),
                 }
                 report["cancellation"] = cancellation_report
                 raise
@@ -308,6 +384,11 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                 runtime.close()
             except Exception as error:
                 report["runtime_close_error"] = type(error).__name__
+        if runtime_started:
+            events.event(
+                "runtime.cleaned", status="failed" if "runtime_close_error" in report else "passed"
+            )
+        events.close()
         _write_report(report_path, report)
 
     report["source_sha256_unchanged"] = _hash(fixture) == source_sha256
@@ -606,5 +687,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        print(f"native smoke failed: {error}", file=sys.stderr)
+        print(f"native smoke failed: {type(error).__name__}", file=sys.stderr)
         raise SystemExit(1) from error

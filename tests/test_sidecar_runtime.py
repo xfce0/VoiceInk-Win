@@ -132,13 +132,43 @@ def test_sidecar_start_transcribe_and_close_use_injected_boundaries() -> None:
     runtime.close()
 
     assert result.text == "hello"
-    assert transport.calls[0][0] == "/transcribe"
+    assert transport.calls[0][0] == "/v1/audio/transcriptions"
     payload = json.loads(transport.calls[0][1])
     assert payload["backend"] == "cuda:0"
     assert payload["protocol_version"] == 1
     assert payload["schema"] == "voiceink.asr.request.v1"
     assert supervisor.started and supervisor.terminated
     assert transport.closed
+
+
+def test_sidecar_uses_nemo_speech_multipart_contract_when_available() -> None:
+    class OfficialTransport(FakeTransport):
+        def post_multipart_audio(
+            self, path, pcm, sample_rate, model, language, response_format, *args, **kwargs
+        ):
+            del pcm, sample_rate, model, language, args, kwargs
+            self.calls.append((path, response_format.encode(), None))
+            return TransportResponse(
+                200,
+                json.dumps(
+                    {
+                        "text": "hello",
+                        "duration": 0.002,
+                        "language": "en",
+                        "words": [{"word": "hello", "start": 0.0, "end": 0.002}],
+                    }
+                ).encode(),
+            )
+
+    transport = OfficialTransport(TransportResponse(500, b"unused"))
+    runtime = NeMoSidecarRuntime(config(), transport, FakeSupervisor())
+
+    runtime.start()
+    result = runtime.transcribe(request())
+
+    assert result.text == "hello"
+    assert result.detected_language == "en"
+    assert transport.calls[0][:2] == ("/v1/audio/transcriptions", b"json")
 
 
 @pytest.mark.parametrize(

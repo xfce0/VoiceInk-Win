@@ -22,3 +22,9 @@ documents:
   - path: rfcs/imported-media-transcription.md
     kind: rfc
     status: implemented
+  - path: spec/features/003-parakeet-runtime-integration.md
+    kind: feature
+    status: proposed
+  - path: rfcs/parakeet-runtime-integration.md
+    kind: rfc
+    status: proposed

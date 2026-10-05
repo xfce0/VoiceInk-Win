@@ -1,5 +1,13 @@
 """Infrastructure adapters for the ASR foundation."""
 
+from .authentication import (
+    ASR_API_KEY_ENV,
+    ASR_AUTHORIZATION_HEADER,
+    ASR_NONCE_ENV,
+    ASR_NONCE_HEADER,
+    generate_nonce,
+    validate_nonce,
+)
 from .fake_asr import FakeAsrRuntime, FakeAsrScenario
 from .fake_clock import FakeClock
 from .fake_media import FakeMediaNormalizer, FakeMediaScenario, FakeSnapshotStore, make_wav
@@ -37,6 +45,19 @@ from .process import (
     SubprocessSupervisor,
     UrllibReadinessProbe,
 )
+from .reporting import JsonlEventWriter, safe_failure, sanitize_report_value
+from .runtime_manifest import (
+    ARTIFACT_LOCK_SCHEMA,
+    RUNTIME_MANIFEST_SCHEMA,
+    ArtifactLock,
+    ArtifactLockEntry,
+    LoadedRuntimeManifest,
+    RuntimeManifest,
+    RuntimeManifestLoader,
+    load_artifact_lock,
+    load_runtime_configuration,
+    load_runtime_manifest,
+)
 from .sidecar import NeMoSidecarRuntime, ProcessSupervisor, SidecarConfig, SidecarTransport
 from .transport import TransportResponse, UrllibLoopbackTransport
 from .windows_snapshot import (
@@ -48,6 +69,12 @@ from .windows_snapshot import (
 __all__ = [
     "FakeAsrRuntime",
     "FakeAsrScenario",
+    "ASR_NONCE_ENV",
+    "ASR_NONCE_HEADER",
+    "ASR_API_KEY_ENV",
+    "ASR_AUTHORIZATION_HEADER",
+    "generate_nonce",
+    "validate_nonce",
     "FakeClock",
     "ProcessHandle",
     "ReadinessProbe",
@@ -56,6 +83,19 @@ __all__ = [
     "SubprocessConfig",
     "SubprocessSupervisor",
     "UrllibReadinessProbe",
+    "ARTIFACT_LOCK_SCHEMA",
+    "RUNTIME_MANIFEST_SCHEMA",
+    "ArtifactLock",
+    "ArtifactLockEntry",
+    "LoadedRuntimeManifest",
+    "RuntimeManifest",
+    "RuntimeManifestLoader",
+    "load_artifact_lock",
+    "load_runtime_configuration",
+    "load_runtime_manifest",
+    "JsonlEventWriter",
+    "safe_failure",
+    "sanitize_report_value",
     "NeMoSidecarRuntime",
     "ProcessSupervisor",
     "SidecarConfig",

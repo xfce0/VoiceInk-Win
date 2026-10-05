@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import errno
+import io
 import selectors
 import socket
+import wave
 from dataclasses import dataclass
 from time import monotonic
 from urllib.error import HTTPError
@@ -12,6 +14,8 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from voiceink_win.domain import CancellationError, ConfigurationError, MonotonicClock, ProtocolError
+
+from .authentication import ASR_AUTHORIZATION_HEADER, ASR_NONCE_HEADER
 
 _MAX_RESPONSE_HEADER_BYTES = 64 * 1024
 _MAX_RESPONSE_CHUNK_OVERHEAD_BYTES = 64 * 1024
@@ -36,15 +40,93 @@ class TransportResponse:
 
 
 class UrllibLoopbackTransport:
-    def __init__(self, endpoint: str, *, clock: MonotonicClock | None = None) -> None:
+    def __init__(
+        self, endpoint: str, *, clock: MonotonicClock | None = None, nonce: str | None = None
+    ) -> None:
         parsed = urlsplit(endpoint)
-        if parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ConfigurationError("transport endpoint must be an HTTP loopback URL")
+        if parsed.port is None or not 1 <= parsed.port <= 65535:
+            raise ConfigurationError("transport endpoint must include a valid port")
         self._endpoint = endpoint.rstrip("/")
         self._clock = clock
+        self._nonce = nonce
+        self._api_key: str | None = None
 
     def set_clock(self, clock: MonotonicClock) -> None:
         self._clock = clock
+
+    def set_nonce(self, nonce: str) -> None:
+        if not isinstance(nonce, str) or not nonce:
+            raise ConfigurationError("sidecar nonce must be non-empty")
+        self._nonce = nonce
+
+    def set_api_key(self, api_key: str) -> None:
+        if not isinstance(api_key, str) or not api_key:
+            raise ConfigurationError("sidecar API key must be non-empty")
+        self._api_key = api_key
+
+    def post_multipart_audio(
+        self,
+        path: str,
+        pcm: memoryview,
+        sample_rate: int,
+        model: str,
+        language: str | None,
+        response_format: str,
+        timeout: float | None,
+        max_response_bytes: int,
+        cancellation=None,
+        deadline: float | None = None,
+        nonce: str | None = None,
+    ) -> TransportResponse:
+        """Send canonical PCM as the WAV multipart form expected by NeMo-Speech.cpp."""
+        if cancellation is not None and cancellation.is_cancelled():
+            raise CancellationError("sidecar request was cancelled")
+        if deadline is not None and self._now() >= deadline:
+            raise TimeoutError("sidecar request timed out")
+        boundary = "----VoiceInkASR" + self._effective_nonce(nonce)[:16]
+        wav_body = _wav_bytes(pcm, sample_rate)
+        fields = {"model": model, "response_format": response_format}
+        if language is not None:
+            fields["language"] = language
+        body = bytearray()
+        for name, value in fields.items():
+            field_header = (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'
+            )
+            body.extend(field_header.encode())
+        file_header = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+            'filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n'
+        )
+        body.extend(file_header.encode())
+        body.extend(wav_body)
+        body.extend(f"\r\n--{boundary}--\r\n".encode())
+        request = Request(
+            f"{self._endpoint}{_origin_path(path)}",
+            data=bytes(body),
+            headers={
+                **self._headers(f"multipart/form-data; boundary={boundary}", nonce),
+                "Content-Length": str(len(body)),
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return TransportResponse(
+                    response.status, self._read_bounded(response, max_response_bytes)
+                )
+        except HTTPError as error:
+            return TransportResponse(error.code, self._read_bounded(error, max_response_bytes))
 
     def post(
         self,
@@ -52,13 +134,14 @@ class UrllibLoopbackTransport:
         body: bytes,
         timeout: float | None,
         max_response_bytes: int,
+        nonce: str | None = None,
     ) -> TransportResponse:
         if max_response_bytes < 1:
             raise ValueError("max_response_bytes must be positive")
         request = Request(
             f"{self._endpoint}{_origin_path(path)}",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=self._headers("application/json", nonce),
             method="POST",
         )
         try:
@@ -83,6 +166,7 @@ class UrllibLoopbackTransport:
         max_response_bytes: int,
         cancellation=None,
         deadline: float | None = None,
+        nonce: str | None = None,
     ) -> TransportResponse:
         """Send metadata and PCM separately so audio is never hex/base64 copied."""
         if max_response_bytes < 1:
@@ -90,6 +174,7 @@ class UrllibLoopbackTransport:
         if cancellation is not None and cancellation.is_cancelled():
             raise CancellationError("sidecar request was cancelled")
         request_path = _origin_path(path)
+        authenticated_nonce = self._effective_nonce(nonce)
         parsed = urlsplit(self._endpoint)
         if parsed.port is None:
             raise ConfigurationError("transport endpoint must include a port")
@@ -117,6 +202,7 @@ class UrllibLoopbackTransport:
                 "Connection: close\r\n"
                 "Content-Type: application/octet-stream\r\n"
                 f"Content-Length: {len(pcm)}\r\n"
+                f"{ASR_NONCE_HEADER}: {authenticated_nonce}\r\n"
                 "X-VoiceInk-ASR-Metadata: "
             ).encode("ascii")
             request += metadata + b"\r\n\r\n"
@@ -353,3 +439,29 @@ class UrllibLoopbackTransport:
 
     def close(self) -> None:
         pass
+
+    def _effective_nonce(self, nonce: str | None) -> str:
+        value = nonce if nonce is not None else self._nonce
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError("sidecar transport nonce is not configured")
+        try:
+            value.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise ConfigurationError("sidecar transport nonce must be ASCII") from error
+        return value
+
+    def _headers(self, content_type: str, nonce: str | None) -> dict[str, str]:
+        headers = {"Content-Type": content_type, ASR_NONCE_HEADER: self._effective_nonce(nonce)}
+        if self._api_key is not None:
+            headers[ASR_AUTHORIZATION_HEADER] = f"Bearer {self._api_key}"
+        return headers
+
+
+def _wav_bytes(pcm: memoryview, sample_rate: int) -> bytes:
+    stream = io.BytesIO()
+    with wave.open(stream, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(pcm)
+    return stream.getvalue()

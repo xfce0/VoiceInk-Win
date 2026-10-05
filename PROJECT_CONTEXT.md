@@ -20,7 +20,7 @@ The macOS project is the reference for behavior and visual language. The existin
 
 ## Current Status
 
-The repository is currently a scaffold. The following are complete:
+The foundation and imported-media backend are implemented. The following are complete:
 
 - specification-driven project layout;
 - architecture baseline;
@@ -28,14 +28,14 @@ The repository is currently a scaffold. The following are complete:
 - Makefile quality gates;
 - local Git hooks;
 - public project context;
-- first foundation/runtime-spike RFC.
+- foundation/runtime boundary and fake adapter tests;
+- imported-media queue, normalization, cancellation, retry, and cleanup contracts;
+- Windows diagnostic build and manual ARM64 smoke validation.
 
 The following are not implemented:
 
 - PySide6 UI, tray, and overlay;
-- domain/application transcription workflow;
-- Parakeet runtime adapter and model management;
-- FFmpeg conversion and file-import queue;
+- production Parakeet runtime/model management;
 - microphone/WASAPI recording;
 - Windows hotkeys, clipboard, and text input;
 - SQLite history;
@@ -44,9 +44,14 @@ The following are not implemented:
 
 ## Current Milestone
 
-The first milestone is `Foundation and Parakeet Runtime Spike`, specified in `rfcs/foundation-runtime-spike.md`. Its status is `Proposed`.
+Work 3 is `Parakeet Runtime Integration`, specified in
+`rfcs/parakeet-runtime-integration.md` and
+`spec/features/003-parakeet-runtime-integration.md`. Its status is `Proposed`.
 
-No production implementation should start until the RFC is reviewed, approved, and its blocking decisions are resolved.
+After RFC approval, adapter/protocol/configuration and fake-sidecar tests may
+be implemented with synthetic artifacts. Native smoke, release validation, and
+the `Complete` status remain blocked until the RFC's runtime/model artifact,
+fixture, and quality-gate decisions are resolved.
 
 ## Planned Architecture
 
