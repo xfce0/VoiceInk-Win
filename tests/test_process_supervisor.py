@@ -143,6 +143,7 @@ def test_supervisor_rechecks_artifact_identity_immediately_before_popen(tmp_path
         model_sha256=model_hash,
         executable_manifest=manifest(executable, executable_hash),
         model_manifest=manifest(model, model_hash),
+        endpoint="http://127.0.0.1:8123",
     )
     with pytest.raises(ConfigurationError, match="identity changed"):
         SubprocessSupervisor(config, verifier=ChangingVerifier()).start()
@@ -201,6 +202,7 @@ def test_windows_supervisor_revalidates_locked_artifacts_before_popen(
         model_sha256=model_hash,
         executable_manifest=manifest(executable, executable_hash),
         model_manifest=manifest(model, model_hash),
+        endpoint="http://127.0.0.1:8123",
     )
 
     class WindowsOsProxy:
@@ -617,6 +619,7 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "2",
     ]
     assert calls[0][1]["shell"] is False
+    assert calls[0][1]["env"][process_module.ASR_NONCE_ENV] == supervisor.nonce
     assert supervisor.process_tree_mode == "posix-process-group"
     supervisor.terminate(time.monotonic() + 1.0)
     assert killpg_calls
@@ -632,4 +635,18 @@ def test_subprocess_config_rejects_non_loopback_endpoint(tmp_path: Path) -> None
             executable_manifest=manifest(tmp_path / "sidecar", "0" * 64),
             model_manifest=manifest(tmp_path / "model.gguf", "0" * 64),
             endpoint="http://example.invalid:8123",
+        )
+
+
+def test_subprocess_config_rejects_security_critical_extra_args(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="security-critical"):
+        SubprocessConfig(
+            executable=tmp_path / "sidecar",
+            model=tmp_path / "model.gguf",
+            executable_sha256="0" * 64,
+            model_sha256="0" * 64,
+            executable_manifest=manifest(tmp_path / "sidecar", "0" * 64),
+            model_manifest=manifest(tmp_path / "model.gguf", "0" * 64),
+            endpoint="http://127.0.0.1:8123",
+            extra_args=("--host", "0.0.0.0"),
         )

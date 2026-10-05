@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
 import os
 import signal
 import stat
@@ -21,6 +22,8 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from voiceink_win.domain import ConfigurationError, MissingModelError, RuntimeUnavailableError
+
+from .authentication import ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce, validate_nonce
 
 
 class ProcessHandle(Protocol):
@@ -111,10 +114,18 @@ class RuntimeArtifactManifest:
 
 def _validate_loopback_endpoint(endpoint: str) -> tuple[str, int]:
     parsed = urlsplit(endpoint)
-    if parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ConfigurationError("sidecar endpoint must be an HTTP loopback URL")
-    if parsed.port is None:
-        raise ConfigurationError("sidecar endpoint must include a port")
+    if parsed.port is None or not 1 <= parsed.port <= 65535:
+        raise ConfigurationError("sidecar endpoint must include a valid port")
     return parsed.hostname, parsed.port
 
 
@@ -227,9 +238,10 @@ class SubprocessConfig:
     model_sha256: str
     executable_manifest: RuntimeArtifactManifest
     model_manifest: RuntimeArtifactManifest
-    endpoint: str = "http://127.0.0.1:8123"
+    endpoint: str
     backend: str = "cpu"
     extra_args: tuple[str, ...] = ()
+    model_id: str = "parakeet-tdt-v3"
 
     def __post_init__(self) -> None:
         _validate_loopback_endpoint(self.endpoint)
@@ -245,6 +257,13 @@ class SubprocessConfig:
             raise ConfigurationError("runtime executable checksum manifest mismatch")
         if self.model_manifest.sha256.lower() != self.model_sha256.lower():
             raise ConfigurationError("runtime model checksum manifest mismatch")
+        if not self.model_id.strip():
+            raise ConfigurationError("runtime model_id must not be empty")
+        forbidden = {"--model", "--host", "--port", "--backend"}
+        if any(argument.split("=", 1)[0] in forbidden for argument in self.extra_args):
+            raise ConfigurationError(
+                "runtime extra_args cannot override security-critical arguments"
+            )
 
     def argv(self) -> list[str]:
         host, port = _validate_loopback_endpoint(self.endpoint)
@@ -266,14 +285,49 @@ class UrllibReadinessProbe:
     def __init__(self, endpoint: str, path: str = "/health") -> None:
         _validate_loopback_endpoint(endpoint)
         self._url = f"{endpoint.rstrip('/')}/{path.lstrip('/')}"
+        self._nonce: str | None = None
+        self._attestation: dict[str, object] | None = None
+
+    def set_nonce(self, nonce: str) -> None:
+        if not isinstance(nonce, str) or not nonce:
+            raise ConfigurationError("sidecar readiness nonce must be non-empty")
+        self._nonce = nonce
+
+    def configure_attestation(
+        self, *, pid: int, nonce: str, model_id: str, model_sha256: str, backend: str
+    ) -> None:
+        self.set_nonce(nonce)
+        self._attestation = {
+            "pid": pid,
+            "nonce": nonce,
+            "model_id": model_id,
+            "model_sha256": model_sha256.lower(),
+            "backend": backend,
+        }
 
     def ready(self, timeout: float) -> bool:
-        request = Request(self._url, method="GET")
+        if self._nonce is None or self._attestation is None:
+            return False
+        request = Request(self._url, headers={ASR_NONCE_HEADER: self._nonce}, method="GET")
         try:
             with urlopen(request, timeout=timeout) as response:
-                response.read(1)
-                return 200 <= response.status < 300
-        except (HTTPError, URLError, OSError, TimeoutError):
+                if not 200 <= response.status < 300:
+                    return False
+                payload = json.loads(response.read(64 * 1024).decode("utf-8"))
+                expected = self._attestation
+                return (
+                    isinstance(payload, dict)
+                    and payload.get("schema") == "voiceink.asr.health.v1"
+                    and payload.get("protocol_version") == 1
+                    and payload.get("ready") is True
+                    and isinstance(payload.get("pid"), int)
+                    and payload["pid"] == expected["pid"]
+                    and validate_nonce(payload.get("nonce"), expected["nonce"])
+                    and payload.get("model_id") == expected["model_id"]
+                    and str(payload.get("model_sha256", "")).lower() == expected["model_sha256"]
+                    and payload.get("backend") == expected["backend"]
+                )
+        except (HTTPError, URLError, OSError, TimeoutError, ValueError, UnicodeDecodeError):
             return False
 
 
@@ -308,7 +362,12 @@ class SubprocessSupervisor:
         self._process_reaper_lock = Lock()
         self._process_reaper_done = Event()
         self._process_reaper_done.set()
+        self._nonce: str | None = None
         self.process_tree_mode = "windows-taskkill" if os.name == "nt" else "posix-process-group"
+
+    @property
+    def nonce(self) -> str | None:
+        return self._nonce
 
     def start(self) -> None:
         if self._has_pending_cleanup_resources():
@@ -331,6 +390,10 @@ class SubprocessSupervisor:
             if errors:
                 raise ExceptionGroup("previous sidecar cleanup failed", errors)
             self._process = None
+        self._nonce = generate_nonce()
+        set_probe_nonce = getattr(self._readiness_probe, "set_nonce", None)
+        if set_probe_nonce is not None:
+            set_probe_nonce(self._nonce)
         try:
             if os.name == "nt":
                 for artifact in (self.config.executable, self.config.model):
@@ -353,6 +416,7 @@ class SubprocessSupervisor:
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
+            "env": {**os.environ, ASR_NONCE_ENV: self._nonce},
         }
         if os.name != "nt":
             kwargs["start_new_session"] = True
@@ -382,6 +446,15 @@ class SubprocessSupervisor:
                 ):
                     lock.revalidate(manifest.sha256, manifest.allowed_path)
             self._process = self._popen_factory(self.config.argv(), **kwargs)
+            configure_attestation = getattr(self._readiness_probe, "configure_attestation", None)
+            if configure_attestation is not None:
+                configure_attestation(
+                    pid=self._process.pid,
+                    nonce=self._nonce,
+                    model_id=self.config.model_id,
+                    model_sha256=self.config.model_sha256,
+                    backend=self.config.backend,
+                )
             if windows_job is not None and resume is not None:
                 windows_job.assign(self._process)
                 resume(self._process.pid)
@@ -425,8 +498,9 @@ class SubprocessSupervisor:
                     self._close_artifact_locks()
                 except BaseException as cleanup_error:
                     errors.append(cleanup_error)
-                if errors:
-                    raise ExceptionGroup("sidecar startup cleanup failed", errors)
+            if errors:
+                raise ExceptionGroup("sidecar startup cleanup failed", errors) from error
+            self._nonce = None
             if isinstance(error, ConfigurationError):
                 raise
             raise ConfigurationError("sidecar process could not be started", cause=error) from error

@@ -19,7 +19,6 @@ jobs:
       VOICEINK_NATIVE_SMOKE_FIXTURE_URL: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_URL }}
       VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256 }}
       VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE }}
-      VOICEINK_SIDECAR_ENDPOINT: ${{ vars.VOICEINK_SIDECAR_ENDPOINT }}
       VOICEINK_SIDECAR_ARCHIVE_URL: ${{ vars.VOICEINK_SIDECAR_ARCHIVE_URL }}
       VOICEINK_SIDECAR_ARCHIVE_SHA256: ${{ vars.VOICEINK_SIDECAR_ARCHIVE_SHA256 }}
       VOICEINK_SIDECAR_EXECUTABLE_SHA256: ${{ vars.VOICEINK_SIDECAR_EXECUTABLE_SHA256 }}
@@ -36,6 +35,7 @@ jobs:
       VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS: ${{ vars.VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS }}
       VOICEINK_NATIVE_SMOKE_ASR_CANCEL_AFTER_SECONDS: ${{ vars.VOICEINK_NATIVE_SMOKE_ASR_CANCEL_AFTER_SECONDS }}
       VOICEINK_NATIVE_SMOKE_REPORT: native-smoke-report.json
+      VOICEINK_NATIVE_SMOKE_EVENTS: native-smoke-events.jsonl
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
@@ -50,7 +50,6 @@ jobs:
             "VOICEINK_NATIVE_SMOKE_FIXTURE_URL",
             "VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256",
             "VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE",
-            "VOICEINK_SIDECAR_ENDPOINT",
             "VOICEINK_SIDECAR_ARCHIVE_URL",
             "VOICEINK_SIDECAR_ARCHIVE_SHA256",
             "VOICEINK_SIDECAR_EXECUTABLE_SHA256",
@@ -110,12 +109,55 @@ jobs:
           "VOICEINK_SIDECAR_EXECUTABLE=$($runtime.FullName)" | Out-File $env:GITHUB_ENV -Append
           "VOICEINK_SIDECAR_MODEL=$model" | Out-File $env:GITHUB_ENV -Append
           "VOICEINK_NATIVE_SMOKE_FIXTURE=$fixture" | Out-File $env:GITHUB_ENV -Append
+          $lockPath = Join-Path $env:RUNNER_TEMP "voiceink-artifact-lock.json"
+          $manifestPath = Join-Path $env:RUNNER_TEMP "voiceink-runtime-manifest.json"
+          $lock = @{
+            schema = "voiceink.runtime.artifact-lock.v1"
+            version = 1
+            install_root = $env:RUNNER_TEMP
+            artifacts = @{
+              "nemo-speech-cpp-windows-amd64" = @{
+                kind = "executable"
+                version = (Required "VOICEINK_SIDECAR_VERSION")
+                provenance_url = (Required "VOICEINK_SIDECAR_PROVENANCE_URL")
+                sha256 = (Required "VOICEINK_SIDECAR_EXECUTABLE_SHA256")
+                license = (Required "VOICEINK_SIDECAR_LICENSE")
+                allowed_path = $runtime.FullName
+              }
+              (Required "VOICEINK_SIDECAR_MODEL_ID") = @{
+                kind = "model"
+                version = (Required "VOICEINK_SIDECAR_MODEL_VERSION")
+                provenance_url = (Required "VOICEINK_SIDECAR_MODEL_PROVENANCE_URL")
+                sha256 = (Required "VOICEINK_SIDECAR_MODEL_SHA256")
+                license = (Required "VOICEINK_SIDECAR_MODEL_LICENSE")
+                allowed_path = $model
+              }
+            }
+          }
+          $lock | ConvertTo-Json -Depth 8 | Set-Content -Path $lockPath -Encoding utf8
+          $manifest = @{
+            schema = "voiceink.runtime.manifest.v1"
+            version = 1
+            executable_artifact_id = "nemo-speech-cpp-windows-amd64"
+            model_artifact_id = (Required "VOICEINK_SIDECAR_MODEL_ID")
+            backend = if ([string]::IsNullOrWhiteSpace($env:VOICEINK_SIDECAR_BACKEND)) { "cpu" } else { $env:VOICEINK_SIDECAR_BACKEND }
+            endpoint = "ephemeral-loopback"
+            executable = $runtime.FullName
+            model = $model
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding utf8
+          $lockSha256 = (Get-FileHash $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "VOICEINK_ARTIFACT_LOCK=$lockPath" | Out-File $env:GITHUB_ENV -Append
+          "VOICEINK_ARTIFACT_LOCK_SHA256=$lockSha256" | Out-File $env:GITHUB_ENV -Append
+          "VOICEINK_RUNTIME_MANIFEST=$manifestPath" | Out-File $env:GITHUB_ENV -Append
       - name: Run native smoke
         run: python scripts/native_smoke.py
       - name: Upload native smoke report
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
-        with:
-          name: native-smoke-report
-          path: native-smoke-report.json
-          if-no-files-found: warn
+         with:
+           name: native-smoke-report
+           path: |
+             native-smoke-report.json
+             native-smoke-events.jsonl
+           if-no-files-found: warn

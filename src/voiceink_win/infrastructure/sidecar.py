@@ -30,6 +30,7 @@ from voiceink_win.domain import (
     TranscriptResult,
 )
 
+from .authentication import generate_nonce
 from .sidecar_protocol import (
     PROTOCOL_VERSION,
     REQUEST_SCHEMA,
@@ -181,6 +182,10 @@ class NeMoSidecarRuntime:
         startup_error: AsrError | None = None
         try:
             self._supervisor.start()
+            nonce = getattr(self._supervisor, "nonce", None) or generate_nonce()
+            set_transport_nonce = getattr(self._transport, "set_nonce", None)
+            if set_transport_nonce is not None:
+                set_transport_nonce(nonce)
             ready = self._supervisor.wait_ready(
                 self._clock.monotonic() + self._config.readiness_timeout
             )

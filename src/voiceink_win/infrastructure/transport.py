@@ -13,6 +13,8 @@ from urllib.request import Request, urlopen
 
 from voiceink_win.domain import CancellationError, ConfigurationError, MonotonicClock, ProtocolError
 
+from .authentication import ASR_NONCE_HEADER
+
 _MAX_RESPONSE_HEADER_BYTES = 64 * 1024
 _MAX_RESPONSE_CHUNK_OVERHEAD_BYTES = 64 * 1024
 _RECV_CHUNK_BYTES = 64 * 1024
@@ -36,15 +38,33 @@ class TransportResponse:
 
 
 class UrllibLoopbackTransport:
-    def __init__(self, endpoint: str, *, clock: MonotonicClock | None = None) -> None:
+    def __init__(
+        self, endpoint: str, *, clock: MonotonicClock | None = None, nonce: str | None = None
+    ) -> None:
         parsed = urlsplit(endpoint)
-        if parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ConfigurationError("transport endpoint must be an HTTP loopback URL")
+        if parsed.port is None or not 1 <= parsed.port <= 65535:
+            raise ConfigurationError("transport endpoint must include a valid port")
         self._endpoint = endpoint.rstrip("/")
         self._clock = clock
+        self._nonce = nonce
 
     def set_clock(self, clock: MonotonicClock) -> None:
         self._clock = clock
+
+    def set_nonce(self, nonce: str) -> None:
+        if not isinstance(nonce, str) or not nonce:
+            raise ConfigurationError("sidecar nonce must be non-empty")
+        self._nonce = nonce
 
     def post(
         self,
@@ -52,13 +72,14 @@ class UrllibLoopbackTransport:
         body: bytes,
         timeout: float | None,
         max_response_bytes: int,
+        nonce: str | None = None,
     ) -> TransportResponse:
         if max_response_bytes < 1:
             raise ValueError("max_response_bytes must be positive")
         request = Request(
             f"{self._endpoint}{_origin_path(path)}",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=self._headers("application/json", nonce),
             method="POST",
         )
         try:
@@ -83,6 +104,7 @@ class UrllibLoopbackTransport:
         max_response_bytes: int,
         cancellation=None,
         deadline: float | None = None,
+        nonce: str | None = None,
     ) -> TransportResponse:
         """Send metadata and PCM separately so audio is never hex/base64 copied."""
         if max_response_bytes < 1:
@@ -90,6 +112,7 @@ class UrllibLoopbackTransport:
         if cancellation is not None and cancellation.is_cancelled():
             raise CancellationError("sidecar request was cancelled")
         request_path = _origin_path(path)
+        authenticated_nonce = self._effective_nonce(nonce)
         parsed = urlsplit(self._endpoint)
         if parsed.port is None:
             raise ConfigurationError("transport endpoint must include a port")
@@ -117,6 +140,7 @@ class UrllibLoopbackTransport:
                 "Connection: close\r\n"
                 "Content-Type: application/octet-stream\r\n"
                 f"Content-Length: {len(pcm)}\r\n"
+                f"{ASR_NONCE_HEADER}: {authenticated_nonce}\r\n"
                 "X-VoiceInk-ASR-Metadata: "
             ).encode("ascii")
             request += metadata + b"\r\n\r\n"
@@ -353,3 +377,16 @@ class UrllibLoopbackTransport:
 
     def close(self) -> None:
         pass
+
+    def _effective_nonce(self, nonce: str | None) -> str:
+        value = nonce if nonce is not None else self._nonce
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError("sidecar transport nonce is not configured")
+        try:
+            value.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise ConfigurationError("sidecar transport nonce must be ASCII") from error
+        return value
+
+    def _headers(self, content_type: str, nonce: str | None) -> dict[str, str]:
+        return {"Content-Type": content_type, ASR_NONCE_HEADER: self._effective_nonce(nonce)}

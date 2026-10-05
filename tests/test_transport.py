@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import json
 import socket
 from threading import Thread
 
 import pytest
 
 from voiceink_win.domain import ProtocolError
-from voiceink_win.infrastructure import TransportResponse, UrllibLoopbackTransport
+from voiceink_win.infrastructure import (
+    ASR_NONCE_HEADER,
+    TransportResponse,
+    UrllibLoopbackTransport,
+    UrllibReadinessProbe,
+    validate_nonce,
+)
 
 
 class FakeHttpResponse:
@@ -36,7 +43,7 @@ def test_urllib_transport_bounds_response_read(monkeypatch) -> None:
     monkeypatch.setattr(
         "voiceink_win.infrastructure.transport.urlopen", lambda *args, **kwargs: FakeHttpResponse()
     )
-    transport = UrllibLoopbackTransport("http://127.0.0.1:8123")
+    transport = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce")
 
     with pytest.raises(ProtocolError):
         transport.post("/health", b"{}", timeout=1.0, max_response_bytes=8)
@@ -49,6 +56,86 @@ def test_transport_response_is_a_small_infrastructure_value() -> None:
     assert response.body == b"ok"
 
 
+def test_nonce_validation_is_constant_time_compatible_and_rejects_wrong_values() -> None:
+    assert validate_nonce("nonce", "nonce")
+    assert not validate_nonce("wrong", "nonce")
+    assert not validate_nonce("нonce", "nonce")
+
+
+def test_readiness_probe_sends_nonce_header(monkeypatch) -> None:
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, amount: int) -> bytes:
+            del amount
+            return json.dumps(
+                {
+                    "schema": "voiceink.asr.health.v1",
+                    "protocol_version": 1,
+                    "ready": True,
+                    "pid": 123,
+                    "nonce": "test-nonce",
+                    "model_id": "model",
+                    "model_sha256": "a" * 64,
+                    "backend": "cpu",
+                }
+            ).encode()
+
+    requests = []
+    monkeypatch.setattr(
+        "voiceink_win.infrastructure.process.urlopen",
+        lambda request, timeout: requests.append((request, timeout)) or Response(),
+    )
+    probe = UrllibReadinessProbe("http://127.0.0.1:8123")
+    probe.configure_attestation(
+        pid=123,
+        nonce="test-nonce",
+        model_id="model",
+        model_sha256="a" * 64,
+        backend="cpu",
+    )
+
+    assert probe.ready(1.0)
+    headers = {name.casefold(): value for name, value in requests[0][0].header_items()}
+    assert headers[ASR_NONCE_HEADER.casefold()] == "test-nonce"
+
+
+def test_readiness_probe_rejects_forged_health_payload(monkeypatch) -> None:
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, amount: int) -> bytes:
+            del amount
+            return b'{"ready": true, "pid": 999}'
+
+    monkeypatch.setattr(
+        "voiceink_win.infrastructure.process.urlopen",
+        lambda request, timeout: Response(),
+    )
+    probe = UrllibReadinessProbe("http://127.0.0.1:8123")
+    probe.configure_attestation(
+        pid=123,
+        nonce="test-nonce",
+        model_id="model",
+        model_sha256="a" * 64,
+        backend="cpu",
+    )
+
+    assert not probe.ready(1.0)
+
+
 @pytest.mark.parametrize("body", [b"", b"x" * 8])
 def test_urllib_transport_accepts_response_at_or_below_limit(monkeypatch, body: bytes) -> None:
     monkeypatch.setattr(
@@ -56,7 +143,7 @@ def test_urllib_transport_accepts_response_at_or_below_limit(monkeypatch, body: 
         lambda *args, **kwargs: SizedHttpResponse(body),
     )
 
-    response = UrllibLoopbackTransport("http://127.0.0.1:8123").post(
+    response = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce").post(
         "/health", b"{}", timeout=1.0, max_response_bytes=8
     )
 
@@ -70,14 +157,14 @@ def test_transport_rejects_declared_oversized_body_before_reading(monkeypatch) -
     )
 
     with pytest.raises(ProtocolError):
-        UrllibLoopbackTransport("http://127.0.0.1:8123").post(
+        UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce").post(
             "/health", b"{}", timeout=1.0, max_response_bytes=8
         )
     assert response.body == b""
 
 
 def test_transport_rejects_chunked_body_above_limit() -> None:
-    transport = UrllibLoopbackTransport("http://127.0.0.1:8123")
+    transport = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce")
 
     with pytest.raises(ProtocolError):
         transport._parse_response(
@@ -88,7 +175,7 @@ def test_transport_rejects_chunked_body_above_limit() -> None:
 
 
 def test_transport_rejects_truncated_content_length_response() -> None:
-    transport = UrllibLoopbackTransport("http://127.0.0.1:8123")
+    transport = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce")
 
     with pytest.raises(ProtocolError):
         transport._parse_response(
@@ -99,7 +186,7 @@ def test_transport_rejects_truncated_content_length_response() -> None:
 
 
 def test_transport_accepts_zero_length_content_length_response() -> None:
-    transport = UrllibLoopbackTransport("http://127.0.0.1:8123")
+    transport = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce")
 
     response = transport._parse_response(
         bytearray(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"),
@@ -114,7 +201,7 @@ def test_transport_accepts_zero_length_content_length_response() -> None:
     "path", ["/transcribe\r\nX-Leak: yes", "//other-host", "/transcribe?token=leak"]
 )
 def test_post_audio_rejects_non_origin_form_path_before_connecting(monkeypatch, path: str) -> None:
-    transport = UrllibLoopbackTransport("http://127.0.0.1:8123")
+    transport = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce")
     monkeypatch.setattr(
         transport, "_connect_cancellable", lambda *args, **kwargs: pytest.fail("connected")
     )
@@ -156,9 +243,9 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
     try:
         metadata = b'{"schema":"voiceink.asr.request.v1","request_id":"safe"}'
         audio = b"\x01\x02\x03\x04"
-        response = UrllibLoopbackTransport(f"http://127.0.0.1:{port}").post_audio(
-            "/transcribe", metadata, memoryview(audio), timeout=1.0, max_response_bytes=8
-        )
+        response = UrllibLoopbackTransport(
+            f"http://127.0.0.1:{port}", nonce="test-nonce"
+        ).post_audio("/transcribe", metadata, memoryview(audio), timeout=1.0, max_response_bytes=8)
     finally:
         worker.join(1.0)
         listener.close()
@@ -169,6 +256,7 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
     assert wire.startswith(b"POST /transcribe HTTP/1.1\r\n")
     assert b"Host: 127.0.0.1:" + str(port).encode("ascii") + b"\r\n" in wire
     assert b"X-VoiceInk-ASR-Metadata: " + metadata + b"\r\n" in wire
+    assert wire.count(b"X-VoiceInk-ASR-Nonce: test-nonce\r\n") == 1
     assert b"X-VoiceInk-ASR-Metadata: ey" not in wire
     assert b"safe transcript" not in wire
-    assert audio in wire
+    assert wire.count(audio) == 1
