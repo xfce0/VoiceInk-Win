@@ -17,6 +17,7 @@ from voiceink_win.domain import (
     ProcessCrashedError,
     ProtocolError,
     QueueFullError,
+    RuntimeRecoveryPendingError,
     RuntimeUnavailableError,
     TranscriptResult,
 )
@@ -191,6 +192,89 @@ def test_application_service_close_cancels_active_call_and_rejects_new_work() ->
     assert isinstance(caller_error[0], CancellationError)
     with pytest.raises(RuntimeUnavailableError):
         service.transcribe(request())
+
+
+def test_application_close_passes_absolute_deadline_to_runtime() -> None:
+    class DeadlineRuntime(FakeAsrRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_deadline = None
+
+        def close(self, deadline=None) -> None:
+            self.close_deadline = deadline
+            super().close()
+
+    from voiceink_win.infrastructure import FakeClock
+
+    clock = FakeClock(100.0)
+    runtime = DeadlineRuntime()
+    service = AsrApplicationService(runtime, clock=clock)
+
+    service.close(deadline=104.0)
+
+    assert runtime.close_deadline == 104.0
+
+
+def test_application_close_reports_pending_runtime_recovery_without_dropping_ownership() -> None:
+    started = Event()
+    release = Event()
+
+    class StubbornRuntime(FakeAsrRuntime):
+        def close(self, deadline=None) -> None:
+            del deadline
+            started.set()
+            release.wait(1.0)
+            super().close()
+
+    from voiceink_win.infrastructure import FakeClock
+
+    clock = FakeClock(100.0)
+    runtime = StubbornRuntime()
+    service = AsrApplicationService(runtime, clock=clock)
+
+    with pytest.raises(RuntimeRecoveryPendingError):
+        service.close(deadline=100.0)
+
+    assert started.wait(1.0)
+    assert service._state.value == "closing"
+    assert service._runtime_close_thread is not None
+    assert service._runtime_close_thread.is_alive()
+
+    release.set()
+    service._runtime_close_thread.join(1.0)
+    assert service._state.value == "closed"
+
+
+def test_application_close_preserves_pending_runtime_error_and_retries_with_new_deadline() -> None:
+    class PendingOnceRuntime(FakeAsrRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_attempts = 0
+            self.close_deadlines: list[float | None] = []
+
+        def close(self, deadline=None) -> None:
+            self.close_attempts += 1
+            self.close_deadlines.append(deadline)
+            if self.close_attempts == 1:
+                raise RuntimeRecoveryPendingError("runtime cleanup is still pending")
+            super().close()
+
+    runtime = PendingOnceRuntime()
+    service = AsrApplicationService(runtime)
+    first_deadline = time.monotonic() + 1.0
+    second_deadline = first_deadline + 1.0
+
+    with pytest.raises(RuntimeRecoveryPendingError):
+        service.close(deadline=first_deadline)
+
+    assert service._state.value == "closing"
+    assert not service._runtime_close_started
+
+    service.close(deadline=second_deadline)
+
+    assert runtime.close_attempts == 2
+    assert runtime.close_deadlines[0] < runtime.close_deadlines[1]
+    assert service._state.value == "closed"
 
 
 def test_application_service_wraps_worker_start_failure(monkeypatch) -> None:

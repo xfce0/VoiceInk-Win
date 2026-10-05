@@ -17,6 +17,7 @@ class AsrErrorCode(StrEnum):
     EXECUTION = "execution"
     BACKEND_UNAVAILABLE = "backend_unavailable"
     QUEUE_FULL = "queue_full"
+    RECOVERY_PENDING = "recovery_pending"
 
 
 class AsrError(Exception):
@@ -75,8 +76,16 @@ class QueueFullError(AsrError):
     retryable = True
 
 
+class RuntimeRecoveryPendingError(AsrError):
+    """Runtime ownership is still tracked for asynchronous cleanup."""
+
+    code = AsrErrorCode.RECOVERY_PENDING
+
+
 class ProcessCrashedError(ExecutionError):
     """The isolated native runtime stopped unexpectedly."""
+
+    retryable = True
 
 
 DeadlineExceededError = AsrTimeoutError

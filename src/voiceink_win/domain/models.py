@@ -13,7 +13,7 @@ MAX_CANONICAL_AUDIO_BYTES = 64 * 1024 * 1024
 
 
 def _number(value: object, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise InvalidInputError(f"{name} must be a number")
     converted = float(value)
     if not math.isfinite(converted):
@@ -30,9 +30,9 @@ class CanonicalAudio:
     channels: int = 1
 
     def __post_init__(self) -> None:
-        if not isinstance(self.pcm16le, (bytes, bytearray, memoryview)):
+        if not isinstance(self.pcm16le, bytes | bytearray | memoryview):
             raise InvalidInputError("audio must be bytes-like PCM16 data")
-        owned = bytes(self.pcm16le)
+        owned = self.pcm16le if isinstance(self.pcm16le, bytes) else bytes(self.pcm16le)
         if not owned:
             raise InvalidInputError("audio must not be empty")
         if len(owned) > MAX_CANONICAL_AUDIO_BYTES:
@@ -91,7 +91,7 @@ class TranscriptSegment:
     def __post_init__(self) -> None:
         if not isinstance(self.text, str) or not self.text.strip():
             raise InvalidInputError("transcript segment must contain text")
-        if not isinstance(self.words, (tuple, list)):
+        if not isinstance(self.words, tuple | list):
             raise InvalidInputError("segment words must be a sequence")
         if not isinstance(self.words, tuple):
             object.__setattr__(self, "words", tuple(self.words))
@@ -114,7 +114,7 @@ class TranscriptResult:
         duration = _number(self.duration, "transcript duration")
         if duration < 0:
             raise InvalidInputError("transcript duration must not be negative")
-        if not isinstance(self.segments, (tuple, list)):
+        if not isinstance(self.segments, tuple | list):
             raise InvalidInputError("transcript segments must be a sequence")
         if not isinstance(self.segments, tuple):
             object.__setattr__(self, "segments", tuple(self.segments))
@@ -199,7 +199,7 @@ class AsrCapabilities:
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, str) or not self.model_id.strip():
             raise InvalidInputError("runtime capabilities must identify a model and backend")
-        if not isinstance(self.backends, (tuple, list)) or not self.backends:
+        if not isinstance(self.backends, tuple | list) or not self.backends:
             raise InvalidInputError("runtime capabilities must identify a model and backend")
         if not isinstance(self.backends, tuple):
             object.__setattr__(self, "backends", tuple(self.backends))

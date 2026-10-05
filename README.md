@@ -48,4 +48,30 @@ make check
 make push
 ```
 
+## Windows Diagnostic Build
+
+The first native validation artifact is a portable CLI executable. It writes
+`diagnostic.jsonl`, `diagnostic.log`, and `python.log` under
+`%LOCALAPPDATA%\\VoiceInk-Win\\diagnostics\\<run-id>`. Logs contain stage,
+size, checksum, timing, and sanitized exception data, but not raw audio or
+transcript text.
+
+The local build command must run on Windows:
+
+```text
+VOICEINK_FFMPEG_PATH=C:\\path\\to\\ffmpeg.exe \\
+VOICEINK_FFMPEG_MANIFEST=C:\\path\\to\\ffmpeg.manifest.json \\
+make diagnostic-build
+voiceink-diagnostic.exe C:\\path\\to\\audio-or-video-file
+```
+
+`ffmpeg.manifest.json` must contain the pinned executable SHA-256 and provenance
+metadata. The Make target refuses to build without both external paths and
+embeds them into the frozen executable.
+
+The repository workflow `Windows Diagnostic Build` produces a Windows x64
+portable bundle with a verified FFmpeg binary. Windows ARM64 can normally run
+this x64 diagnostic through Windows x64 emulation. Native ARM64 packaging is a
+separate build target.
+
 Direct pushes to `main` are forbidden by local hooks, `make push`, and the repository branch protection policy. `AGENTS.md` contains local agent instructions and is intentionally not published; `PROJECT_CONTEXT.md` is the public project passport for new clones.

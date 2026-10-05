@@ -6,6 +6,7 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from inspect import signature
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -16,6 +17,7 @@ from voiceink_win.domain import (
     AsrRequest,
     AsrTimeoutError,
     CancellationError,
+    CancellationToken,
     ConfigurationError,
     ExecutionError,
     HealthStatus,
@@ -23,6 +25,7 @@ from voiceink_win.domain import (
     ProcessCrashedError,
     ProtocolError,
     RuntimeHealth,
+    RuntimeRecoveryPendingError,
     RuntimeUnavailableError,
     TranscriptResult,
 )
@@ -41,6 +44,17 @@ class SidecarTransport(Protocol):
         self, path: str, body: bytes, timeout: float | None, max_response_bytes: int
     ) -> TransportResponse: ...
 
+    def post_audio(
+        self,
+        path: str,
+        metadata: bytes,
+        pcm: memoryview,
+        timeout: float | None,
+        max_response_bytes: int,
+        cancellation: CancellationToken | None,
+        deadline: float | None = None,
+    ) -> TransportResponse: ...
+
     def close(self) -> None: ...
 
 
@@ -53,7 +67,16 @@ class ProcessSupervisor(Protocol):
 
     def terminate(self, deadline: float) -> None: ...
 
-    def kill(self) -> None: ...
+    def kill(self, deadline: float | None = None) -> None: ...
+
+
+class MonotonicClock(Protocol):
+    def monotonic(self) -> float: ...
+
+
+class _SystemClock:
+    def monotonic(self) -> float:
+        return time.monotonic()
 
 
 def _validate_loopback_endpoint(endpoint: str) -> None:
@@ -107,12 +130,18 @@ class NeMoSidecarRuntime:
         config: SidecarConfig,
         transport: SidecarTransport,
         supervisor: ProcessSupervisor,
+        clock: MonotonicClock | None = None,
     ) -> None:
         self._config = config
         self._transport = transport
         self._supervisor = supervisor
+        self._clock = clock or _SystemClock()
+        set_transport_clock = getattr(transport, "set_clock", None)
+        if set_transport_clock is not None:
+            set_transport_clock(self._clock)
         self._started = False
         self._closed = False
+        self._cleanup_pending = False
         self._last_failure: str | None = None
 
     def capabilities(self) -> AsrCapabilities:
@@ -152,7 +181,9 @@ class NeMoSidecarRuntime:
         startup_error: AsrError | None = None
         try:
             self._supervisor.start()
-            ready = self._supervisor.wait_ready(time.monotonic() + self._config.readiness_timeout)
+            ready = self._supervisor.wait_ready(
+                self._clock.monotonic() + self._config.readiness_timeout
+            )
             if not ready:
                 raise RuntimeUnavailableError("sidecar did not become ready")
             if not self._supervisor.is_running():
@@ -167,16 +198,21 @@ class NeMoSidecarRuntime:
             startup_error = ExecutionError("sidecar readiness failed", cause=error)
         finally:
             if startup_error is not None:
+                self._started = False
                 self._last_failure = "sidecar startup failed"
-                cleanup_error = self._kill_after_start_failure()
+                self._cleanup_pending = True
+                cleanup_deadline = self._clock.monotonic() + self._config.shutdown_timeout
+                cleanup_error = self._kill_after_start_failure(cleanup_deadline)
                 if cleanup_error is not None:
                     self._last_failure = "sidecar startup cleanup failed"
                     raise ExecutionError(
                         "sidecar startup cleanup failed", cause=cleanup_error
                     ) from startup_error
+                self._cleanup_pending = False
         if startup_error is not None:
             raise startup_error
         self._last_failure = None
+        self._cleanup_pending = False
         self._started = True
 
     def transcribe(self, request: AsrRequest) -> TranscriptResult:
@@ -184,30 +220,29 @@ class NeMoSidecarRuntime:
             raise RuntimeUnavailableError("sidecar is not ready")
         if request.audio.byte_length > self._config.max_audio_bytes:
             raise InvalidInputError("audio exceeds the sidecar request byte limit")
-        try:
-            if not self._supervisor.is_running():
-                raise ProcessCrashedError("sidecar process is not running")
-        except ProcessCrashedError:
-            raise
-        except Exception as error:
-            raise ExecutionError("sidecar process health check failed", cause=error) from error
-        if request.cancellation is not None and request.cancellation.is_cancelled():
-            raise CancellationError("ASR request was cancelled")
-        timeout = None
         deadline = (
             request.deadline
             if request.deadline is not None
-            else time.monotonic() + self._config.default_deadline_seconds
+            else self._clock.monotonic() + self._config.default_deadline_seconds
         )
-        timeout = deadline - time.monotonic()
+        timeout = deadline - self._clock.monotonic()
         if timeout <= 0:
             raise AsrTimeoutError("ASR request deadline exceeded")
-        payload = json.dumps(
+        if request.cancellation is not None and request.cancellation.is_cancelled():
+            raise CancellationError("ASR request was cancelled")
+        try:
+            if not self._supervisor.is_running():
+                self._restart_after_crash(deadline)
+                raise ProcessCrashedError("sidecar process is not running")
+        except AsrError:
+            raise
+        except Exception as error:
+            raise ExecutionError("sidecar process health check failed", cause=error) from error
+        metadata = json.dumps(
             {
                 "request_id": request.request_id,
                 "protocol_version": PROTOCOL_VERSION,
                 "schema": REQUEST_SCHEMA,
-                "audio_pcm16le": request.audio.pcm16le.hex(),
                 "sample_rate": request.audio.sample_rate,
                 "language": request.language,
                 "timestamps": request.include_timestamps,
@@ -216,17 +251,24 @@ class NeMoSidecarRuntime:
             separators=(",", ":"),
         ).encode("utf-8")
         try:
-            response = self._transport.post(
+            response = self._transport.post_audio(
                 self._config.transcribe_path,
-                payload,
+                metadata,
+                memoryview(request.audio.pcm16le),
                 timeout,
                 self._config.max_response_bytes,
+                request.cancellation,
+                deadline=deadline,
             )
         except AsrError:
             raise
         except TimeoutError as error:
+            self._restart_after_crash(deadline)
             raise AsrTimeoutError("sidecar request timed out", cause=error) from error
         except (ConnectionError, OSError) as error:
+            if not self._supervisor.is_running():
+                self._restart_after_crash(deadline)
+                raise ProcessCrashedError("sidecar process crashed", cause=error) from error
             raise RuntimeUnavailableError(
                 "sidecar transport is unavailable", cause=error
             ) from error
@@ -236,15 +278,23 @@ class NeMoSidecarRuntime:
         if len(response.body) > self._config.max_response_bytes:
             raise ProtocolError("sidecar response exceeds the configured byte limit")
         if response.status_code != 200:
-            raise map_error_response(response)
+            error = map_error_response(response)
+            if isinstance(error, ProcessCrashedError):
+                self._restart_after_crash(deadline)
+            raise error
         return decode_result(response.body)
 
-    def close(self) -> None:
+    def close(self, deadline: float | None = None) -> None:
         if self._closed:
             return
         failures: list[BaseException] = []
-        if self._started:
-            deadline = time.monotonic() + self._config.shutdown_timeout
+        cleanup_complete = True
+        if self._started or self._cleanup_pending:
+            deadline = (
+                deadline
+                if deadline is not None
+                else self._clock.monotonic() + self._config.shutdown_timeout
+            )
             try:
                 self._supervisor.terminate(deadline)
             except Exception as error:
@@ -256,26 +306,215 @@ class NeMoSidecarRuntime:
                 running = True
             if running:
                 try:
-                    self._supervisor.kill()
+                    self._kill_supervisor(deadline)
                 except Exception as error:
                     failures.append(error)
+            try:
+                cleanup_complete = not self._supervisor.is_running()
+            except Exception as error:
+                failures.append(error)
+                cleanup_complete = False
+            if cleanup_complete:
+                try:
+                    cleanup_complete = not self._reaper_owns_process()
+                    cleanup_complete = cleanup_complete and self._supervisor_cleanup_complete()
+                except Exception as error:
+                    failures.append(error)
+                    cleanup_complete = False
+            if cleanup_complete:
+                self._cleanup_pending = False
+            else:
+                self._cleanup_pending = True
+                failures.append(RuntimeRecoveryPendingError("sidecar cleanup is still pending"))
         try:
             self._transport.close()
         except Exception as error:
             failures.append(error)
-        self._closed = True
+        self._closed = cleanup_complete and not failures
         if failures:
+            pending = next(
+                (error for error in failures if isinstance(error, RuntimeRecoveryPendingError)),
+                None,
+            )
+            if pending is not None:
+                raise pending
             raise ExecutionError("sidecar cleanup failed", cause=failures[0]) from failures[0]
 
-    def _kill_after_start_failure(self) -> BaseException | None:
+    def _kill_after_start_failure(self, deadline: float) -> BaseException | None:
+        """Roll back a process started by a failed readiness transaction."""
+        return self._cleanup_started_process(deadline)
+
+    def _cleanup_started_process(self, deadline: float) -> BaseException | None:
+        failures: list[BaseException] = []
         try:
-            self._supervisor.kill()
-        except Exception as error:
-            return error
+            self._supervisor.terminate(deadline)
+        except BaseException as error:
+            failures.append(error)
+        try:
+            running = self._supervisor.is_running()
+        except BaseException as error:
+            failures.append(error)
+            running = True
+        try:
+            self._kill_supervisor(deadline)
+        except BaseException as error:
+            failures.append(error)
+
+        while self._clock.monotonic() < deadline:
+            try:
+                running = self._supervisor.is_running()
+                cleanup_complete = self._supervisor_cleanup_complete()
+            except BaseException as error:
+                failures.append(error)
+                running = True
+                cleanup_complete = False
+            if not running and cleanup_complete:
+                break
+            self._sleep(0.01)
+        try:
+            running = self._supervisor.is_running()
+            cleanup_complete = self._supervisor_cleanup_complete()
+        except BaseException as error:
+            failures.append(error)
+            running = True
+            cleanup_complete = False
+        if self._clock.monotonic() >= deadline:
+            return AsrTimeoutError("sidecar cleanup exceeded the request deadline")
+        if running:
+            failures.append(RuntimeError("sidecar process remained alive after startup cleanup"))
+        if not cleanup_complete:
+            failures.append(RuntimeError("sidecar resource cleanup is still pending"))
+        if failures:
+            return ExceptionGroup("sidecar startup cleanup failed", failures)
         return None
+
+    def _restart_after_crash(self, deadline: float) -> None:
+        if self._clock.monotonic() >= deadline:
+            raise AsrTimeoutError("sidecar restart exceeded the request deadline")
+        old_process_error: BaseException | None = None
+        running = True
+        try:
+            # Closing the transport invalidates the timed-out request before a new process
+            # can accept the next attempt.
+            try:
+                self._transport.close()
+            except BaseException as error:
+                old_process_error = error
+            try:
+                self._supervisor.terminate(deadline)
+            except BaseException as error:
+                old_process_error = error
+            finally:
+                try:
+                    running = self._supervisor.is_running()
+                except BaseException as error:
+                    running = True
+                    if old_process_error is None:
+                        old_process_error = error
+                if running:
+                    try:
+                        self._kill_supervisor(deadline)
+                    except BaseException as error:
+                        if old_process_error is None:
+                            old_process_error = error
+                    try:
+                        running = self._supervisor.is_running()
+                    except BaseException as error:
+                        running = True
+                        if old_process_error is None:
+                            old_process_error = error
+            if not self._wait_for_supervisor_cleanup(deadline):
+                raise AsrTimeoutError(
+                    "sidecar cleanup exceeded the request deadline"
+                ) from old_process_error
+            if self._clock.monotonic() >= deadline:
+                raise AsrTimeoutError("sidecar restart exceeded the request deadline")
+            started = False
+            try:
+                self._supervisor.start()
+                started = True
+                if not self._supervisor.wait_ready(deadline):
+                    raise RuntimeUnavailableError("sidecar did not become ready after a crash")
+                if not self._supervisor.is_running():
+                    raise ProcessCrashedError("sidecar exited during crash recovery")
+            except BaseException as error:
+                if started:
+                    self._started = False
+                    self._cleanup_pending = True
+                    cleanup_error = self._cleanup_started_process(deadline)
+                    if cleanup_error is not None:
+                        expired = self._clock.monotonic() >= deadline
+                        if isinstance(cleanup_error, AsrTimeoutError) or expired:
+                            raise AsrTimeoutError(
+                                "sidecar restart cleanup exceeded the request deadline",
+                                cause=cleanup_error,
+                            ) from error
+                        raise ExecutionError(
+                            "sidecar restart cleanup failed", cause=cleanup_error
+                        ) from error
+                    self._cleanup_pending = False
+                raise
+        except AsrError:
+            raise
+        except TimeoutError as error:
+            raise AsrTimeoutError("sidecar restart timed out", cause=error) from error
+        except OSError as error:
+            raise RuntimeUnavailableError(
+                "sidecar could not restart after a crash", cause=error
+            ) from error
+        except Exception as error:
+            raise ExecutionError("sidecar crash recovery failed", cause=error) from error
+
+    def _kill_supervisor(self, deadline: float) -> None:
+        kill = self._supervisor.kill
+        parameters = signature(kill).parameters
+        if "deadline" in parameters or any(
+            parameter.kind is parameter.VAR_KEYWORD for parameter in parameters.values()
+        ):
+            kill(deadline=deadline)
+        else:
+            kill()
+
+    def _sleep(self, seconds: float) -> None:
+        sleep = getattr(self._clock, "sleep", None)
+        if sleep is None:
+            time.sleep(seconds)
+        else:
+            sleep(seconds)
+
+    def _wait_for_supervisor_cleanup(self, deadline: float) -> bool:
+        while self._clock.monotonic() < deadline:
+            try:
+                if (
+                    not self._supervisor.is_running()
+                    and not self._reaper_owns_process()
+                    and self._supervisor_cleanup_complete()
+                ):
+                    return True
+            except BaseException:
+                pass
+            self._sleep(0.01)
+        try:
+            return (
+                not self._supervisor.is_running()
+                and not self._reaper_owns_process()
+                and self._supervisor_cleanup_complete()
+            )
+        except BaseException:
+            return False
+
+    def _reaper_owns_process(self) -> bool:
+        owns = getattr(self._supervisor, "reaper_owns_process", None)
+        return bool(owns is not None and owns())
+
+    def _supervisor_cleanup_complete(self) -> bool:
+        complete = getattr(self._supervisor, "cleanup_complete", None)
+        if complete is None:
+            return not self._reaper_owns_process() and not self._supervisor.is_running()
+        return bool(complete())
 
     def _check_request_lifecycle(self, request: AsrRequest, deadline: float) -> None:
         if request.cancellation is not None and request.cancellation.is_cancelled():
             raise CancellationError("ASR request was cancelled")
-        if time.monotonic() >= deadline:
+        if self._clock.monotonic() >= deadline:
             raise AsrTimeoutError("ASR request deadline exceeded")
