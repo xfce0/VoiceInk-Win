@@ -14,12 +14,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     env:
-      VOICEINK_FFMPEG_URL: ${{ vars.VOICEINK_FFMPEG_URL }}
-      VOICEINK_FFMPEG_ARCHIVE_SHA256: ${{ vars.VOICEINK_FFMPEG_ARCHIVE_SHA256 }}
-      VOICEINK_FFMPEG_SHA256: ${{ vars.VOICEINK_FFMPEG_SHA256 }}
-      VOICEINK_FFMPEG_VERSION: ${{ vars.VOICEINK_FFMPEG_VERSION }}
-      VOICEINK_FFMPEG_PROVENANCE_URL: ${{ vars.VOICEINK_FFMPEG_PROVENANCE_URL }}
-      VOICEINK_FFMPEG_LICENSE: ${{ vars.VOICEINK_FFMPEG_LICENSE }}
+      VOICEINK_FFMPEG_URL: https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip
+      VOICEINK_FFMPEG_ARCHIVE_SHA256: 04861d3339c5ebe38b56c19a15cf2c0cc97f5de4fa8910e4d47e5e6404e4a2d4
+      VOICEINK_FFMPEG_SHA256: b90225987bdd042cca09a1efb5e34e9848f2d1dbf5fbcd388753a44145522997
+      VOICEINK_FFMPEG_VERSION: 7.1.1
+      VOICEINK_FFMPEG_PROVENANCE_URL: https://github.com/GyanD/codexffmpeg/releases/tag/7.1.1
+      VOICEINK_FFMPEG_LICENSE: GPL-3.0-or-later
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
@@ -29,19 +29,6 @@ jobs:
       - name: Download and verify FFmpeg
         shell: pwsh
         run: |
-          $required = @(
-            "VOICEINK_FFMPEG_URL",
-            "VOICEINK_FFMPEG_ARCHIVE_SHA256",
-            "VOICEINK_FFMPEG_SHA256",
-            "VOICEINK_FFMPEG_VERSION",
-            "VOICEINK_FFMPEG_PROVENANCE_URL",
-            "VOICEINK_FFMPEG_LICENSE"
-          )
-          foreach ($name in $required) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "$name repository variable is required"
-            }
-          }
           $archive = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
           Invoke-WebRequest -Uri $env:VOICEINK_FFMPEG_URL -OutFile $archive
           $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
