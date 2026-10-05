@@ -1076,7 +1076,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             if expected_identity and identity != expected_identity:
                 raise OSError("workspace identity changed during cleanup")
             _check_cleanup_deadline(deadline, self._clock)
-            self._delete_handle(handle)
+            self._delete_handle(handle, path=path, directory=True)
         finally:
             if owned:
                 self._close(handle)
@@ -1140,7 +1140,11 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                         raise OSError(ctypes.get_last_error(), "GetFileInformationByHandle failed")
                     if info.attributes & self._api.FILE_ATTRIBUTE_REPARSE_POINT:
                         _check_cleanup_deadline(deadline, self._clock)
-                        self._delete_handle(child_handle)
+                        self._delete_handle(
+                            child_handle,
+                            path=path / child_name,
+                            directory=bool(info.attributes & self._api.FILE_ATTRIBUTE_DIRECTORY),
+                        )
                     elif info.attributes & self._api.FILE_ATTRIBUTE_DIRECTORY:
                         directory_handle = child_handle
                         child_handle = None
@@ -1152,7 +1156,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                         )
                     else:
                         _check_cleanup_deadline(deadline, self._clock)
-                        self._delete_handle(child_handle)
+                        self._delete_handle(child_handle, path=path / child_name)
                 finally:
                     if child_handle is not None:
                         self._close(child_handle)
@@ -1276,17 +1280,34 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             raise OSError(status, f"NtOpenFile failed with NTSTATUS 0x{status:08x}")
         return int(handle.value)
 
-    def _delete_handle(self, handle: int) -> None:
+    def _delete_handle(
+        self,
+        handle: int,
+        *,
+        path: Path | None = None,
+        directory: bool = False,
+    ) -> None:
         disposition = _WindowsFileDispositionEx(
             self._api.FILE_DISPOSITION_FLAG_DELETE
             | self._api.FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE
         )
-        self._api.dll.SetFileInformationByHandle(
-            handle,
-            self._api.FILE_DISPOSITION_INFO_EX,
-            ctypes.byref(disposition),
-            ctypes.sizeof(disposition),
-        )
+        try:
+            self._api.dll.SetFileInformationByHandle(
+                handle,
+                self._api.FILE_DISPOSITION_INFO_EX,
+                ctypes.byref(disposition),
+                ctypes.sizeof(disposition),
+            )
+            return
+        except OSError as error:
+            if path is None or (getattr(error, "winerror", None) or error.errno) != 87:
+                raise
+        self._assert_contained_handle(handle)
+        if self._canonical_handle(handle) != self._canonical(path):
+            raise OSError("delete fallback handle does not match its path")
+        delete = self._api.dll.RemoveDirectoryW if directory else self._api.dll.DeleteFileW
+        if not delete(str(path)):
+            raise OSError(ctypes.get_last_error(), "path-based delete fallback failed")
 
     def _write_manifest(
         self,
