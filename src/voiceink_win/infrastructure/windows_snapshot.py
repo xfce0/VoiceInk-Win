@@ -121,6 +121,10 @@ class _WindowsFileDispositionEx(ctypes.Structure):
     _fields_ = [("flags", wintypes.DWORD)]
 
 
+class _WindowsFileDisposition(ctypes.Structure):
+    _fields_ = [("delete", ctypes.c_ubyte)]
+
+
 class _WindowsFileBasicInformation(ctypes.Structure):
     _fields_ = [
         ("creation_time", ctypes.c_longlong),
@@ -201,6 +205,7 @@ class WindowsKernel32:
     FILE_ATTRIBUTE_READONLY = 0x1
     FILE_BEGIN = 0
     FILE_DISPOSITION_INFO_EX = 64
+    FILE_DISPOSITION_INFO = 4
     FILE_BASIC_INFO = 0
     FILE_DISPOSITION_FLAG_DELETE = 0x1
     FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE = 0x10
@@ -1301,6 +1306,18 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             return
         except OSError as error:
             if path is None or (getattr(error, "winerror", None) or error.errno) not in {5, 87}:
+                raise
+        legacy_disposition = _WindowsFileDisposition(1)
+        try:
+            self._api.dll.SetFileInformationByHandle(
+                handle,
+                self._api.FILE_DISPOSITION_INFO,
+                ctypes.byref(legacy_disposition),
+                ctypes.sizeof(legacy_disposition),
+            )
+            return
+        except OSError as error:
+            if (getattr(error, "winerror", None) or error.errno) not in {5, 87}:
                 raise
         self._assert_contained_handle(handle)
         delete_path = self._canonical_handle(handle)
