@@ -461,7 +461,7 @@ def test_process_cleanup_uses_no_time_after_absolute_deadline(monkeypatch) -> No
 
     process = StubbornProcess()
     runner = media_process_module.SubprocessRunner()
-    monkeypatch.setattr(media_process_module.os, "killpg", lambda pid, sig: None)
+    monkeypatch.setattr(media_process_module.os, "killpg", lambda pid, sig: None, raising=False)
 
     runner._terminate(process, time.monotonic() - 1.0)
 
@@ -493,7 +493,7 @@ def test_unexpected_wait_failure_keeps_generation_owned_reaper_until_process_exi
 
     process = WaitFailsWhileAlive()
     runner = media_process_module.SubprocessRunner()
-    monkeypatch.setattr(media_process_module.os, "killpg", lambda pid, sig: None)
+    monkeypatch.setattr(media_process_module.os, "killpg", lambda pid, sig: None, raising=False)
 
     with pytest.raises(RuntimeError, match="injected wait failure"):
         runner._terminate(process, time.monotonic() + 1.0)
@@ -527,6 +527,10 @@ def test_ffmpeg_reaper_generation_cannot_clear_the_next_run() -> None:
 def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
     tmp_path: Path, monkeypatch
 ) -> None:
+    if os.name == "nt":
+        # This test exercises argv construction with a fake process. The real
+        # Windows Job Object launch path is covered by native smoke.
+        monkeypatch.setattr(process_module.os, "name", "posix")
     executable = tmp_path / "sidecar"
     model = tmp_path / "model.gguf"
     executable_hash = write_artifact(executable, b"executable")

@@ -1559,6 +1559,7 @@ def test_windows_cleanup_stops_before_operation_after_absolute_deadline() -> Non
         store._remove_tree(Path("C:/private/job/attempt-1"), deadline=-1.0)
 
 
+@POSIX_ONLY
 def test_snapshot_lifecycle_checks_use_injected_clock_at_deadline_boundary(
     tmp_path: Path,
 ) -> None:
