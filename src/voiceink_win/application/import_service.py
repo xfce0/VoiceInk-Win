@@ -684,7 +684,9 @@ class ImportedMediaTranscriptionService:
         record.retry_timer = Thread(target=self._retry_after, args=(record, delay), daemon=True)
         with self._lock:
             self._retry_threads.add(record.retry_timer)
-        record.retry_timer.start()
+            # Register and start under one lock so close() cannot observe an
+            # unstarted thread and race its join.
+            record.retry_timer.start()
 
     def _retry_after(self, record: _Record, delay: float) -> None:
         try:
