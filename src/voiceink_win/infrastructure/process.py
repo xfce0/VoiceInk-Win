@@ -23,7 +23,7 @@ from urllib.request import Request, urlopen
 
 from voiceink_win.domain import ConfigurationError, MissingModelError, RuntimeUnavailableError
 
-from .authentication import ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce
+from .authentication import ASR_API_KEY_ENV, ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce
 
 
 class ProcessHandle(Protocol):
@@ -273,13 +273,7 @@ class SubprocessConfig:
                 "runtime extra_args cannot override security-critical arguments"
             )
 
-    def argv(self, *, api_key: str) -> list[str]:
-        if (
-            not isinstance(api_key, str)
-            or not api_key
-            or any(ord(character) <= 0x20 for character in api_key)
-        ):
-            raise ConfigurationError("runtime API key must be a non-empty CLI-safe value")
+    def argv(self) -> list[str]:
         host, port = _validate_loopback_endpoint(self.endpoint)
         args = [
             str(self.executable),
@@ -291,8 +285,6 @@ class SubprocessConfig:
             "--port",
             str(port),
             "--no-ui",
-            "--api-key",
-            api_key,
         ]
         if self.backend.startswith("cuda:"):
             args.extend(["--asr.backend.gpu", self.backend.partition(":")[2]])
@@ -443,6 +435,7 @@ class SubprocessSupervisor:
             if key in os.environ
         }
         sidecar_environment[ASR_NONCE_ENV] = self._nonce
+        sidecar_environment[ASR_API_KEY_ENV] = self._api_key
         kwargs = {
             "shell": False,
             "stdin": subprocess.DEVNULL,
@@ -477,7 +470,7 @@ class SubprocessSupervisor:
                     strict=True,
                 ):
                     lock.revalidate(manifest.sha256, manifest.allowed_path)
-            self._process = self._popen_factory(self.config.argv(api_key=self._api_key), **kwargs)
+            self._process = self._popen_factory(self.config.argv(), **kwargs)
             if windows_job is not None and resume is not None:
                 windows_job.assign(self._process)
                 resume(self._process.pid)

@@ -618,12 +618,12 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "8123",
         "--no-ui",
     ]
-    api_key_index = calls[0][0].index("--api-key")
-    assert calls[0][0][api_key_index + 1] == supervisor.api_key
-    assert calls[0][0][api_key_index + 2 :] == ["--threads", "2"]
+    assert "--api-key" not in calls[0][0]
+    assert "--http.api-key" not in calls[0][0]
+    assert calls[0][0][9:] == ["--threads", "2"]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["env"][process_module.ASR_NONCE_ENV] == supervisor.nonce
-    assert "NEMO_SPEECH_HTTP_API_KEY" not in calls[0][1]["env"]
+    assert calls[0][1]["env"][process_module.ASR_API_KEY_ENV] == supervisor.api_key
     assert "GH_TOKEN" not in calls[0][1]["env"]
     assert "GITHUB_TOKEN" not in calls[0][1]["env"]
     assert supervisor.process_tree_mode == "posix-process-group"
