@@ -376,7 +376,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                     "timings": {"cold": cold_timing, "warm": warm_timing},
                     "quality_gate": {
                         "status": "not_evaluated",
-                        "reason": "no reference corpus configured",
+                        "reason": "reference corpus, WER, and RSS thresholds are not configured",
                     },
                     "runtime": {
                         "model_id": sidecar_config.model_id,
@@ -472,9 +472,9 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     ]
     if cleanup_errors:
         raise RuntimeError(f"native smoke cleanup failed: {', '.join(cleanup_errors)}")
-    report["status"] = "passed"
+    report["status"] = _success_status(report)
     _write_report(report_path, report)
-    print("native snapshot/FFmpeg/ASR smoke passed; no fake adapter was used")
+    print("native snapshot/FFmpeg/ASR technical smoke passed; no fake adapter was used")
     return 0
 
 
@@ -511,6 +511,13 @@ def _cleanup_status(report: dict[str, object]) -> str:
         )
         else "passed"
     )
+
+
+def _success_status(report: dict[str, object]) -> str:
+    quality_gate = report.get("quality_gate")
+    if not isinstance(quality_gate, dict):
+        raise RuntimeError("native smoke report is missing quality gate status")
+    return "technical_passed" if quality_gate.get("status") == "not_evaluated" else "passed"
 
 
 class _NeverCancelled:

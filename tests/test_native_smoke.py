@@ -13,6 +13,7 @@ from scripts.native_smoke import (
     _cleanup_status,
     _run_snapshot_security_probes_with_store,
     _safe_rtfx,
+    _success_status,
     _transcribe_with_timing,
 )
 from voiceink_win.domain import CanonicalAudio, InvalidSourceError, SourceChangedError
@@ -195,3 +196,20 @@ def test_native_smoke_records_cold_and_warm_timing_and_rejects_empty_transcript(
 @pytest.mark.parametrize("key", ["asr_close_error", "runtime_close_error"])
 def test_native_smoke_cleanup_status_fails_for_each_close_error(key: str) -> None:
     assert _cleanup_status({key: "ExecutionError"}) == "failed"
+
+
+def test_native_smoke_reports_technical_success_without_release_quality_pass() -> None:
+    report = {"quality_gate": {"status": "not_evaluated"}}
+
+    assert _success_status(report) == "technical_passed"
+
+
+def test_native_smoke_workflow_pins_cpu_backend_and_rejects_override() -> None:
+    workflow = (ROOT / ".github/workflows/native-smoke.yml").read_text(encoding="utf-8")
+
+    assert '"backend": "cpu"' in (
+        ROOT / ".github/native-smoke/artifact-lock.template.json"
+    ).read_text(encoding="utf-8")
+    assert 'Pinned "VOICEINK_SIDECAR_BACKEND" $sidecar.backend' in workflow
+    assert "backend = $backend" in workflow
+    assert 'VOICEINK_SIDECAR_BACKEND)) { "cpu" } else' not in workflow

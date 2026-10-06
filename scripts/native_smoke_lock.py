@@ -12,6 +12,7 @@ SCHEMA = "voiceink.native-smoke.artifact-lock.v1"
 _HEX = frozenset("0123456789abcdefABCDEF")
 _PLACEHOLDER_PREFIX = "REPLACE_WITH_"
 PARAKEET_MODEL_ID = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
+SIDECAR_ARTIFACT_ID = "nemo-speech-cpp-windows-amd64"
 
 
 def load_native_smoke_lock(
@@ -37,9 +38,10 @@ def load_native_smoke_lock(
         raise ValueError("native smoke artifact lock must contain the required artifacts")
     _validate_archive(artifacts["ffmpeg"], "ffmpeg", allow_template)
     _validate_archive(
-        artifacts["nemo-speech-cpp-windows-amd64"],
-        "nemo-speech-cpp-windows-amd64",
+        artifacts[SIDECAR_ARTIFACT_ID],
+        SIDECAR_ARTIFACT_ID,
         allow_template,
+        required_backend="cpu",
     )
     _validate_model(artifacts[PARAKEET_MODEL_ID], PARAKEET_MODEL_ID, allow_template)
     _validate_fixture(artifacts["fixture"], allow_template)
@@ -53,20 +55,25 @@ def pinned_value(name: str, expected: str, override: str | None = None) -> str:
     return expected
 
 
-def _validate_archive(value: object, label: str, allow_template: bool) -> None:
-    _require_fields(
-        value,
-        {
-            "kind",
-            "url",
-            "archive_sha256",
-            "executable_sha256",
-            "version",
-            "provenance_url",
-            "license",
-        },
-        label,
-    )
+def _validate_archive(
+    value: object,
+    label: str,
+    allow_template: bool,
+    *,
+    required_backend: str | None = None,
+) -> None:
+    fields = {
+        "kind",
+        "url",
+        "archive_sha256",
+        "executable_sha256",
+        "version",
+        "provenance_url",
+        "license",
+    }
+    if required_backend is not None:
+        fields.add("backend")
+    _require_fields(value, fields, label)
     assert isinstance(value, dict)
     if value["kind"] != "archive":
         raise ValueError(f"{label} kind is invalid")
@@ -76,6 +83,8 @@ def _validate_archive(value: object, label: str, allow_template: bool) -> None:
     _hash(value["executable_sha256"], f"{label}.executable_sha256", allow_template)
     _text(value["version"], f"{label}.version", allow_template)
     _text(value["license"], f"{label}.license", allow_template)
+    if required_backend is not None and value["backend"] != required_backend:
+        raise ValueError(f"{label}.backend must be {required_backend}")
 
 
 def _validate_model(value: object, artifact_key: str, allow_template: bool) -> None:

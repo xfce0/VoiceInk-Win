@@ -149,6 +149,43 @@ def test_readiness_probe_rejects_forged_health_payload(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
+    ("backend", "device", "expected"),
+    [
+        ("cpu", "cpu", True),
+        ("cpu", "cuda:0", False),
+        ("cuda:0", "cuda:0", True),
+        ("cuda:0", "cpu", False),
+    ],
+)
+def test_readiness_probe_attests_device_for_configured_backend(
+    monkeypatch, backend: str, device: str, expected: bool
+) -> None:
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, amount: int) -> bytes:
+            del amount
+            return json.dumps(
+                {"ready": True, "device": device, "capabilities": ["transcription"]}
+            ).encode()
+
+    monkeypatch.setattr(
+        "voiceink_win.infrastructure.process.urlopen",
+        lambda request, timeout: Response(),
+    )
+
+    probe = UrllibReadinessProbe("http://127.0.0.1:8123", expected_backend=backend)
+
+    assert probe.ready(1.0) is expected
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         {"ready": True},

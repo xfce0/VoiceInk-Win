@@ -88,6 +88,7 @@ jobs:
             $sidecarVersion = Pinned "VOICEINK_SIDECAR_VERSION_OVERRIDE" $sidecar.version
             $sidecarProvenance = Pinned "VOICEINK_SIDECAR_PROVENANCE_URL_OVERRIDE" $sidecar.provenance_url
             $sidecarLicense = Pinned "VOICEINK_SIDECAR_LICENSE_OVERRIDE" $sidecar.license
+            $backend = Pinned "VOICEINK_SIDECAR_BACKEND" $sidecar.backend
             $modelUrl = Pinned "VOICEINK_SIDECAR_MODEL_URL_OVERRIDE" $model.url
             $modelSha = Pinned "VOICEINK_SIDECAR_MODEL_SHA256_OVERRIDE" $model.sha256
             $modelId = Pinned "VOICEINK_SIDECAR_MODEL_ID_OVERRIDE" $model.model_id
@@ -150,7 +151,7 @@ jobs:
               version = 1
               executable_artifact_id = "nemo-speech-cpp-windows-amd64"
               model_artifact_id = $modelId
-              backend = if ([string]::IsNullOrWhiteSpace($env:VOICEINK_SIDECAR_BACKEND)) { "cpu" } else { $env:VOICEINK_SIDECAR_BACKEND }
+              backend = $backend
               endpoint = "ephemeral-loopback"
               executable = $runtime.FullName
               model = $modelPath

@@ -299,10 +299,25 @@ class SubprocessConfig:
         return args
 
 
+_READY_DEVICE_ALIASES = {"cpu": frozenset({"cpu"})}
+
+
+def _ready_device_matches_backend(device: object, backend: str) -> bool:
+    if not isinstance(device, str):
+        return False
+    aliases = _READY_DEVICE_ALIASES.get(backend)
+    if aliases is not None:
+        return device in aliases
+    if backend.startswith("cuda:") and backend[5:].isdigit():
+        return device == backend
+    return False
+
+
 class UrllibReadinessProbe:
-    def __init__(self, endpoint: str, path: str = "/ready") -> None:
+    def __init__(self, endpoint: str, path: str = "/ready", expected_backend: str = "cpu") -> None:
         _validate_loopback_endpoint(endpoint)
         self._url = f"{endpoint.rstrip('/')}/{path.lstrip('/')}"
+        self._expected_backend = expected_backend
         self._nonce: str | None = None
         self._api_key: str | None = None
 
@@ -333,6 +348,7 @@ class UrllibReadinessProbe:
                     and payload.get("ready") is True
                     and isinstance(payload.get("capabilities"), list)
                     and "transcription" in payload["capabilities"]
+                    and _ready_device_matches_backend(payload.get("device"), self._expected_backend)
                 )
         except (HTTPError, URLError, OSError, TimeoutError, ValueError, UnicodeDecodeError):
             return False
@@ -352,7 +368,9 @@ class SubprocessSupervisor:
     ) -> None:
         self.config = config
         self._verifier = verifier or RuntimeArtifactVerifier()
-        self._readiness_probe = readiness_probe or UrllibReadinessProbe(config.endpoint)
+        self._readiness_probe = readiness_probe or UrllibReadinessProbe(
+            config.endpoint, expected_backend=config.backend
+        )
         self._popen_factory = popen_factory
         self._clock = clock or _SystemClock()
         self._process: ProcessHandle | None = None

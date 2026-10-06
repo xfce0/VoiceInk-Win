@@ -18,7 +18,8 @@
       "executable_sha256": "72ed6e35506150dc7edaa0507904688ace62a8d9a47c4976330b556d361492aa",
       "version": "0.2.0",
       "provenance_url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.2.0",
-      "license": "Apache-2.0"
+      "license": "Apache-2.0",
+      "backend": "cpu"
     },
     "parakeet-tdt-0.6b-v3.oss-align.q8_0": {
       "kind": "model",

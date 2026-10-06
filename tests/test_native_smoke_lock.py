@@ -34,6 +34,7 @@ def _lock() -> dict[str, object]:
                 "version": "1",
                 "provenance_url": "https://example.invalid/sidecar",
                 "license": "Apache-2.0",
+                "backend": "cpu",
             },
             "parakeet-tdt-0.6b-v3.oss-align.q8_0": {
                 "kind": "model",
@@ -69,6 +70,11 @@ def test_native_smoke_lock_rejects_mutable_override() -> None:
         pinned_value("VOICEINK_FFMPEG_SHA256_OVERRIDE", "a" * 64, "b" * 64)
 
 
+def test_cpu_backend_rejects_a_cuda_repository_variable() -> None:
+    with pytest.raises(ValueError, match="does not match"):
+        pinned_value("VOICEINK_SIDECAR_BACKEND", "cpu", "cuda:0")
+
+
 def test_tracked_lock_is_reviewable_template() -> None:
     path = ROOT / ".github/native-smoke/artifact-lock.template.json"
 
@@ -92,3 +98,24 @@ def test_native_smoke_lock_rejects_model_id_mismatch_with_artifact_key(tmp_path:
 
     with pytest.raises(ValueError, match="canonical artifact key"):
         load_native_smoke_lock(path)
+
+
+def test_native_smoke_lock_requires_cpu_sidecar_backend(tmp_path: Path) -> None:
+    value = _lock()
+    value["artifacts"]["nemo-speech-cpp-windows-amd64"]["backend"] = "cuda:0"
+    path = tmp_path / "lock.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="backend must be cpu"):
+        load_native_smoke_lock(path)
+
+
+def test_tracked_third_party_notices_cover_locked_artifacts() -> None:
+    notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    lock = load_native_smoke_lock(ROOT / ".github/native-smoke/artifact-lock.template.json")
+
+    for artifact in lock["artifacts"].values():
+        assert artifact["url"] in notices
+        assert artifact["license"] in notices
+    assert "transitive notices" in notices
+    assert "upstream archive notices" in notices
