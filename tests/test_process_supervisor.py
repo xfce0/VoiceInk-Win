@@ -642,7 +642,17 @@ def test_subprocess_config_rejects_non_loopback_endpoint(tmp_path: Path) -> None
         )
 
 
-def test_subprocess_config_rejects_security_critical_extra_args(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        ("--host", "0.0.0.0"),
+        ("--asr-model", "attacker.gguf"),
+        ("--asr-model=attacker.gguf",),
+    ],
+)
+def test_subprocess_config_rejects_security_critical_extra_args(
+    tmp_path: Path, extra_args: tuple[str, ...]
+) -> None:
     with pytest.raises(ConfigurationError, match="security-critical"):
         SubprocessConfig(
             executable=tmp_path / "sidecar",
@@ -652,5 +662,5 @@ def test_subprocess_config_rejects_security_critical_extra_args(tmp_path: Path) 
             executable_manifest=manifest(tmp_path / "sidecar", "0" * 64),
             model_manifest=manifest(tmp_path / "model.gguf", "0" * 64),
             endpoint="http://127.0.0.1:8123",
-            extra_args=("--host", "0.0.0.0"),
+            extra_args=extra_args,
         )

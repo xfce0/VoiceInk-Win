@@ -259,7 +259,7 @@ class SubprocessConfig:
             raise ConfigurationError("runtime model checksum manifest mismatch")
         if not self.model_id.strip():
             raise ConfigurationError("runtime model_id must not be empty")
-        forbidden = {"--model", "--host", "--port", "--backend"}
+        forbidden = {"--model", "--host", "--port", "--backend", "--asr-model"}
         if any(argument.split("=", 1)[0] in forbidden for argument in self.extra_args):
             raise ConfigurationError(
                 "runtime extra_args cannot override security-critical arguments"
