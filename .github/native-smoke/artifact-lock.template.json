@@ -1,0 +1,41 @@
+{
+  "schema": "voiceink.native-smoke.artifact-lock.v1",
+  "version": 1,
+  "artifacts": {
+    "ffmpeg": {
+      "kind": "archive",
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip",
+      "archive_sha256": "04861d3339c5ebe38b56c19a15cf2c0cc97f5de4fa8910e4d47e5e6404e4a2d4",
+      "executable_sha256": "b90225987bdd042cca09a1efb5e34e9848f2d1dbf5fbcd388753a44145522997",
+      "version": "7.1.1",
+      "provenance_url": "https://github.com/GyanD/codexffmpeg/releases/tag/7.1.1",
+      "license": "GPL-3.0-or-later"
+    },
+    "nemo-speech-cpp-windows-amd64": {
+      "kind": "archive",
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.2.0/nemo-speech-0.2.0-windows-x86_64-cpu.zip",
+      "archive_sha256": "82c80451086e86194aba9af19f800da77cd66d1c28d993d0efceffd6cdb49bb8",
+      "executable_sha256": "72ed6e35506150dc7edaa0507904688ace62a8d9a47c4976330b556d361492aa",
+      "version": "0.2.0",
+      "provenance_url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.2.0",
+      "license": "Apache-2.0",
+      "backend": "cpu"
+    },
+    "parakeet-tdt-0.6b-v3.oss-align.q8_0": {
+      "kind": "model",
+      "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/parakeet-tdt-0.6b-v3.q8_0.gguf",
+      "sha256": "e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e",
+      "model_id": "parakeet-tdt-0.6b-v3.oss-align.q8_0",
+      "version": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+      "provenance_url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/tree/541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+      "license": "CC-BY-4.0"
+    },
+    "fixture": {
+      "kind": "fixture",
+      "url": "https://dldata-public.s3.us-east-2.amazonaws.com/2086-149220-0033.wav",
+      "sha256": "5fceacff0315d49cb59fcc505bcecf1ed5f2f35c2897b1e65a59f30e5d922150",
+      "provenance_url": "https://www.openslr.org/12",
+      "license": "CC-BY-4.0"
+    }
+  }
+}

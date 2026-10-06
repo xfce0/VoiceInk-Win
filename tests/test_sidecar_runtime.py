@@ -5,10 +5,12 @@ import time
 
 import pytest
 
+from voiceink_win.application import CancellationTokenSource
 from voiceink_win.domain import (
     AsrRequest,
     AsrTimeoutError,
     BackendUnavailableError,
+    CancellationError,
     CanonicalAudio,
     ConfigurationError,
     ExecutionError,
@@ -31,7 +33,43 @@ class FakeTransport:
     def __init__(self, response: TransportResponse) -> None:
         self.response = response
         self.calls: list[tuple[str, bytes, float | None]] = []
+        self.get_calls: list[tuple[str, float | None, int]] = []
+        self.nonces: list[str] = []
+        self.api_keys: list[str] = []
+        self.attestation_credentials: list[tuple[str | None, str | None]] = []
         self.closed = False
+
+    def set_nonce(self, nonce: str) -> None:
+        self.nonces.append(nonce)
+
+    def set_api_key(self, api_key: str) -> None:
+        self.api_keys.append(api_key)
+
+    def get(
+        self, path: str, timeout: float | None, max_response_bytes: int, nonce: str | None = None
+    ) -> TransportResponse:
+        del nonce
+        self.get_calls.append((path, timeout, max_response_bytes))
+        self.attestation_credentials.append(
+            (self.nonces[-1] if self.nonces else None, self.api_keys[-1] if self.api_keys else None)
+        )
+        return TransportResponse(
+            200,
+            json.dumps(
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "parakeet-tdt-0.6b-v3.oss-align.q8_0",
+                            "object": "model",
+                            "owned_by": "local",
+                            "capability": "transcription",
+                            "device": "cuda:0",
+                        }
+                    ],
+                }
+            ).encode(),
+        )
 
     def post(
         self, path: str, body: bytes, timeout: float | None, max_response_bytes: int
@@ -69,6 +107,7 @@ class FakeSupervisor:
         self.terminated = False
         self.killed = False
         self.start_count = 0
+        self.api_key = "test-api-key"
 
     def start(self) -> None:
         self.started = True
@@ -141,6 +180,63 @@ def test_sidecar_start_transcribe_and_close_use_injected_boundaries() -> None:
     assert transport.closed
 
 
+def test_sidecar_model_attestation_is_authenticated_and_fail_closed() -> None:
+    transport = FakeTransport(TransportResponse(200, result_body()))
+    supervisor = FakeSupervisor()
+    runtime = NeMoSidecarRuntime(
+        SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+        transport,
+        supervisor,
+    )
+
+    runtime.start()
+
+    assert transport.get_calls[0][0] == "/v1/models"
+    assert transport.api_keys == [supervisor.api_key]
+
+    class WrongModelTransport(FakeTransport):
+        def get(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return TransportResponse(200, b'{"data":[{"id":"other-model"}]}')
+
+    with pytest.raises(ConfigurationError, match="was not returned"):
+        NeMoSidecarRuntime(
+            SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+            WrongModelTransport(TransportResponse(200, result_body())),
+            FakeSupervisor(),
+        ).start()
+
+    class UnsupportedModelTransport(FakeTransport):
+        def get(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return TransportResponse(
+                200,
+                b'{"data":[{"id":"parakeet-tdt-0.6b-v3.oss-align.q8_0","capability":"speech"}]}',
+            )
+
+    with pytest.raises(ConfigurationError, match="lacks transcription"):
+        NeMoSidecarRuntime(
+            SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+            UnsupportedModelTransport(TransportResponse(200, result_body())),
+            FakeSupervisor(),
+        ).start()
+
+    class MissingCapabilityTransport(FakeTransport):
+        def get(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return TransportResponse(
+                200,
+                b'{"data":[{"id":"parakeet-tdt-0.6b-v3.oss-align.q8_0"}]}',
+            )
+
+    with pytest.raises(ConfigurationError, match="lacks transcription"):
+        NeMoSidecarRuntime(
+            SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+            MissingCapabilityTransport(TransportResponse(200, result_body())),
+            FakeSupervisor(),
+        ).start()
+
+
 def test_sidecar_uses_nemo_speech_multipart_contract_when_available() -> None:
     class OfficialTransport(FakeTransport):
         def post_multipart_audio(
@@ -169,6 +265,32 @@ def test_sidecar_uses_nemo_speech_multipart_contract_when_available() -> None:
     assert result.text == "hello"
     assert result.detected_language == "en"
     assert transport.calls[0][:2] == ("/v1/audio/transcriptions", b"json")
+
+
+def test_sidecar_discards_a_multipart_result_if_cancellation_arrives_during_transport() -> None:
+    cancellation = CancellationTokenSource()
+
+    class LateTransport(FakeTransport):
+        def post_multipart_audio(self, *args, **kwargs):
+            del args, kwargs
+            cancellation.cancel()
+            return TransportResponse(
+                200,
+                json.dumps({"text": "late", "duration": 0.002, "language": "en"}).encode(),
+            )
+
+    runtime = NeMoSidecarRuntime(
+        config(), LateTransport(TransportResponse(500, b"unused")), FakeSupervisor()
+    )
+    runtime.start()
+    request_with_cancellation = AsrRequest(
+        request().audio,
+        request_id="late-result",
+        cancellation=cancellation.token,
+    )
+
+    with pytest.raises(CancellationError):
+        runtime.transcribe(request_with_cancellation)
 
 
 @pytest.mark.parametrize(
@@ -294,6 +416,47 @@ def test_sidecar_restarts_after_crash_for_the_retry_attempt() -> None:
     assert supervisor.terminated
     assert supervisor.running
 
+    assert runtime.transcribe(request()).text == "hello"
+
+
+def test_sidecar_restart_syncs_rotating_credentials_and_repeats_attestation() -> None:
+    class RotatingSupervisor(FakeSupervisor):
+        def start(self) -> None:
+            super().start()
+            self.nonce = f"nonce-{self.start_count}"
+            self.api_key = f"api-key-{self.start_count}"
+
+    class SequencedTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__(TransportResponse(500, error_body("process_crashed")))
+            self.responses = [self.response, TransportResponse(200, result_body())]
+
+        def post_audio(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return self.responses.pop(0)
+
+    supervisor = RotatingSupervisor()
+    transport = SequencedTransport()
+    runtime = NeMoSidecarRuntime(
+        SidecarConfig(
+            "http://127.0.0.1:8123",
+            require_model_attestation=True,
+        ),
+        transport,
+        supervisor,
+    )
+    runtime.start()
+
+    with pytest.raises(ProcessCrashedError):
+        runtime.transcribe(request())
+
+    assert transport.nonces == ["nonce-1", "nonce-2"]
+    assert transport.api_keys == ["api-key-1", "api-key-2"]
+    assert transport.attestation_credentials == [
+        ("nonce-1", "api-key-1"),
+        ("nonce-2", "api-key-2"),
+    ]
+    assert len(transport.get_calls) == 2
     assert runtime.transcribe(request()).text == "hello"
 
 

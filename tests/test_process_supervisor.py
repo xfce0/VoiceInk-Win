@@ -4,6 +4,7 @@ import hashlib
 import os
 import signal
 import time
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -583,6 +584,8 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         extra_args=("--threads", "2"),
     )
     process = FakeProcess()
+    monkeypatch.setenv("GH_TOKEN", "must-not-be-inherited")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-be-inherited")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def popen(argv: list[str], **kwargs):
@@ -605,7 +608,7 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
     supervisor.start()
 
     assert supervisor.wait_ready(time.monotonic() + 1.0)
-    assert calls[0][0] == [
+    assert calls[0][0][:9] == [
         str(executable),
         "serve",
         "--asr-model",
@@ -615,11 +618,27 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "--port",
         "8123",
         "--no-ui",
-        "--threads",
-        "2",
+    ]
+    assert calls[0][0][9:11] == [
+        "--asr.model.name",
+        config.model_id,
+    ]
+    assert calls[0][0][11:13] == [
+        "--device",
+        "cpu",
+    ]
+    assert "--api-key" not in calls[0][0]
+    assert "--http.api-key" not in calls[0][0]
+    assert calls[0][0][13:] == ["--threads", "2"]
+    assert replace(config, backend="cuda:2").argv()[11:13] == [
+        "--device",
+        "cuda:2",
     ]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["env"][process_module.ASR_NONCE_ENV] == supervisor.nonce
+    assert calls[0][1]["env"][process_module.ASR_API_KEY_ENV] == supervisor.api_key
+    assert "GH_TOKEN" not in calls[0][1]["env"]
+    assert "GITHUB_TOKEN" not in calls[0][1]["env"]
     assert supervisor.process_tree_mode == "posix-process-group"
     supervisor.terminate(time.monotonic() + 1.0)
     assert killpg_calls
@@ -638,7 +657,28 @@ def test_subprocess_config_rejects_non_loopback_endpoint(tmp_path: Path) -> None
         )
 
 
-def test_subprocess_config_rejects_security_critical_extra_args(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--model",
+        "--host",
+        "--port",
+        "--backend",
+        "--asr-model",
+        "--api-key",
+        "--http.api-key",
+        "--asr.model.name",
+        "--asr.backend.gpu",
+        "--http.host",
+        "--http.port",
+        "--device",
+    ],
+)
+@pytest.mark.parametrize("form", ["split", "equal"])
+def test_subprocess_config_rejects_security_critical_extra_args(
+    tmp_path: Path, flag: str, form: str
+) -> None:
+    extra_args = (flag, "attacker") if form == "split" else (f"{flag}=attacker",)
     with pytest.raises(ConfigurationError, match="security-critical"):
         SubprocessConfig(
             executable=tmp_path / "sidecar",
@@ -648,5 +688,5 @@ def test_subprocess_config_rejects_security_critical_extra_args(tmp_path: Path) 
             executable_manifest=manifest(tmp_path / "sidecar", "0" * 64),
             model_manifest=manifest(tmp_path / "model.gguf", "0" * 64),
             endpoint="http://127.0.0.1:8123",
-            extra_args=("--host", "0.0.0.0"),
+            extra_args=extra_args,
         )

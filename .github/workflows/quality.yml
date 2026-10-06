@@ -18,7 +18,7 @@ jobs:
   python-quality:
     name: Python ${{ matrix.python-version }}
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

@@ -5,32 +5,35 @@ on:
   schedule:
     - cron: "17 3 * * 6"
 
+permissions:
+  contents: read
+
 jobs:
   native-smoke:
     runs-on: windows-latest
+    timeout-minutes: 30
     env:
-      VOICEINK_FFMPEG_URL: https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip
-      VOICEINK_FFMPEG_ARCHIVE_SHA256: ${{ vars.VOICEINK_FFMPEG_ARCHIVE_SHA256 }}
-      VOICEINK_FFMPEG_SHA256: ${{ vars.VOICEINK_FFMPEG_SHA256 }}
-      VOICEINK_FFMPEG_VERSION: 7.1.1
-      VOICEINK_FFMPEG_PROVENANCE_URL: https://github.com/GyanD/codexffmpeg/releases/tag/7.1.1
-      VOICEINK_FFMPEG_LICENSE: GPL-3.0-or-later
-      VOICEINK_NATIVE_SMOKE_FIXTURE: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE }}
-      VOICEINK_NATIVE_SMOKE_FIXTURE_URL: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_URL }}
-      VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256 }}
-      VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE }}
-      VOICEINK_SIDECAR_ARCHIVE_URL: ${{ vars.VOICEINK_SIDECAR_ARCHIVE_URL }}
-      VOICEINK_SIDECAR_ARCHIVE_SHA256: ${{ vars.VOICEINK_SIDECAR_ARCHIVE_SHA256 }}
-      VOICEINK_SIDECAR_EXECUTABLE_SHA256: ${{ vars.VOICEINK_SIDECAR_EXECUTABLE_SHA256 }}
-      VOICEINK_SIDECAR_VERSION: ${{ vars.VOICEINK_SIDECAR_VERSION }}
-      VOICEINK_SIDECAR_PROVENANCE_URL: ${{ vars.VOICEINK_SIDECAR_PROVENANCE_URL }}
-      VOICEINK_SIDECAR_LICENSE: ${{ vars.VOICEINK_SIDECAR_LICENSE }}
-      VOICEINK_SIDECAR_MODEL_URL: ${{ vars.VOICEINK_SIDECAR_MODEL_URL }}
-      VOICEINK_SIDECAR_MODEL_SHA256: ${{ vars.VOICEINK_SIDECAR_MODEL_SHA256 }}
-      VOICEINK_SIDECAR_MODEL_ID: ${{ vars.VOICEINK_SIDECAR_MODEL_ID }}
-      VOICEINK_SIDECAR_MODEL_VERSION: ${{ vars.VOICEINK_SIDECAR_MODEL_VERSION }}
-      VOICEINK_SIDECAR_MODEL_PROVENANCE_URL: ${{ vars.VOICEINK_SIDECAR_MODEL_PROVENANCE_URL }}
-      VOICEINK_SIDECAR_MODEL_LICENSE: ${{ vars.VOICEINK_SIDECAR_MODEL_LICENSE }}
+      VOICEINK_FFMPEG_URL_OVERRIDE: ${{ vars.VOICEINK_FFMPEG_URL }}
+      VOICEINK_FFMPEG_ARCHIVE_SHA256_OVERRIDE: ${{ vars.VOICEINK_FFMPEG_ARCHIVE_SHA256 }}
+      VOICEINK_FFMPEG_SHA256_OVERRIDE: ${{ vars.VOICEINK_FFMPEG_SHA256 }}
+      VOICEINK_FFMPEG_VERSION_OVERRIDE: ${{ vars.VOICEINK_FFMPEG_VERSION }}
+      VOICEINK_FFMPEG_PROVENANCE_URL_OVERRIDE: ${{ vars.VOICEINK_FFMPEG_PROVENANCE_URL }}
+      VOICEINK_FFMPEG_LICENSE_OVERRIDE: ${{ vars.VOICEINK_FFMPEG_LICENSE }}
+      VOICEINK_NATIVE_SMOKE_FIXTURE_URL_OVERRIDE: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_URL }}
+      VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256_OVERRIDE: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256 }}
+      VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE_OVERRIDE: ${{ vars.VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE }}
+      VOICEINK_SIDECAR_ARCHIVE_URL_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_ARCHIVE_URL }}
+      VOICEINK_SIDECAR_ARCHIVE_SHA256_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_ARCHIVE_SHA256 }}
+      VOICEINK_SIDECAR_EXECUTABLE_SHA256_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_EXECUTABLE_SHA256 }}
+      VOICEINK_SIDECAR_VERSION_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_VERSION }}
+      VOICEINK_SIDECAR_PROVENANCE_URL_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_PROVENANCE_URL }}
+      VOICEINK_SIDECAR_LICENSE_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_LICENSE }}
+      VOICEINK_SIDECAR_MODEL_URL_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_MODEL_URL }}
+      VOICEINK_SIDECAR_MODEL_SHA256_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_MODEL_SHA256 }}
+      VOICEINK_SIDECAR_MODEL_ID_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_MODEL_ID }}
+      VOICEINK_SIDECAR_MODEL_VERSION_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_MODEL_VERSION }}
+      VOICEINK_SIDECAR_MODEL_PROVENANCE_URL_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_MODEL_PROVENANCE_URL }}
+      VOICEINK_SIDECAR_MODEL_LICENSE_OVERRIDE: ${{ vars.VOICEINK_SIDECAR_MODEL_LICENSE }}
       VOICEINK_SIDECAR_BACKEND: ${{ vars.VOICEINK_SIDECAR_BACKEND }}
       VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS: ${{ vars.VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS }}
       VOICEINK_NATIVE_SMOKE_ASR_CANCEL_AFTER_SECONDS: ${{ vars.VOICEINK_NATIVE_SMOKE_ASR_CANCEL_AFTER_SECONDS }}
@@ -38,121 +41,151 @@ jobs:
       VOICEINK_NATIVE_SMOKE_EVENTS: native-smoke-events.jsonl
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: "3.12"
-      - name: Validate pinned smoke configuration
+      - name: Validate pins and install native smoke artifacts
         shell: pwsh
         run: |
-          $required = @(
-            "VOICEINK_FFMPEG_ARCHIVE_SHA256",
-            "VOICEINK_FFMPEG_SHA256",
-            "VOICEINK_NATIVE_SMOKE_FIXTURE_URL",
-            "VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256",
-            "VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE",
-            "VOICEINK_SIDECAR_ARCHIVE_URL",
-            "VOICEINK_SIDECAR_ARCHIVE_SHA256",
-            "VOICEINK_SIDECAR_EXECUTABLE_SHA256",
-            "VOICEINK_SIDECAR_VERSION",
-            "VOICEINK_SIDECAR_PROVENANCE_URL",
-            "VOICEINK_SIDECAR_LICENSE",
-            "VOICEINK_SIDECAR_MODEL_URL",
-            "VOICEINK_SIDECAR_MODEL_SHA256",
-            "VOICEINK_SIDECAR_MODEL_ID",
-            "VOICEINK_SIDECAR_MODEL_VERSION",
-            "VOICEINK_SIDECAR_MODEL_PROVENANCE_URL",
-            "VOICEINK_SIDECAR_MODEL_LICENSE",
-            "VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS",
-            "VOICEINK_NATIVE_SMOKE_ASR_CANCEL_AFTER_SECONDS"
-          )
-          foreach ($name in $required) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "$name repository variable is required"
+          $setupLog = Join-Path $env:RUNNER_TEMP "native-smoke-setup.log"
+          Start-Transcript -Path $setupLog -Force | Out-Null
+          try {
+            $lockPath = Join-Path $env:GITHUB_WORKSPACE ".github/native-smoke/artifact-lock.template.json"
+            python scripts/native_smoke_lock.py $lockPath
+            $lock = Get-Content -Raw $lockPath | ConvertFrom-Json
+
+            function Pinned([string] $name, [string] $expected) {
+              $override = [Environment]::GetEnvironmentVariable($name)
+              if (![string]::IsNullOrWhiteSpace($override) -and $override.Trim() -ne $expected) {
+                throw "$name does not match the tracked native smoke lock"
+              }
+              return $expected
+            }
+
+            function DownloadVerified([string] $url, [string] $sha, [string] $name) {
+              $target = Join-Path $env:RUNNER_TEMP $name
+              Invoke-WebRequest -Uri $url -OutFile $target -TimeoutSec 120
+              $actual = (Get-FileHash $target -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $sha.ToLowerInvariant()) { throw "$name checksum mismatch" }
+              return $target
+            }
+
+            $ffmpeg = $lock.artifacts.ffmpeg
+            $sidecar = $lock.artifacts.'nemo-speech-cpp-windows-amd64'
+            $model = $lock.artifacts.'parakeet-tdt-0.6b-v3.oss-align.q8_0'
+            $fixturePin = $lock.artifacts.fixture
+            $ffmpegUrl = Pinned "VOICEINK_FFMPEG_URL_OVERRIDE" $ffmpeg.url
+            $ffmpegArchiveSha = Pinned "VOICEINK_FFMPEG_ARCHIVE_SHA256_OVERRIDE" $ffmpeg.archive_sha256
+            $ffmpegSha = Pinned "VOICEINK_FFMPEG_SHA256_OVERRIDE" $ffmpeg.executable_sha256
+            $ffmpegVersion = Pinned "VOICEINK_FFMPEG_VERSION_OVERRIDE" $ffmpeg.version
+            $ffmpegProvenance = Pinned "VOICEINK_FFMPEG_PROVENANCE_URL_OVERRIDE" $ffmpeg.provenance_url
+            $ffmpegLicense = Pinned "VOICEINK_FFMPEG_LICENSE_OVERRIDE" $ffmpeg.license
+            $sidecarUrl = Pinned "VOICEINK_SIDECAR_ARCHIVE_URL_OVERRIDE" $sidecar.url
+            $sidecarArchiveSha = Pinned "VOICEINK_SIDECAR_ARCHIVE_SHA256_OVERRIDE" $sidecar.archive_sha256
+            $sidecarSha = Pinned "VOICEINK_SIDECAR_EXECUTABLE_SHA256_OVERRIDE" $sidecar.executable_sha256
+            $sidecarVersion = Pinned "VOICEINK_SIDECAR_VERSION_OVERRIDE" $sidecar.version
+            $sidecarProvenance = Pinned "VOICEINK_SIDECAR_PROVENANCE_URL_OVERRIDE" $sidecar.provenance_url
+            $sidecarLicense = Pinned "VOICEINK_SIDECAR_LICENSE_OVERRIDE" $sidecar.license
+            $backend = Pinned "VOICEINK_SIDECAR_BACKEND" $sidecar.backend
+            $modelUrl = Pinned "VOICEINK_SIDECAR_MODEL_URL_OVERRIDE" $model.url
+            $modelSha = Pinned "VOICEINK_SIDECAR_MODEL_SHA256_OVERRIDE" $model.sha256
+            $modelId = Pinned "VOICEINK_SIDECAR_MODEL_ID_OVERRIDE" $model.model_id
+            $modelVersion = Pinned "VOICEINK_SIDECAR_MODEL_VERSION_OVERRIDE" $model.version
+            $modelProvenance = Pinned "VOICEINK_SIDECAR_MODEL_PROVENANCE_URL_OVERRIDE" $model.provenance_url
+            $modelLicense = Pinned "VOICEINK_SIDECAR_MODEL_LICENSE_OVERRIDE" $model.license
+            $fixtureUrl = Pinned "VOICEINK_NATIVE_SMOKE_FIXTURE_URL_OVERRIDE" $fixturePin.url
+            $fixtureSha = Pinned "VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256_OVERRIDE" $fixturePin.sha256
+            $fixtureLicense = Pinned "VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE_OVERRIDE" $fixturePin.license
+
+            $ffmpegArchive = DownloadVerified $ffmpegUrl $ffmpegArchiveSha "ffmpeg.zip"
+            $ffmpegRoot = Join-Path $env:RUNNER_TEMP "ffmpeg"
+            Expand-Archive $ffmpegArchive -DestinationPath $ffmpegRoot -Force
+            $ffmpegCandidates = @(Get-ChildItem $ffmpegRoot -Filter ffmpeg.exe -Recurse -File)
+            if ($ffmpegCandidates.Count -ne 1) { throw "expected exactly one ffmpeg.exe in the pinned archive" }
+            $ffmpegPath = $ffmpegCandidates[0].FullName
+            if ((Get-FileHash $ffmpegPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $ffmpegSha.ToLowerInvariant()) {
+              throw "FFmpeg executable checksum mismatch"
+            }
+
+            $runtimeArchive = DownloadVerified $sidecarUrl $sidecarArchiveSha "sidecar.zip"
+            $runtimeRoot = Join-Path $env:RUNNER_TEMP "sidecar"
+            Expand-Archive $runtimeArchive -DestinationPath $runtimeRoot -Force
+            $runtimeCandidates = @(Get-ChildItem $runtimeRoot -Filter nemo-speech.exe -Recurse -File)
+            if ($runtimeCandidates.Count -ne 1) { throw "expected exactly one nemo-speech.exe in the pinned archive" }
+            $runtime = $runtimeCandidates[0]
+            if ((Get-FileHash $runtime.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sidecarSha.ToLowerInvariant()) {
+              throw "sidecar executable checksum mismatch"
+            }
+            $modelPath = DownloadVerified $modelUrl $modelSha "parakeet.gguf"
+            $fixturePath = DownloadVerified $fixtureUrl $fixtureSha "native-fixture.bin"
+
+            $runtimeLock = [ordered]@{
+              schema = "voiceink.runtime.artifact-lock.v1"
+              version = 1
+              install_root = $env:RUNNER_TEMP
+              artifacts = [ordered]@{
+                "nemo-speech-cpp-windows-amd64" = [ordered]@{
+                  kind = "executable"
+                  version = $sidecarVersion
+                  provenance_url = $sidecarProvenance
+                  sha256 = $sidecar.executable_sha256
+                  license = $sidecarLicense
+                  allowed_path = $runtime.FullName
+                }
+                $modelId = [ordered]@{
+                  kind = "model"
+                  version = $modelVersion
+                  provenance_url = $modelProvenance
+                  sha256 = $model.sha256
+                  license = $modelLicense
+                  allowed_path = $modelPath
+                }
+              }
+            }
+            $runtimeLockPath = Join-Path $env:RUNNER_TEMP "voiceink-artifact-lock.json"
+            $runtimeLock | ConvertTo-Json -Depth 8 | Set-Content -Path $runtimeLockPath -Encoding utf8
+            $manifest = [ordered]@{
+              schema = "voiceink.runtime.manifest.v1"
+              version = 1
+              executable_artifact_id = "nemo-speech-cpp-windows-amd64"
+              model_artifact_id = $modelId
+              backend = $backend
+              endpoint = "ephemeral-loopback"
+              executable = $runtime.FullName
+              model = $modelPath
+            }
+            $manifestPath = Join-Path $env:RUNNER_TEMP "voiceink-runtime-manifest.json"
+            $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding utf8
+            $runtimeLockSha = (Get-FileHash $runtimeLockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            "VOICEINK_NATIVE_SMOKE_ARTIFACT_LOCK=$lockPath" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_FFMPEG_PATH=$ffmpegPath" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_FFMPEG_SHA256=$ffmpegSha" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_FFMPEG_VERSION=$ffmpegVersion" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_FFMPEG_PROVENANCE_URL=$ffmpegProvenance" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_FFMPEG_LICENSE=$ffmpegLicense" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_NATIVE_SMOKE_FIXTURE=$fixturePath" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256=$fixtureSha" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE=$fixtureLicense" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_ARTIFACT_LOCK=$runtimeLockPath" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_ARTIFACT_LOCK_SHA256=$runtimeLockSha" | Out-File $env:GITHUB_ENV -Append
+            "VOICEINK_RUNTIME_MANIFEST=$manifestPath" | Out-File $env:GITHUB_ENV -Append
+            if ([string]::IsNullOrWhiteSpace($env:VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS)) {
+              "VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS=2" | Out-File $env:GITHUB_ENV -Append
+            }
+            if ([string]::IsNullOrWhiteSpace($env:VOICEINK_NATIVE_SMOKE_ASR_CANCEL_AFTER_SECONDS)) {
+              "VOICEINK_NATIVE_SMOKE_ASR_CANCEL_AFTER_SECONDS=2" | Out-File $env:GITHUB_ENV -Append
             }
           }
-      - name: Install pinned FFmpeg
-        shell: pwsh
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:VOICEINK_FFMPEG_ARCHIVE_SHA256)) { throw "VOICEINK_FFMPEG_ARCHIVE_SHA256 repository variable is required" }
-          if ([string]::IsNullOrWhiteSpace($env:VOICEINK_FFMPEG_SHA256)) { throw "VOICEINK_FFMPEG_SHA256 repository variable is required" }
-          Invoke-WebRequest -Uri $env:VOICEINK_FFMPEG_URL -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
-          $actual = (Get-FileHash "$env:RUNNER_TEMP\ffmpeg.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $env:VOICEINK_FFMPEG_ARCHIVE_SHA256.ToLowerInvariant()) { throw "FFmpeg archive checksum mismatch" }
-          Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" -DestinationPath "$env:RUNNER_TEMP\ffmpeg"
-          $binary = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Filter ffmpeg.exe -Recurse | Select-Object -First 1
-          if ($null -eq $binary) { throw "ffmpeg.exe was not found in the pinned archive" }
-          "VOICEINK_FFMPEG_PATH=$($binary.FullName)" | Out-File $env:GITHUB_ENV -Append
+          finally {
+            Stop-Transcript | Out-Null
+          }
       - name: Install project
         run: python -m pip install --editable ".[dev]"
-      - name: Install pinned sidecar and licensed fixture
-        shell: pwsh
-        run: |
-          function Required([string] $name) {
-            $value = [Environment]::GetEnvironmentVariable($name)
-            if ([string]::IsNullOrWhiteSpace($value)) { throw "$name repository variable is required" }
-            return $value
-          }
-          function DownloadVerified([string] $url, [string] $sha, [string] $name) {
-            $target = Join-Path $env:RUNNER_TEMP $name
-            Invoke-WebRequest -Uri $url -OutFile $target
-            $actual = (Get-FileHash $target -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $sha.ToLowerInvariant()) { throw "$name checksum mismatch" }
-            return $target
-          }
-          $runtimeArchive = DownloadVerified (Required "VOICEINK_SIDECAR_ARCHIVE_URL") (Required "VOICEINK_SIDECAR_ARCHIVE_SHA256") "sidecar.zip"
-          $runtimeRoot = Join-Path $env:RUNNER_TEMP "sidecar"
-          Expand-Archive $runtimeArchive -DestinationPath $runtimeRoot -Force
-          $runtime = Get-ChildItem $runtimeRoot -Filter *.exe -Recurse | Select-Object -First 1
-          if ($null -eq $runtime) { throw "sidecar executable was not found in the pinned archive" }
-          $model = DownloadVerified (Required "VOICEINK_SIDECAR_MODEL_URL") (Required "VOICEINK_SIDECAR_MODEL_SHA256") "parakeet.gguf"
-          $fixture = DownloadVerified (Required "VOICEINK_NATIVE_SMOKE_FIXTURE_URL") (Required "VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256") "native-fixture.bin"
-          "VOICEINK_SIDECAR_EXECUTABLE=$($runtime.FullName)" | Out-File $env:GITHUB_ENV -Append
-          "VOICEINK_SIDECAR_MODEL=$model" | Out-File $env:GITHUB_ENV -Append
-          "VOICEINK_NATIVE_SMOKE_FIXTURE=$fixture" | Out-File $env:GITHUB_ENV -Append
-          $lockPath = Join-Path $env:RUNNER_TEMP "voiceink-artifact-lock.json"
-          $manifestPath = Join-Path $env:RUNNER_TEMP "voiceink-runtime-manifest.json"
-          $lock = @{
-            schema = "voiceink.runtime.artifact-lock.v1"
-            version = 1
-            install_root = $env:RUNNER_TEMP
-            artifacts = @{
-              "nemo-speech-cpp-windows-amd64" = @{
-                kind = "executable"
-                version = (Required "VOICEINK_SIDECAR_VERSION")
-                provenance_url = (Required "VOICEINK_SIDECAR_PROVENANCE_URL")
-                sha256 = (Required "VOICEINK_SIDECAR_EXECUTABLE_SHA256")
-                license = (Required "VOICEINK_SIDECAR_LICENSE")
-                allowed_path = $runtime.FullName
-              }
-              (Required "VOICEINK_SIDECAR_MODEL_ID") = @{
-                kind = "model"
-                version = (Required "VOICEINK_SIDECAR_MODEL_VERSION")
-                provenance_url = (Required "VOICEINK_SIDECAR_MODEL_PROVENANCE_URL")
-                sha256 = (Required "VOICEINK_SIDECAR_MODEL_SHA256")
-                license = (Required "VOICEINK_SIDECAR_MODEL_LICENSE")
-                allowed_path = $model
-              }
-            }
-          }
-          $lock | ConvertTo-Json -Depth 8 | Set-Content -Path $lockPath -Encoding utf8
-          $manifest = @{
-            schema = "voiceink.runtime.manifest.v1"
-            version = 1
-            executable_artifact_id = "nemo-speech-cpp-windows-amd64"
-            model_artifact_id = (Required "VOICEINK_SIDECAR_MODEL_ID")
-            backend = if ([string]::IsNullOrWhiteSpace($env:VOICEINK_SIDECAR_BACKEND)) { "cpu" } else { $env:VOICEINK_SIDECAR_BACKEND }
-            endpoint = "ephemeral-loopback"
-            executable = $runtime.FullName
-            model = $model
-          }
-          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding utf8
-          $lockSha256 = (Get-FileHash $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          "VOICEINK_ARTIFACT_LOCK=$lockPath" | Out-File $env:GITHUB_ENV -Append
-          "VOICEINK_ARTIFACT_LOCK_SHA256=$lockSha256" | Out-File $env:GITHUB_ENV -Append
-          "VOICEINK_RUNTIME_MANIFEST=$manifestPath" | Out-File $env:GITHUB_ENV -Append
       - name: Run native smoke
         run: python scripts/native_smoke.py
-      - name: Upload native smoke report
+      - name: Upload native smoke diagnostics
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
         with:
@@ -160,4 +193,6 @@ jobs:
           path: |
             native-smoke-report.json
             native-smoke-events.jsonl
+            .github/native-smoke/artifact-lock.template.json
+            ${{ runner.temp }}/native-smoke-setup.log
           if-no-files-found: warn

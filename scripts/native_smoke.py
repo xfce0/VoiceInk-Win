@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import math
 import os
 import socket
 import subprocess
@@ -13,6 +14,8 @@ import tempfile
 from pathlib import Path
 from threading import Thread, Timer
 from time import monotonic, sleep
+
+NATIVE_SMOKE_READINESS_TIMEOUT = 60.0
 
 
 def _required(name: str) -> str:
@@ -42,6 +45,24 @@ def _load_runtime_configuration():
     )
 
 
+def _load_native_smoke_lock():
+    try:
+        from scripts.native_smoke_lock import load_native_smoke_lock
+    except ModuleNotFoundError:
+        from native_smoke_lock import load_native_smoke_lock
+
+    return load_native_smoke_lock(Path(_required("VOICEINK_NATIVE_SMOKE_ARTIFACT_LOCK")))
+
+
+def _pinned_required(name: str, expected: str) -> str:
+    try:
+        from scripts.native_smoke_lock import pinned_value
+    except ModuleNotFoundError:
+        from native_smoke_lock import pinned_value
+
+    return pinned_value(name, expected, _required(name))
+
+
 def _allocate_loopback_endpoint() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -55,6 +76,35 @@ def _write_report(path: Path, report: dict[str, object]) -> None:
     path.write_text(
         json.dumps(sanitize_report_value(report), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def _build_native_smoke_configs(
+    runtime_configuration,
+    endpoint: str,
+    executable_manifest,
+    model_manifest,
+):
+    from voiceink_win.infrastructure import SidecarConfig, SubprocessConfig
+
+    sidecar_config = SidecarConfig(
+        endpoint=endpoint,
+        model_id=runtime_configuration.model_id,
+        backend=runtime_configuration.backend,
+        readiness_timeout=NATIVE_SMOKE_READINESS_TIMEOUT,
+        require_model_attestation=True,
+    )
+    subprocess_config = SubprocessConfig(
+        executable=runtime_configuration.executable,
+        model=runtime_configuration.model,
+        executable_sha256=executable_manifest.sha256,
+        model_sha256=model_manifest.sha256,
+        executable_manifest=executable_manifest,
+        model_manifest=model_manifest,
+        endpoint=sidecar_config.endpoint,
+        backend=sidecar_config.backend,
+        model_id=runtime_configuration.model_id,
+    )
+    return sidecar_config, subprocess_config
 
 
 class _NativeSmokeTemporaryDirectory:
@@ -122,7 +172,7 @@ def main() -> int:
 
         report["failure"] = safe_failure(error)
         _write_report(report_path, report)
-        if isinstance(error, (FileNotFoundError, ValueError)):
+        if isinstance(error, FileNotFoundError | ValueError):
             return 2
         if getattr(error, "code", None) in {"configuration", "missing_model"}:
             return 2
@@ -144,15 +194,13 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         raise error
 
     from voiceink_win.application import AsrApplicationService
-    from voiceink_win.domain import AsrRequest, JobId
+    from voiceink_win.domain import JobId
     from voiceink_win.infrastructure import (
         FfmpegArtifactManifest,
         JsonlEventWriter,
         NeMoSidecarRuntime,
         RuntimeArtifactManifest,
         RuntimeArtifactVerifier,
-        SidecarConfig,
-        SubprocessConfig,
         SubprocessMediaNormalizer,
         SubprocessSupervisor,
         UrllibLoopbackTransport,
@@ -161,22 +209,43 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         safe_failure,
     )
 
+    native_lock = _load_native_smoke_lock()
+    pins = native_lock["artifacts"]
+    assert isinstance(pins, dict)
+    ffmpeg_pin = pins["ffmpeg"]
+    sidecar_pin = pins["nemo-speech-cpp-windows-amd64"]
+    model_pin = pins["parakeet-tdt-0.6b-v3.oss-align.q8_0"]
+    fixture_pin = pins["fixture"]
+    assert isinstance(ffmpeg_pin, dict)
+    assert isinstance(sidecar_pin, dict)
+    assert isinstance(model_pin, dict)
+    assert isinstance(fixture_pin, dict)
     fixture = Path(_required("VOICEINK_NATIVE_SMOKE_FIXTURE")).resolve(strict=True)
-    fixture_sha256 = _required("VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256")
-    fixture_license = _required("VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE")
+    fixture_sha256 = _pinned_required("VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256", fixture_pin["sha256"])
+    fixture_license = _pinned_required(
+        "VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE", fixture_pin["license"]
+    )
     ffmpeg_path = Path(_required("VOICEINK_FFMPEG_PATH")).resolve(strict=True)
-    ffmpeg_sha256 = _required("VOICEINK_FFMPEG_SHA256")
+    ffmpeg_sha256 = _pinned_required("VOICEINK_FFMPEG_SHA256", ffmpeg_pin["executable_sha256"])
     runtime_configuration = _load_runtime_configuration()
+    if runtime_configuration.model_id != model_pin["model_id"]:
+        raise RuntimeError("runtime manifest model ID does not match the tracked native smoke lock")
+    if runtime_configuration.executable_artifact.sha256 != sidecar_pin["executable_sha256"]:
+        raise RuntimeError("runtime executable hash does not match the tracked native smoke lock")
+    if runtime_configuration.model_artifact.sha256 != model_pin["sha256"]:
+        raise RuntimeError("runtime model hash does not match the tracked native smoke lock")
     runtime_path = runtime_configuration.executable
     model_path = runtime_configuration.model
     source_sha256 = _hash(fixture)
     if source_sha256.lower() != fixture_sha256.lower():
         raise RuntimeError("native smoke fixture checksum mismatch")
     manifest = FfmpegArtifactManifest(
-        version=_required("VOICEINK_FFMPEG_VERSION"),
-        provenance_url=_required("VOICEINK_FFMPEG_PROVENANCE_URL"),
+        version=_pinned_required("VOICEINK_FFMPEG_VERSION", ffmpeg_pin["version"]),
+        provenance_url=_pinned_required(
+            "VOICEINK_FFMPEG_PROVENANCE_URL", ffmpeg_pin["provenance_url"]
+        ),
         sha256=ffmpeg_sha256,
-        license=_required("VOICEINK_FFMPEG_LICENSE"),
+        license=_pinned_required("VOICEINK_FFMPEG_LICENSE", ffmpeg_pin["license"]),
         allowed_path=ffmpeg_path,
     )
     artifact = VerifiedFfmpegArtifact.verify(ffmpeg_path, manifest)
@@ -184,11 +253,6 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         raise RuntimeError("FFmpeg checksum changed between verification and smoke setup")
 
     endpoint = _allocate_loopback_endpoint()
-    sidecar_config = SidecarConfig(
-        endpoint=endpoint,
-        model_id=runtime_configuration.model_id,
-        backend=runtime_configuration.backend,
-    )
     executable_manifest = RuntimeArtifactManifest(
         version=runtime_configuration.executable_artifact.version,
         provenance_url=runtime_configuration.executable_artifact.provenance_url,
@@ -207,18 +271,13 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         runtime_path, executable_manifest, label="runtime executable"
     )
     RuntimeArtifactVerifier().verify_manifest(model_path, model_manifest, label="runtime model")
-    supervisor = SubprocessSupervisor(
-        SubprocessConfig(
-            executable=runtime_path,
-            model=model_path,
-            executable_sha256=executable_manifest.sha256,
-            model_sha256=model_manifest.sha256,
-            executable_manifest=executable_manifest,
-            model_manifest=model_manifest,
-            endpoint=sidecar_config.endpoint,
-            backend=sidecar_config.backend,
-        )
+    sidecar_config, subprocess_config = _build_native_smoke_configs(
+        runtime_configuration,
+        endpoint,
+        executable_manifest,
+        model_manifest,
     )
+    supervisor = SubprocessSupervisor(subprocess_config)
     events = JsonlEventWriter(
         Path(os.environ.get("VOICEINK_NATIVE_SMOKE_EVENTS", "native-smoke-events.jsonl"))
     )
@@ -277,21 +336,29 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             normalized = normalizer.normalize(
                 snapshot, workspace, _NeverCancelled(), monotonic() + 60
             )
-            result = asr.transcribe(
-                AsrRequest(
-                    normalized.audio,
-                    request_id="native-smoke",
-                    deadline=monotonic() + 60,
-                )
+            result, cold_timing = _transcribe_with_timing(
+                asr, normalized.audio, "native-smoke-cold"
             )
-            if not result.text.strip():
-                raise RuntimeError("configured ASR returned an empty transcript")
             events.event(
                 "asr.completed",
+                phase="cold",
                 backend=sidecar_config.backend,
                 model_id=sidecar_config.model_id,
                 duration_seconds=result.duration,
                 transcript_length=len(result.text),
+                **cold_timing,
+            )
+            warm_result, warm_timing = _transcribe_with_timing(
+                asr, normalized.audio, "native-smoke-warm"
+            )
+            events.event(
+                "asr.completed",
+                phase="warm",
+                backend=sidecar_config.backend,
+                model_id=sidecar_config.model_id,
+                duration_seconds=warm_result.duration,
+                transcript_length=len(warm_result.text),
+                **warm_timing,
             )
             health = runtime.health()
             if health.status.value != "ready":
@@ -301,9 +368,16 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                     "pipeline": "passed",
                     "fixture_sha256": source_sha256,
                     "fixture_license": fixture_license,
+                    "fixture_provenance_url": fixture_pin["provenance_url"],
                     "source_sha256_unchanged": _hash(fixture) == source_sha256,
                     "sample_count": normalized.sample_count,
                     "transcript_non_empty": True,
+                    "warm_transcript_non_empty": True,
+                    "timings": {"cold": cold_timing, "warm": warm_timing},
+                    "quality_gate": {
+                        "status": "not_evaluated",
+                        "reason": "reference corpus, WER, and RSS thresholds are not configured",
+                    },
                     "runtime": {
                         "model_id": sidecar_config.model_id,
                         "backend": sidecar_config.backend,
@@ -385,9 +459,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             except Exception as error:
                 report["runtime_close_error"] = type(error).__name__
         if runtime_started:
-            events.event(
-                "runtime.cleaned", status="failed" if "runtime_close_error" in report else "passed"
-            )
+            events.event("runtime.cleaned", status=_cleanup_status(report))
         events.close()
         _write_report(report_path, report)
 
@@ -400,10 +472,52 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     ]
     if cleanup_errors:
         raise RuntimeError(f"native smoke cleanup failed: {', '.join(cleanup_errors)}")
-    report["status"] = "passed"
+    report["status"] = _success_status(report)
     _write_report(report_path, report)
-    print("native snapshot/FFmpeg/ASR smoke passed; no fake adapter was used")
+    print("native snapshot/FFmpeg/ASR technical smoke passed; no fake adapter was used")
     return 0
+
+
+def _transcribe_with_timing(asr, audio, request_id: str):
+    from voiceink_win.domain import AsrRequest
+
+    started = monotonic()
+    result = asr.transcribe(AsrRequest(audio, request_id=request_id, deadline=started + 60))
+    elapsed = max(0.0, monotonic() - started)
+    if not result.text.strip():
+        raise RuntimeError(f"{request_id} returned an empty transcript")
+    return result, {
+        "elapsed_seconds": elapsed,
+        "rtfx": _safe_rtfx(result.duration, elapsed),
+    }
+
+
+def _safe_rtfx(audio_duration: float, elapsed: float) -> float | None:
+    if (
+        not math.isfinite(audio_duration)
+        or not math.isfinite(elapsed)
+        or audio_duration <= 0
+        or elapsed <= 0
+    ):
+        return None
+    return audio_duration / elapsed
+
+
+def _cleanup_status(report: dict[str, object]) -> str:
+    return (
+        "failed"
+        if any(
+            key in report for key in ("cleanup_errors", "asr_close_error", "runtime_close_error")
+        )
+        else "passed"
+    )
+
+
+def _success_status(report: dict[str, object]) -> str:
+    quality_gate = report.get("quality_gate")
+    if not isinstance(quality_gate, dict):
+        raise RuntimeError("native smoke report is missing quality gate status")
+    return "technical_passed" if quality_gate.get("status") == "not_evaluated" else "passed"
 
 
 class _NeverCancelled:
@@ -496,8 +610,8 @@ def _run_snapshot_security_probes_with_store(
 
     inputs = root / "inputs"
     target = root / "junction-target"
-    inputs.mkdir(parents=True)
-    target.mkdir()
+    inputs.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
     original = b"native snapshot security fixture"
 
     def expect_changed(path: Path, mutation) -> None:

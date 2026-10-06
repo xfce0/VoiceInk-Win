@@ -43,6 +43,14 @@ from .transport import TransportResponse
 
 
 class SidecarTransport(Protocol):
+    def get(
+        self,
+        path: str,
+        timeout: float | None,
+        max_response_bytes: int,
+        nonce: str | None = None,
+    ) -> TransportResponse: ...
+
     def post(
         self, path: str, body: bytes, timeout: float | None, max_response_bytes: int
     ) -> TransportResponse: ...
@@ -93,7 +101,7 @@ def _validate_loopback_endpoint(endpoint: str) -> None:
 @dataclass(frozen=True, slots=True)
 class SidecarConfig:
     endpoint: str
-    model_id: str = "parakeet-tdt-v3"
+    model_id: str = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
     backend: str = "cpu"
     readiness_timeout: float = 10.0
     shutdown_timeout: float = 5.0
@@ -101,6 +109,7 @@ class SidecarConfig:
     max_audio_bytes: int = MAX_CANONICAL_AUDIO_BYTES
     max_response_bytes: int = 4 * 1024 * 1024
     default_deadline_seconds: float = 30.0
+    require_model_attestation: bool = False
 
     def __post_init__(self) -> None:
         _validate_loopback_endpoint(self.endpoint)
@@ -184,21 +193,15 @@ class NeMoSidecarRuntime:
         startup_error: AsrError | None = None
         try:
             self._supervisor.start()
-            nonce = getattr(self._supervisor, "nonce", None) or generate_nonce()
-            set_transport_nonce = getattr(self._transport, "set_nonce", None)
-            if set_transport_nonce is not None:
-                set_transport_nonce(nonce)
-            api_key = getattr(self._supervisor, "api_key", None)
-            set_transport_api_key = getattr(self._transport, "set_api_key", None)
-            if api_key is not None and set_transport_api_key is not None:
-                set_transport_api_key(api_key)
-            ready = self._supervisor.wait_ready(
-                self._clock.monotonic() + self._config.readiness_timeout
-            )
+            self._sync_transport_credentials()
+            readiness_deadline = self._clock.monotonic() + self._config.readiness_timeout
+            ready = self._supervisor.wait_ready(readiness_deadline)
             if not ready:
                 raise RuntimeUnavailableError("sidecar did not become ready")
             if not self._supervisor.is_running():
                 raise ProcessCrashedError("sidecar exited during readiness")
+            if self._config.require_model_attestation:
+                self._attest_configured_model(readiness_deadline)
         except AsrError as error:
             startup_error = error
         except TimeoutError as error:
@@ -225,6 +228,27 @@ class NeMoSidecarRuntime:
         self._last_failure = None
         self._cleanup_pending = False
         self._started = True
+
+    def _attest_configured_model(self, deadline: float) -> None:
+        api_key = getattr(self._supervisor, "api_key", None)
+        if not isinstance(api_key, str) or not api_key:
+            raise ConfigurationError("sidecar model attestation credentials are unavailable")
+        if not self._supervisor.is_running():
+            raise ProcessCrashedError("sidecar exited before model attestation")
+        get = getattr(self._transport, "get", None)
+        if get is None:
+            raise ConfigurationError("sidecar transport does not support model attestation")
+        timeout = deadline - self._clock.monotonic()
+        if timeout <= 0:
+            raise AsrTimeoutError("sidecar model attestation timed out")
+        response = get(
+            "/v1/models",
+            timeout,
+            self._config.max_response_bytes,
+        )
+        _validate_model_attestation(response, self._config.model_id)
+        if not self._supervisor.is_running():
+            raise ProcessCrashedError("sidecar exited during model attestation")
 
     def transcribe(self, request: AsrRequest) -> TranscriptResult:
         if self._closed or not self._started:
@@ -312,11 +336,13 @@ class NeMoSidecarRuntime:
             if isinstance(error, ProcessCrashedError):
                 self._restart_after_crash(deadline)
             raise error
-        return (
+        result = (
             decode_nemo_result(response.body, request.audio.duration)
             if post_multipart_audio is not None
             else decode_result(response.body)
         )
+        self._check_request_lifecycle(request, deadline)
+        return result
 
     def close(self, deadline: float | None = None) -> None:
         if self._closed:
@@ -467,10 +493,13 @@ class NeMoSidecarRuntime:
             try:
                 self._supervisor.start()
                 started = True
+                self._sync_transport_credentials()
                 if not self._supervisor.wait_ready(deadline):
                     raise RuntimeUnavailableError("sidecar did not become ready after a crash")
                 if not self._supervisor.is_running():
                     raise ProcessCrashedError("sidecar exited during crash recovery")
+                if self._config.require_model_attestation:
+                    self._attest_configured_model(deadline)
             except BaseException as error:
                 if started:
                     self._started = False
@@ -498,6 +527,16 @@ class NeMoSidecarRuntime:
             ) from error
         except Exception as error:
             raise ExecutionError("sidecar crash recovery failed", cause=error) from error
+
+    def _sync_transport_credentials(self) -> None:
+        nonce = getattr(self._supervisor, "nonce", None) or generate_nonce()
+        set_transport_nonce = getattr(self._transport, "set_nonce", None)
+        if set_transport_nonce is not None:
+            set_transport_nonce(nonce)
+        api_key = getattr(self._supervisor, "api_key", None)
+        set_transport_api_key = getattr(self._transport, "set_api_key", None)
+        if api_key is not None and set_transport_api_key is not None:
+            set_transport_api_key(api_key)
 
     def _kill_supervisor(self, deadline: float) -> None:
         kill = self._supervisor.kill
@@ -552,3 +591,26 @@ class NeMoSidecarRuntime:
             raise CancellationError("ASR request was cancelled")
         if self._clock.monotonic() >= deadline:
             raise AsrTimeoutError("ASR request deadline exceeded")
+
+
+def _validate_model_attestation(response: TransportResponse, expected_model_id: str) -> None:
+    if response.status_code != 200:
+        raise ConfigurationError("sidecar model attestation returned an unexpected status")
+    try:
+        payload = json.loads(response.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ProtocolError(
+            "sidecar model attestation returned malformed JSON", cause=error
+        ) from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise ProtocolError("sidecar model attestation has an invalid model list")
+    for model in payload["data"]:
+        if isinstance(model, dict) and model.get("id") == expected_model_id:
+            if _supports_transcription(model):
+                return
+            raise ConfigurationError("configured sidecar model lacks transcription capability")
+    raise ConfigurationError("configured sidecar model was not returned by the runtime")
+
+
+def _supports_transcription(model: dict[str, object]) -> bool:
+    return model.get("capability") == "transcription"
