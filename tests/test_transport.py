@@ -153,8 +153,10 @@ def test_readiness_probe_rejects_forged_health_payload(monkeypatch) -> None:
     [
         ("cpu", "cpu", True),
         ("cpu", "cuda:0", False),
-        ("cuda:0", "cuda:0", True),
-        ("cuda:0", "cpu", False),
+        ("cpu", "auto", False),
+        ("cuda:2", "cuda:2", True),
+        ("cuda:2", "cuda:0", False),
+        ("cuda:2", "cpu", False),
     ],
 )
 def test_readiness_probe_attests_device_for_configured_backend(

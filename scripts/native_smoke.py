@@ -172,7 +172,7 @@ def main() -> int:
 
         report["failure"] = safe_failure(error)
         _write_report(report_path, report)
-        if isinstance(error, (FileNotFoundError, ValueError)):
+        if isinstance(error, FileNotFoundError | ValueError):
             return 2
         if getattr(error, "code", None) in {"configuration", "missing_model"}:
             return 2

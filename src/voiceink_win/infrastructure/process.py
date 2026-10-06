@@ -292,8 +292,8 @@ class SubprocessConfig:
             "--no-ui",
             "--asr.model.name",
             self.model_id,
-            "--asr.backend.gpu",
-            "-1" if self.backend == "cpu" else self.backend.partition(":")[2],
+            "--device",
+            self.backend,
         ]
         args.extend(self.extra_args)
         return args

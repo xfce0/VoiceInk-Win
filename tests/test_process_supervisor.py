@@ -619,20 +619,20 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "8123",
         "--no-ui",
     ]
-    assert calls[0][0][9:13] == [
+    assert calls[0][0][9:11] == [
         "--asr.model.name",
         config.model_id,
-        "--asr.backend.gpu",
-        "-1",
+    ]
+    assert calls[0][0][11:13] == [
+        "--device",
+        "cpu",
     ]
     assert "--api-key" not in calls[0][0]
     assert "--http.api-key" not in calls[0][0]
     assert calls[0][0][13:] == ["--threads", "2"]
-    assert replace(config, backend="cuda:2").argv()[9:13] == [
-        "--asr.model.name",
-        config.model_id,
-        "--asr.backend.gpu",
-        "2",
+    assert replace(config, backend="cuda:2").argv()[11:13] == [
+        "--device",
+        "cuda:2",
     ]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["env"][process_module.ASR_NONCE_ENV] == supervisor.nonce
