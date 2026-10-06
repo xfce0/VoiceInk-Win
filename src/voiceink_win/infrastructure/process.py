@@ -267,6 +267,11 @@ class SubprocessConfig:
             "--asr-model",
             "--api-key",
             "--http.api-key",
+            "--asr.model.name",
+            "--asr.backend.gpu",
+            "--http.host",
+            "--http.port",
+            "--device",
         }
         if any(argument.split("=", 1)[0] in forbidden for argument in self.extra_args):
             raise ConfigurationError(
@@ -285,9 +290,11 @@ class SubprocessConfig:
             "--port",
             str(port),
             "--no-ui",
+            "--asr.model.name",
+            self.model_id,
+            "--asr.backend.gpu",
+            "-1" if self.backend == "cpu" else self.backend.partition(":")[2],
         ]
-        if self.backend.startswith("cuda:"):
-            args.extend(["--asr.backend.gpu", self.backend.partition(":")[2]])
         args.extend(self.extra_args)
         return args
 

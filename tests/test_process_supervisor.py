@@ -4,6 +4,7 @@ import hashlib
 import os
 import signal
 import time
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -618,9 +619,21 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "8123",
         "--no-ui",
     ]
+    assert calls[0][0][9:13] == [
+        "--asr.model.name",
+        config.model_id,
+        "--asr.backend.gpu",
+        "-1",
+    ]
     assert "--api-key" not in calls[0][0]
     assert "--http.api-key" not in calls[0][0]
-    assert calls[0][0][9:] == ["--threads", "2"]
+    assert calls[0][0][13:] == ["--threads", "2"]
+    assert replace(config, backend="cuda:2").argv()[9:13] == [
+        "--asr.model.name",
+        config.model_id,
+        "--asr.backend.gpu",
+        "2",
+    ]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["env"][process_module.ASR_NONCE_ENV] == supervisor.nonce
     assert calls[0][1]["env"][process_module.ASR_API_KEY_ENV] == supervisor.api_key
@@ -645,20 +658,27 @@ def test_subprocess_config_rejects_non_loopback_endpoint(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    "extra_args",
+    "flag",
     [
-        ("--host", "0.0.0.0"),
-        ("--asr-model", "attacker.gguf"),
-        ("--asr-model=attacker.gguf",),
-        ("--api-key", "attacker-key"),
-        ("--api-key=attacker-key",),
-        ("--http.api-key", "attacker-key"),
-        ("--http.api-key=attacker-key",),
+        "--model",
+        "--host",
+        "--port",
+        "--backend",
+        "--asr-model",
+        "--api-key",
+        "--http.api-key",
+        "--asr.model.name",
+        "--asr.backend.gpu",
+        "--http.host",
+        "--http.port",
+        "--device",
     ],
 )
+@pytest.mark.parametrize("form", ["split", "equal"])
 def test_subprocess_config_rejects_security_critical_extra_args(
-    tmp_path: Path, extra_args: tuple[str, ...]
+    tmp_path: Path, flag: str, form: str
 ) -> None:
+    extra_args = (flag, "attacker") if form == "split" else (f"{flag}=attacker",)
     with pytest.raises(ConfigurationError, match="security-critical"):
         SubprocessConfig(
             executable=tmp_path / "sidecar",

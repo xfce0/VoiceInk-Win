@@ -58,6 +58,9 @@ def test_native_smoke_uses_manifest_model_and_cold_start_readiness_timeout(
     assert sidecar_config.readiness_timeout == 60.0
     assert sidecar_config.require_model_attestation
     assert subprocess_config.model_id == "parakeet-custom-model"
+    assert sidecar_config.model_id == subprocess_config.model_id
+    argv = subprocess_config.argv()
+    assert argv[argv.index("--asr.model.name") + 1] == sidecar_config.model_id
 
 
 def test_native_smoke_selects_named_sidecar_executable() -> None:
