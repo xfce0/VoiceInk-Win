@@ -14,6 +14,8 @@ from pathlib import Path
 from threading import Thread, Timer
 from time import monotonic, sleep
 
+NATIVE_SMOKE_READINESS_TIMEOUT = 60.0
+
 
 def _required(name: str) -> str:
     value = os.environ.get(name, "").strip()
@@ -55,6 +57,34 @@ def _write_report(path: Path, report: dict[str, object]) -> None:
     path.write_text(
         json.dumps(sanitize_report_value(report), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def _build_native_smoke_configs(
+    runtime_configuration,
+    endpoint: str,
+    executable_manifest,
+    model_manifest,
+):
+    from voiceink_win.infrastructure import SidecarConfig, SubprocessConfig
+
+    sidecar_config = SidecarConfig(
+        endpoint=endpoint,
+        model_id=runtime_configuration.model_id,
+        backend=runtime_configuration.backend,
+        readiness_timeout=NATIVE_SMOKE_READINESS_TIMEOUT,
+    )
+    subprocess_config = SubprocessConfig(
+        executable=runtime_configuration.executable,
+        model=runtime_configuration.model,
+        executable_sha256=executable_manifest.sha256,
+        model_sha256=model_manifest.sha256,
+        executable_manifest=executable_manifest,
+        model_manifest=model_manifest,
+        endpoint=sidecar_config.endpoint,
+        backend=sidecar_config.backend,
+        model_id=runtime_configuration.model_id,
+    )
+    return sidecar_config, subprocess_config
 
 
 class _NativeSmokeTemporaryDirectory:
@@ -151,8 +181,6 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         NeMoSidecarRuntime,
         RuntimeArtifactManifest,
         RuntimeArtifactVerifier,
-        SidecarConfig,
-        SubprocessConfig,
         SubprocessMediaNormalizer,
         SubprocessSupervisor,
         UrllibLoopbackTransport,
@@ -184,11 +212,6 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         raise RuntimeError("FFmpeg checksum changed between verification and smoke setup")
 
     endpoint = _allocate_loopback_endpoint()
-    sidecar_config = SidecarConfig(
-        endpoint=endpoint,
-        model_id=runtime_configuration.model_id,
-        backend=runtime_configuration.backend,
-    )
     executable_manifest = RuntimeArtifactManifest(
         version=runtime_configuration.executable_artifact.version,
         provenance_url=runtime_configuration.executable_artifact.provenance_url,
@@ -207,18 +230,13 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         runtime_path, executable_manifest, label="runtime executable"
     )
     RuntimeArtifactVerifier().verify_manifest(model_path, model_manifest, label="runtime model")
-    supervisor = SubprocessSupervisor(
-        SubprocessConfig(
-            executable=runtime_path,
-            model=model_path,
-            executable_sha256=executable_manifest.sha256,
-            model_sha256=model_manifest.sha256,
-            executable_manifest=executable_manifest,
-            model_manifest=model_manifest,
-            endpoint=sidecar_config.endpoint,
-            backend=sidecar_config.backend,
-        )
+    sidecar_config, subprocess_config = _build_native_smoke_configs(
+        runtime_configuration,
+        endpoint,
+        executable_manifest,
+        model_manifest,
     )
+    supervisor = SubprocessSupervisor(subprocess_config)
     events = JsonlEventWriter(
         Path(os.environ.get("VOICEINK_NATIVE_SMOKE_EVENTS", "native-smoke-events.jsonl"))
     )

@@ -102,8 +102,11 @@ jobs:
           $runtimeArchive = DownloadVerified (Required "VOICEINK_SIDECAR_ARCHIVE_URL") (Required "VOICEINK_SIDECAR_ARCHIVE_SHA256") "sidecar.zip"
           $runtimeRoot = Join-Path $env:RUNNER_TEMP "sidecar"
           Expand-Archive $runtimeArchive -DestinationPath $runtimeRoot -Force
-          $runtime = Get-ChildItem $runtimeRoot -Filter *.exe -Recurse | Select-Object -First 1
-          if ($null -eq $runtime) { throw "sidecar executable was not found in the pinned archive" }
+          $runtimeCandidates = @(Get-ChildItem $runtimeRoot -Filter nemo-speech.exe -Recurse -File)
+          if ($runtimeCandidates.Count -ne 1) {
+            throw "expected exactly one nemo-speech.exe in the pinned archive"
+          }
+          $runtime = $runtimeCandidates[0]
           $model = DownloadVerified (Required "VOICEINK_SIDECAR_MODEL_URL") (Required "VOICEINK_SIDECAR_MODEL_SHA256") "parakeet.gguf"
           $fixture = DownloadVerified (Required "VOICEINK_NATIVE_SMOKE_FIXTURE_URL") (Required "VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256") "native-fixture.bin"
           "VOICEINK_SIDECAR_EXECUTABLE=$($runtime.FullName)" | Out-File $env:GITHUB_ENV -Append
