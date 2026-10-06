@@ -23,7 +23,7 @@ from urllib.request import Request, urlopen
 
 from voiceink_win.domain import ConfigurationError, MissingModelError, RuntimeUnavailableError
 
-from .authentication import ASR_API_KEY_ENV, ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce
+from .authentication import ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce
 
 
 class ProcessHandle(Protocol):
@@ -259,13 +259,27 @@ class SubprocessConfig:
             raise ConfigurationError("runtime model checksum manifest mismatch")
         if not self.model_id.strip():
             raise ConfigurationError("runtime model_id must not be empty")
-        forbidden = {"--model", "--host", "--port", "--backend", "--asr-model"}
+        forbidden = {
+            "--model",
+            "--host",
+            "--port",
+            "--backend",
+            "--asr-model",
+            "--api-key",
+            "--http.api-key",
+        }
         if any(argument.split("=", 1)[0] in forbidden for argument in self.extra_args):
             raise ConfigurationError(
                 "runtime extra_args cannot override security-critical arguments"
             )
 
-    def argv(self) -> list[str]:
+    def argv(self, *, api_key: str) -> list[str]:
+        if (
+            not isinstance(api_key, str)
+            or not api_key
+            or any(ord(character) <= 0x20 for character in api_key)
+        ):
+            raise ConfigurationError("runtime API key must be a non-empty CLI-safe value")
         host, port = _validate_loopback_endpoint(self.endpoint)
         args = [
             str(self.executable),
@@ -277,6 +291,8 @@ class SubprocessConfig:
             "--port",
             str(port),
             "--no-ui",
+            "--api-key",
+            api_key,
         ]
         if self.backend.startswith("cuda:"):
             args.extend(["--asr.backend.gpu", self.backend.partition(":")[2]])
@@ -290,7 +306,6 @@ class UrllibReadinessProbe:
         self._url = f"{endpoint.rstrip('/')}/{path.lstrip('/')}"
         self._nonce: str | None = None
         self._api_key: str | None = None
-        self._attestation: dict[str, object] | None = None
 
     def set_nonce(self, nonce: str) -> None:
         if not isinstance(nonce, str) or not nonce:
@@ -302,20 +317,10 @@ class UrllibReadinessProbe:
             raise ConfigurationError("sidecar readiness API key must be non-empty")
         self._api_key = api_key
 
-    def configure_attestation(
-        self, *, pid: int, nonce: str, model_id: str, model_sha256: str, backend: str
-    ) -> None:
-        self.set_nonce(nonce)
-        self._attestation = {
-            "pid": pid,
-            "model_id": model_id,
-            "backend": backend,
-        }
-
     def ready(self, timeout: float) -> bool:
-        if self._nonce is None or self._attestation is None:
-            return False
-        headers = {ASR_NONCE_HEADER: self._nonce}
+        headers: dict[str, str] = {}
+        if self._nonce is not None:
+            headers[ASR_NONCE_HEADER] = self._nonce
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
         request = Request(self._url, headers=headers, method="GET")
@@ -327,7 +332,8 @@ class UrllibReadinessProbe:
                 return (
                     isinstance(payload, dict)
                     and payload.get("ready") is True
-                    and ("capabilities" not in payload or isinstance(payload["capabilities"], dict))
+                    and isinstance(payload.get("capabilities"), list)
+                    and "transcription" in payload["capabilities"]
                 )
         except (HTTPError, URLError, OSError, TimeoutError, ValueError, UnicodeDecodeError):
             return False
@@ -436,12 +442,7 @@ class SubprocessSupervisor:
             )
             if key in os.environ
         }
-        sidecar_environment.update(
-            {
-                ASR_API_KEY_ENV: self._api_key,
-                ASR_NONCE_ENV: self._nonce,
-            }
-        )
+        sidecar_environment[ASR_NONCE_ENV] = self._nonce
         kwargs = {
             "shell": False,
             "stdin": subprocess.DEVNULL,
@@ -476,16 +477,7 @@ class SubprocessSupervisor:
                     strict=True,
                 ):
                     lock.revalidate(manifest.sha256, manifest.allowed_path)
-            self._process = self._popen_factory(self.config.argv(), **kwargs)
-            configure_attestation = getattr(self._readiness_probe, "configure_attestation", None)
-            if configure_attestation is not None:
-                configure_attestation(
-                    pid=self._process.pid,
-                    nonce=self._nonce,
-                    model_id=self.config.model_id,
-                    model_sha256=self.config.model_sha256,
-                    backend=self.config.backend,
-                )
+            self._process = self._popen_factory(self.config.argv(api_key=self._api_key), **kwargs)
             if windows_job is not None and resume is not None:
                 windows_job.assign(self._process)
                 resume(self._process.pid)

@@ -1,7 +1,6 @@
 """Infrastructure adapters for the ASR foundation."""
 
 from .authentication import (
-    ASR_API_KEY_ENV,
     ASR_AUTHORIZATION_HEADER,
     ASR_NONCE_ENV,
     ASR_NONCE_HEADER,
@@ -71,7 +70,6 @@ __all__ = [
     "FakeAsrScenario",
     "ASR_NONCE_ENV",
     "ASR_NONCE_HEADER",
-    "ASR_API_KEY_ENV",
     "ASR_AUTHORIZATION_HEADER",
     "generate_nonce",
     "validate_nonce",

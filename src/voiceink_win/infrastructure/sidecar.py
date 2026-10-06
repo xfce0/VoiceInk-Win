@@ -613,17 +613,4 @@ def _validate_model_attestation(response: TransportResponse, expected_model_id: 
 
 
 def _supports_transcription(model: dict[str, object]) -> bool:
-    for field in ("transcription", "supports_transcription"):
-        if field in model and model[field] is not True:
-            return False
-    capabilities = model.get("capabilities")
-    if capabilities is None:
-        return True
-    if isinstance(capabilities, dict):
-        for field in ("transcription", "supports_transcription"):
-            if field in capabilities and capabilities[field] is not True:
-                return False
-        return True
-    if isinstance(capabilities, list):
-        return "transcription" in capabilities
-    return False
+    return model.get("capability") == "transcription"

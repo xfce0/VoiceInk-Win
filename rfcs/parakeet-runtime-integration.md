@@ -114,8 +114,8 @@ the production path because it reloads the model and makes cancellation,
 latency, and resource ownership unreliable.
 
 The sidecar transport uses a per-start API key even though it is local. The key
-is supplied through the inherited `NEMO_SPEECH_HTTP_API_KEY` environment
-variable and sent as `Authorization: Bearer` on `/v1` requests. Readiness uses
+is supplied to the official server through its documented `--api-key` launch
+option and sent as `Authorization: Bearer` on `/v1` requests. Readiness uses
 the official unauthenticated `/ready` endpoint, while the server remains
 loopback-only. The nonce is also sent in `X-VoiceInk-ASR-Nonce` for internal
 request correlation, but the official runtime does not validate that header.

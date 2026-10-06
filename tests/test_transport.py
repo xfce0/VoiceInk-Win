@@ -105,14 +105,9 @@ def test_readiness_probe_sends_nonce_header(monkeypatch) -> None:
             del amount
             return json.dumps(
                 {
-                    "schema": "voiceink.asr.health.v1",
-                    "protocol_version": 1,
                     "ready": True,
-                    "pid": 123,
-                    "nonce": "test-nonce",
-                    "model_id": "model",
-                    "model_sha256": "a" * 64,
-                    "backend": "cpu",
+                    "device": "cpu",
+                    "capabilities": ["transcription"],
                 }
             ).encode()
 
@@ -122,13 +117,7 @@ def test_readiness_probe_sends_nonce_header(monkeypatch) -> None:
         lambda request, timeout: requests.append((request, timeout)) or Response(),
     )
     probe = UrllibReadinessProbe("http://127.0.0.1:8123")
-    probe.configure_attestation(
-        pid=123,
-        nonce="test-nonce",
-        model_id="model",
-        model_sha256="a" * 64,
-        backend="cpu",
-    )
+    probe.set_nonce("test-nonce")
 
     assert probe.ready(1.0)
     headers = {name.casefold(): value for name, value in requests[0][0].header_items()}
@@ -154,13 +143,39 @@ def test_readiness_probe_rejects_forged_health_payload(monkeypatch) -> None:
         lambda request, timeout: Response(),
     )
     probe = UrllibReadinessProbe("http://127.0.0.1:8123")
-    probe.configure_attestation(
-        pid=123,
-        nonce="test-nonce",
-        model_id="model",
-        model_sha256="a" * 64,
-        backend="cpu",
+    probe.set_nonce("test-nonce")
+
+    assert not probe.ready(1.0)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ready": True},
+        {"ready": True, "capabilities": {"transcription": True}},
+        {"ready": True, "capabilities": ["speech"]},
+    ],
+)
+def test_readiness_probe_rejects_missing_or_wrong_capability(monkeypatch, payload) -> None:
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, amount: int) -> bytes:
+            del amount
+            return json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        "voiceink_win.infrastructure.process.urlopen",
+        lambda request, timeout: Response(),
     )
+    probe = UrllibReadinessProbe("http://127.0.0.1:8123")
+    probe.set_nonce("test-nonce")
 
     assert not probe.ready(1.0)
 

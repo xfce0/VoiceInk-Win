@@ -56,7 +56,18 @@ class FakeTransport:
         return TransportResponse(
             200,
             json.dumps(
-                {"object": "list", "data": [{"id": "parakeet-tdt-0.6b-v3.oss-align.q8_0"}]}
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "parakeet-tdt-0.6b-v3.oss-align.q8_0",
+                            "object": "model",
+                            "owned_by": "local",
+                            "capability": "transcription",
+                            "device": "cuda:0",
+                        }
+                    ],
+                }
             ).encode(),
         )
 
@@ -200,13 +211,28 @@ def test_sidecar_model_attestation_is_authenticated_and_fail_closed() -> None:
             del args, kwargs
             return TransportResponse(
                 200,
-                b'{"data":[{"id":"parakeet-tdt-0.6b-v3.oss-align.q8_0","capabilities":{"transcription":false}}]}',
+                b'{"data":[{"id":"parakeet-tdt-0.6b-v3.oss-align.q8_0","capability":"speech"}]}',
             )
 
     with pytest.raises(ConfigurationError, match="lacks transcription"):
         NeMoSidecarRuntime(
             SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
             UnsupportedModelTransport(TransportResponse(200, result_body())),
+            FakeSupervisor(),
+        ).start()
+
+    class MissingCapabilityTransport(FakeTransport):
+        def get(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return TransportResponse(
+                200,
+                b'{"data":[{"id":"parakeet-tdt-0.6b-v3.oss-align.q8_0"}]}',
+            )
+
+    with pytest.raises(ConfigurationError, match="lacks transcription"):
+        NeMoSidecarRuntime(
+            SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+            MissingCapabilityTransport(TransportResponse(200, result_body())),
             FakeSupervisor(),
         ).start()
 

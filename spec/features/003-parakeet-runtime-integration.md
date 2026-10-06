@@ -47,8 +47,9 @@ performance claims.
 12. Native smoke must fail when requested real ASR configuration is missing or
     invalid.
 13. The runtime must bind the server to loopback and generate a per-start API
-     key through `NEMO_SPEECH_HTTP_API_KEY`; all `/v1` transcription requests
-     must use `Authorization: Bearer`. Readiness must use the official `/ready`
+     key passed to the official `nemo-speech serve` process through its
+     documented `--api-key` option; all `/v1` transcription requests must use
+     `Authorization: Bearer`. Readiness must use the official `/ready`
      contract. The nonce header may be sent as an internal correlation value but
      is not treated as server-side authentication because the official runtime
      does not validate it.

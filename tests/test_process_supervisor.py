@@ -607,7 +607,7 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
     supervisor.start()
 
     assert supervisor.wait_ready(time.monotonic() + 1.0)
-    assert calls[0][0] == [
+    assert calls[0][0][:9] == [
         str(executable),
         "serve",
         "--asr-model",
@@ -617,11 +617,13 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         "--port",
         "8123",
         "--no-ui",
-        "--threads",
-        "2",
     ]
+    api_key_index = calls[0][0].index("--api-key")
+    assert calls[0][0][api_key_index + 1] == supervisor.api_key
+    assert calls[0][0][api_key_index + 2 :] == ["--threads", "2"]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["env"][process_module.ASR_NONCE_ENV] == supervisor.nonce
+    assert "NEMO_SPEECH_HTTP_API_KEY" not in calls[0][1]["env"]
     assert "GH_TOKEN" not in calls[0][1]["env"]
     assert "GITHUB_TOKEN" not in calls[0][1]["env"]
     assert supervisor.process_tree_mode == "posix-process-group"
@@ -648,6 +650,10 @@ def test_subprocess_config_rejects_non_loopback_endpoint(tmp_path: Path) -> None
         ("--host", "0.0.0.0"),
         ("--asr-model", "attacker.gguf"),
         ("--asr-model=attacker.gguf",),
+        ("--api-key", "attacker-key"),
+        ("--api-key=attacker-key",),
+        ("--http.api-key", "attacker-key"),
+        ("--http.api-key=attacker-key",),
     ],
 )
 def test_subprocess_config_rejects_security_critical_extra_args(

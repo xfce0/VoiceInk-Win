@@ -25,6 +25,8 @@ _REDACTED_KEYS = frozenset(
         "exception",
         "traceback",
         "authorization",
+        "api_key",
+        "api-key",
         "nonce",
     }
 )
