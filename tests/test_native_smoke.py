@@ -47,6 +47,7 @@ def test_native_smoke_uses_manifest_model_and_cold_start_readiness_timeout(
     assert SidecarConfig("http://127.0.0.1:8123").readiness_timeout == 10.0
     assert sidecar_config.model_id == "parakeet-custom-model"
     assert sidecar_config.readiness_timeout == 60.0
+    assert sidecar_config.require_model_attestation
     assert subprocess_config.model_id == "parakeet-custom-model"
 
 
@@ -56,3 +57,8 @@ def test_native_smoke_selects_named_sidecar_executable() -> None:
     assert "-Filter nemo-speech.exe" in workflow
     assert "-Filter *.exe" not in workflow
     assert "expected exactly one nemo-speech.exe" in workflow
+    assert "expected exactly one ffmpeg.exe" in workflow
+    assert "Invoke-WebRequest -Uri $url -OutFile $target -TimeoutSec 120" in workflow
+    assert "timeout-minutes: 30" in workflow
+    assert "permissions:" in workflow and "contents: read" in workflow
+    assert "native-smoke-setup.log" in workflow

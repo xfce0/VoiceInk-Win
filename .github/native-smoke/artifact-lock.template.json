@@ -1,0 +1,40 @@
+{
+  "schema": "voiceink.native-smoke.artifact-lock.v1",
+  "version": 1,
+  "artifacts": {
+    "ffmpeg": {
+      "kind": "archive",
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip",
+      "archive_sha256": "04861d3339c5ebe38b56c19a15cf2c0cc97f5de4fa8910e4d47e5e6404e4a2d4",
+      "executable_sha256": "b90225987bdd042cca09a1efb5e34e9848f2d1dbf5fbcd388753a44145522997",
+      "version": "7.1.1",
+      "provenance_url": "https://github.com/GyanD/codexffmpeg/releases/tag/7.1.1",
+      "license": "GPL-3.0-or-later"
+    },
+    "nemo-speech-cpp-windows-amd64": {
+      "kind": "archive",
+      "url": "https://github.com/NVIDIA-NeMo/NeMo-Speech-Cpp/releases/download/<PINNED_VERSION>/nemo-speech-cpp-windows-amd64.zip",
+      "archive_sha256": "REPLACE_WITH_SIDECAR_ARCHIVE_SHA256",
+      "executable_sha256": "REPLACE_WITH_SIDECAR_EXECUTABLE_SHA256",
+      "version": "REPLACE_WITH_SIDECAR_VERSION",
+      "provenance_url": "https://github.com/NVIDIA-NeMo/NeMo-Speech-Cpp/releases/tag/<PINNED_VERSION>",
+      "license": "REPLACE_WITH_SIDECAR_LICENSE"
+    },
+    "parakeet-tdt-v3": {
+      "kind": "model",
+      "url": "https://huggingface.co/<PINNED_MODEL_REPOSITORY>/resolve/<PINNED_MODEL_REVISION>/parakeet.gguf",
+      "sha256": "REPLACE_WITH_MODEL_SHA256",
+      "model_id": "parakeet-tdt-v3",
+      "version": "REPLACE_WITH_MODEL_VERSION",
+      "provenance_url": "https://huggingface.co/<PINNED_MODEL_REPOSITORY>",
+      "license": "REPLACE_WITH_MODEL_LICENSE"
+    },
+    "fixture": {
+      "kind": "fixture",
+      "url": "https://<PINNED_FIXTURE_HOST>/<PINNED_FIXTURE_PATH>",
+      "sha256": "REPLACE_WITH_FIXTURE_SHA256",
+      "provenance_url": "https://<PINNED_FIXTURE_HOST>/<PINNED_FIXTURE_PROVENANCE_PATH>",
+      "license": "REPLACE_WITH_FIXTURE_LICENSE"
+    }
+  }
+}

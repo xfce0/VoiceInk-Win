@@ -157,6 +157,28 @@ class UrllibLoopbackTransport:
         except HTTPError as error:
             return TransportResponse(error.code, self._read_bounded(error, max_response_bytes))
 
+    def get(
+        self,
+        path: str,
+        timeout: float | None,
+        max_response_bytes: int,
+        nonce: str | None = None,
+    ) -> TransportResponse:
+        if max_response_bytes < 1:
+            raise ValueError("max_response_bytes must be positive")
+        request = Request(
+            f"{self._endpoint}{_origin_path(path)}",
+            headers=self._headers("application/json", nonce),
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return TransportResponse(
+                    response.status, self._read_bounded(response, max_response_bytes)
+                )
+        except HTTPError as error:
+            return TransportResponse(error.code, self._read_bounded(error, max_response_bytes))
+
     def post_audio(
         self,
         path: str,

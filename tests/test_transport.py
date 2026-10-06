@@ -56,6 +56,29 @@ def test_transport_response_is_a_small_infrastructure_value() -> None:
     assert response.body == b"ok"
 
 
+def test_urllib_model_attestation_get_uses_api_credentials(monkeypatch) -> None:
+    requests = []
+
+    class Response(SizedHttpResponse):
+        status = 200
+
+    monkeypatch.setattr(
+        "voiceink_win.infrastructure.transport.urlopen",
+        lambda request, timeout: (
+            requests.append((request, timeout)) or Response(b'{"data":[{"id":"parakeet-tdt-v3"}]}')
+        ),
+    )
+    transport = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="test-nonce")
+    transport.set_api_key("test-api-key")
+
+    response = transport.get("/v1/models", timeout=1.0, max_response_bytes=1024)
+
+    assert response.status_code == 200
+    headers = {name.casefold(): value for name, value in requests[0][0].header_items()}
+    assert headers["authorization"] == "Bearer test-api-key"
+    assert headers[ASR_NONCE_HEADER.casefold()] == "test-nonce"
+
+
 def test_nonce_validation_is_constant_time_compatible_and_rejects_wrong_values() -> None:
     assert validate_nonce("nonce", "nonce")
     assert not validate_nonce("wrong", "nonce")

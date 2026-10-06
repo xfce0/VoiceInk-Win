@@ -31,7 +31,22 @@ class FakeTransport:
     def __init__(self, response: TransportResponse) -> None:
         self.response = response
         self.calls: list[tuple[str, bytes, float | None]] = []
+        self.get_calls: list[tuple[str, float | None, int]] = []
+        self.api_keys: list[str] = []
         self.closed = False
+
+    def set_api_key(self, api_key: str) -> None:
+        self.api_keys.append(api_key)
+
+    def get(
+        self, path: str, timeout: float | None, max_response_bytes: int, nonce: str | None = None
+    ) -> TransportResponse:
+        del nonce
+        self.get_calls.append((path, timeout, max_response_bytes))
+        return TransportResponse(
+            200,
+            json.dumps({"object": "list", "data": [{"id": "parakeet-tdt-v3"}]}).encode(),
+        )
 
     def post(
         self, path: str, body: bytes, timeout: float | None, max_response_bytes: int
@@ -69,6 +84,7 @@ class FakeSupervisor:
         self.terminated = False
         self.killed = False
         self.start_count = 0
+        self.api_key = "test-api-key"
 
     def start(self) -> None:
         self.started = True
@@ -139,6 +155,48 @@ def test_sidecar_start_transcribe_and_close_use_injected_boundaries() -> None:
     assert payload["schema"] == "voiceink.asr.request.v1"
     assert supervisor.started and supervisor.terminated
     assert transport.closed
+
+
+def test_sidecar_model_attestation_is_authenticated_and_fail_closed() -> None:
+    transport = FakeTransport(TransportResponse(200, result_body()))
+    supervisor = FakeSupervisor()
+    runtime = NeMoSidecarRuntime(
+        SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+        transport,
+        supervisor,
+    )
+
+    runtime.start()
+
+    assert transport.get_calls[0][0] == "/v1/models"
+    assert transport.api_keys == [supervisor.api_key]
+
+    class WrongModelTransport(FakeTransport):
+        def get(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return TransportResponse(200, b'{"data":[{"id":"other-model"}]}')
+
+    with pytest.raises(ConfigurationError, match="was not returned"):
+        NeMoSidecarRuntime(
+            SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+            WrongModelTransport(TransportResponse(200, result_body())),
+            FakeSupervisor(),
+        ).start()
+
+    class UnsupportedModelTransport(FakeTransport):
+        def get(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return TransportResponse(
+                200,
+                b'{"data":[{"id":"parakeet-tdt-v3","capabilities":{"transcription":false}}]}',
+            )
+
+    with pytest.raises(ConfigurationError, match="lacks transcription"):
+        NeMoSidecarRuntime(
+            SidecarConfig("http://127.0.0.1:8123", require_model_attestation=True),
+            UnsupportedModelTransport(TransportResponse(200, result_body())),
+            FakeSupervisor(),
+        ).start()
 
 
 def test_sidecar_uses_nemo_speech_multipart_contract_when_available() -> None:

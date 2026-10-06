@@ -44,6 +44,24 @@ def _load_runtime_configuration():
     )
 
 
+def _load_native_smoke_lock():
+    try:
+        from scripts.native_smoke_lock import load_native_smoke_lock
+    except ModuleNotFoundError:
+        from native_smoke_lock import load_native_smoke_lock
+
+    return load_native_smoke_lock(Path(_required("VOICEINK_NATIVE_SMOKE_ARTIFACT_LOCK")))
+
+
+def _pinned_required(name: str, expected: str) -> str:
+    try:
+        from scripts.native_smoke_lock import pinned_value
+    except ModuleNotFoundError:
+        from native_smoke_lock import pinned_value
+
+    return pinned_value(name, expected, _required(name))
+
+
 def _allocate_loopback_endpoint() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -72,6 +90,7 @@ def _build_native_smoke_configs(
         model_id=runtime_configuration.model_id,
         backend=runtime_configuration.backend,
         readiness_timeout=NATIVE_SMOKE_READINESS_TIMEOUT,
+        require_model_attestation=True,
     )
     subprocess_config = SubprocessConfig(
         executable=runtime_configuration.executable,
@@ -189,22 +208,43 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         safe_failure,
     )
 
+    native_lock = _load_native_smoke_lock()
+    pins = native_lock["artifacts"]
+    assert isinstance(pins, dict)
+    ffmpeg_pin = pins["ffmpeg"]
+    sidecar_pin = pins["nemo-speech-cpp-windows-amd64"]
+    model_pin = pins["parakeet-tdt-v3"]
+    fixture_pin = pins["fixture"]
+    assert isinstance(ffmpeg_pin, dict)
+    assert isinstance(sidecar_pin, dict)
+    assert isinstance(model_pin, dict)
+    assert isinstance(fixture_pin, dict)
     fixture = Path(_required("VOICEINK_NATIVE_SMOKE_FIXTURE")).resolve(strict=True)
-    fixture_sha256 = _required("VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256")
-    fixture_license = _required("VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE")
+    fixture_sha256 = _pinned_required("VOICEINK_NATIVE_SMOKE_FIXTURE_SHA256", fixture_pin["sha256"])
+    fixture_license = _pinned_required(
+        "VOICEINK_NATIVE_SMOKE_FIXTURE_LICENSE", fixture_pin["license"]
+    )
     ffmpeg_path = Path(_required("VOICEINK_FFMPEG_PATH")).resolve(strict=True)
-    ffmpeg_sha256 = _required("VOICEINK_FFMPEG_SHA256")
+    ffmpeg_sha256 = _pinned_required("VOICEINK_FFMPEG_SHA256", ffmpeg_pin["executable_sha256"])
     runtime_configuration = _load_runtime_configuration()
+    if runtime_configuration.model_id != model_pin["model_id"]:
+        raise RuntimeError("runtime manifest model ID does not match the tracked native smoke lock")
+    if runtime_configuration.executable_artifact.sha256 != sidecar_pin["executable_sha256"]:
+        raise RuntimeError("runtime executable hash does not match the tracked native smoke lock")
+    if runtime_configuration.model_artifact.sha256 != model_pin["sha256"]:
+        raise RuntimeError("runtime model hash does not match the tracked native smoke lock")
     runtime_path = runtime_configuration.executable
     model_path = runtime_configuration.model
     source_sha256 = _hash(fixture)
     if source_sha256.lower() != fixture_sha256.lower():
         raise RuntimeError("native smoke fixture checksum mismatch")
     manifest = FfmpegArtifactManifest(
-        version=_required("VOICEINK_FFMPEG_VERSION"),
-        provenance_url=_required("VOICEINK_FFMPEG_PROVENANCE_URL"),
+        version=_pinned_required("VOICEINK_FFMPEG_VERSION", ffmpeg_pin["version"]),
+        provenance_url=_pinned_required(
+            "VOICEINK_FFMPEG_PROVENANCE_URL", ffmpeg_pin["provenance_url"]
+        ),
         sha256=ffmpeg_sha256,
-        license=_required("VOICEINK_FFMPEG_LICENSE"),
+        license=_pinned_required("VOICEINK_FFMPEG_LICENSE", ffmpeg_pin["license"]),
         allowed_path=ffmpeg_path,
     )
     artifact = VerifiedFfmpegArtifact.verify(ffmpeg_path, manifest)
@@ -319,6 +359,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                     "pipeline": "passed",
                     "fixture_sha256": source_sha256,
                     "fixture_license": fixture_license,
+                    "fixture_provenance_url": fixture_pin["provenance_url"],
                     "source_sha256_unchanged": _hash(fixture) == source_sha256,
                     "sample_count": normalized.sample_count,
                     "transcript_non_empty": True,
