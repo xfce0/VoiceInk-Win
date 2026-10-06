@@ -583,6 +583,8 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
         extra_args=("--threads", "2"),
     )
     process = FakeProcess()
+    monkeypatch.setenv("GH_TOKEN", "must-not-be-inherited")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-be-inherited")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def popen(argv: list[str], **kwargs):
@@ -620,6 +622,8 @@ def test_subprocess_supervisor_uses_safe_argv_and_bounded_readiness(
     ]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["env"][process_module.ASR_NONCE_ENV] == supervisor.nonce
+    assert "GH_TOKEN" not in calls[0][1]["env"]
+    assert "GITHUB_TOKEN" not in calls[0][1]["env"]
     assert supervisor.process_tree_mode == "posix-process-group"
     supervisor.terminate(time.monotonic() + 1.0)
     assert killpg_calls

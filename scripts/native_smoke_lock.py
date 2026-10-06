@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 SCHEMA = "voiceink.native-smoke.artifact-lock.v1"
 _HEX = frozenset("0123456789abcdefABCDEF")
 _PLACEHOLDER_PREFIX = "REPLACE_WITH_"
+PARAKEET_MODEL_ID = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
 
 
 def load_native_smoke_lock(
@@ -30,7 +31,7 @@ def load_native_smoke_lock(
     if not isinstance(artifacts, dict) or set(artifacts) != {
         "ffmpeg",
         "nemo-speech-cpp-windows-amd64",
-        "parakeet-tdt-v3",
+        PARAKEET_MODEL_ID,
         "fixture",
     }:
         raise ValueError("native smoke artifact lock must contain the required artifacts")
@@ -40,7 +41,7 @@ def load_native_smoke_lock(
         "nemo-speech-cpp-windows-amd64",
         allow_template,
     )
-    _validate_model(artifacts["parakeet-tdt-v3"], allow_template)
+    _validate_model(artifacts[PARAKEET_MODEL_ID], allow_template)
     _validate_fixture(artifacts["fixture"], allow_template)
     return value
 
@@ -81,7 +82,7 @@ def _validate_model(value: object, allow_template: bool) -> None:
     _require_fields(
         value,
         {"kind", "url", "sha256", "model_id", "version", "provenance_url", "license"},
-        "parakeet-tdt-v3",
+        PARAKEET_MODEL_ID,
     )
     assert isinstance(value, dict)
     if value["kind"] != "model":

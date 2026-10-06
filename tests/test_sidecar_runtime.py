@@ -5,10 +5,12 @@ import time
 
 import pytest
 
+from voiceink_win.application import CancellationTokenSource
 from voiceink_win.domain import (
     AsrRequest,
     AsrTimeoutError,
     BackendUnavailableError,
+    CancellationError,
     CanonicalAudio,
     ConfigurationError,
     ExecutionError,
@@ -45,7 +47,9 @@ class FakeTransport:
         self.get_calls.append((path, timeout, max_response_bytes))
         return TransportResponse(
             200,
-            json.dumps({"object": "list", "data": [{"id": "parakeet-tdt-v3"}]}).encode(),
+            json.dumps(
+                {"object": "list", "data": [{"id": "parakeet-tdt-0.6b-v3.oss-align.q8_0"}]}
+            ).encode(),
         )
 
     def post(
@@ -188,7 +192,7 @@ def test_sidecar_model_attestation_is_authenticated_and_fail_closed() -> None:
             del args, kwargs
             return TransportResponse(
                 200,
-                b'{"data":[{"id":"parakeet-tdt-v3","capabilities":{"transcription":false}}]}',
+                b'{"data":[{"id":"parakeet-tdt-0.6b-v3.oss-align.q8_0","capabilities":{"transcription":false}}]}',
             )
 
     with pytest.raises(ConfigurationError, match="lacks transcription"):
@@ -227,6 +231,32 @@ def test_sidecar_uses_nemo_speech_multipart_contract_when_available() -> None:
     assert result.text == "hello"
     assert result.detected_language == "en"
     assert transport.calls[0][:2] == ("/v1/audio/transcriptions", b"json")
+
+
+def test_sidecar_discards_a_multipart_result_if_cancellation_arrives_during_transport() -> None:
+    cancellation = CancellationTokenSource()
+
+    class LateTransport(FakeTransport):
+        def post_multipart_audio(self, *args, **kwargs):
+            del args, kwargs
+            cancellation.cancel()
+            return TransportResponse(
+                200,
+                json.dumps({"text": "late", "duration": 0.002, "language": "en"}).encode(),
+            )
+
+    runtime = NeMoSidecarRuntime(
+        config(), LateTransport(TransportResponse(500, b"unused")), FakeSupervisor()
+    )
+    runtime.start()
+    request_with_cancellation = AsrRequest(
+        request().audio,
+        request_id="late-result",
+        cancellation=cancellation.token,
+    )
+
+    with pytest.raises(CancellationError):
+        runtime.transcribe(request_with_cancellation)
 
 
 @pytest.mark.parametrize(

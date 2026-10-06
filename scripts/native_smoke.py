@@ -213,7 +213,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     assert isinstance(pins, dict)
     ffmpeg_pin = pins["ffmpeg"]
     sidecar_pin = pins["nemo-speech-cpp-windows-amd64"]
-    model_pin = pins["parakeet-tdt-v3"]
+    model_pin = pins["parakeet-tdt-0.6b-v3.oss-align.q8_0"]
     fixture_pin = pins["fixture"]
     assert isinstance(ffmpeg_pin, dict)
     assert isinstance(sidecar_pin, dict)

@@ -58,6 +58,7 @@ def test_native_smoke_selects_named_sidecar_executable() -> None:
     assert "-Filter *.exe" not in workflow
     assert "expected exactly one nemo-speech.exe" in workflow
     assert "expected exactly one ffmpeg.exe" in workflow
+    assert "persist-credentials: false" in workflow
     assert "Invoke-WebRequest -Uri $url -OutFile $target -TimeoutSec 120" in workflow
     assert "timeout-minutes: 30" in workflow
     assert "permissions:" in workflow and "contents: read" in workflow

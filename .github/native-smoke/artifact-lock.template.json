@@ -20,11 +20,11 @@
       "provenance_url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.2.0",
       "license": "Apache-2.0"
     },
-    "parakeet-tdt-v3": {
+    "parakeet-tdt-0.6b-v3.oss-align.q8_0": {
       "kind": "model",
       "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/parakeet-tdt-0.6b-v3.q8_0.gguf",
       "sha256": "e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e",
-      "model_id": "parakeet-tdt-v3",
+      "model_id": "parakeet-tdt-0.6b-v3.oss-align.q8_0",
       "version": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
       "provenance_url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/tree/541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
       "license": "CC-BY-4.0"

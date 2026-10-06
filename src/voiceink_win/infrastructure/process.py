@@ -241,7 +241,7 @@ class SubprocessConfig:
     endpoint: str
     backend: str = "cpu"
     extra_args: tuple[str, ...] = ()
-    model_id: str = "parakeet-tdt-v3"
+    model_id: str = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
 
     def __post_init__(self) -> None:
         _validate_loopback_endpoint(self.endpoint)
@@ -422,16 +422,32 @@ class SubprocessSupervisor:
         except BaseException:
             self._close_artifact_locks()
             raise
+        sidecar_environment = {
+            key: os.environ[key]
+            for key in (
+                "PATH",
+                "SystemRoot",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+                "LOCALAPPDATA",
+                "CUDA_PATH",
+                "CUDA_VISIBLE_DEVICES",
+            )
+            if key in os.environ
+        }
+        sidecar_environment.update(
+            {
+                ASR_API_KEY_ENV: self._api_key,
+                ASR_NONCE_ENV: self._nonce,
+            }
+        )
         kwargs = {
             "shell": False,
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
-            "env": {
-                **os.environ,
-                ASR_API_KEY_ENV: self._api_key,
-                ASR_NONCE_ENV: self._nonce,
-            },
+            "env": sidecar_environment,
         }
         if os.name != "nt":
             kwargs["start_new_session"] = True

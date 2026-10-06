@@ -101,7 +101,7 @@ def _validate_loopback_endpoint(endpoint: str) -> None:
 @dataclass(frozen=True, slots=True)
 class SidecarConfig:
     endpoint: str
-    model_id: str = "parakeet-tdt-v3"
+    model_id: str = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
     backend: str = "cpu"
     readiness_timeout: float = 10.0
     shutdown_timeout: float = 5.0
@@ -343,11 +343,13 @@ class NeMoSidecarRuntime:
             if isinstance(error, ProcessCrashedError):
                 self._restart_after_crash(deadline)
             raise error
-        return (
+        result = (
             decode_nemo_result(response.body, request.audio.duration)
             if post_multipart_audio is not None
             else decode_result(response.body)
         )
+        self._check_request_lifecycle(request, deadline)
+        return result
 
     def close(self, deadline: float | None = None) -> None:
         if self._closed:

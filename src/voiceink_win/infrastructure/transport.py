@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import errno
-import io
 import selectors
 import socket
-import wave
+import struct
 from dataclasses import dataclass
 from time import monotonic
 from urllib.error import HTTPError
@@ -89,44 +88,46 @@ class UrllibLoopbackTransport:
         nonce: str | None = None,
     ) -> TransportResponse:
         """Send canonical PCM as the WAV multipart form expected by NeMo-Speech.cpp."""
+        if max_response_bytes < 1:
+            raise ValueError("max_response_bytes must be positive")
         if cancellation is not None and cancellation.is_cancelled():
             raise CancellationError("sidecar request was cancelled")
         if deadline is not None and self._now() >= deadline:
             raise TimeoutError("sidecar request timed out")
         boundary = "----VoiceInkASR" + self._effective_nonce(nonce)[:16]
-        wav_body = _wav_bytes(pcm, sample_rate)
+        pcm_bytes = memoryview(pcm).cast("B")
+        wav_header = _wav_header(pcm_bytes, sample_rate)
         fields = {"model": model, "response_format": response_format}
         if language is not None:
             fields["language"] = language
-        body = bytearray()
+        parts: list[bytes | memoryview] = []
         for name, value in fields.items():
             field_header = (
                 f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'
             )
-            body.extend(field_header.encode())
+            parts.append(field_header.encode("utf-8"))
         file_header = (
             f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
             'filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n'
         )
-        body.extend(file_header.encode())
-        body.extend(wav_body)
-        body.extend(f"\r\n--{boundary}--\r\n".encode())
-        request = Request(
-            f"{self._endpoint}{_origin_path(path)}",
-            data=bytes(body),
-            headers={
-                **self._headers(f"multipart/form-data; boundary={boundary}", nonce),
-                "Content-Length": str(len(body)),
-            },
-            method="POST",
+        parts.extend(
+            (
+                file_header.encode("ascii"),
+                wav_header,
+                pcm_bytes,
+                f"\r\n--{boundary}--\r\n".encode("ascii"),
+            )
         )
-        try:
-            with urlopen(request, timeout=timeout) as response:
-                return TransportResponse(
-                    response.status, self._read_bounded(response, max_response_bytes)
-                )
-        except HTTPError as error:
-            return TransportResponse(error.code, self._read_bounded(error, max_response_bytes))
+        return self._post_streamed(
+            path,
+            parts,
+            f"multipart/form-data; boundary={boundary}",
+            timeout,
+            max_response_bytes,
+            cancellation,
+            deadline,
+            nonce,
+        )
 
     def post(
         self,
@@ -197,6 +198,51 @@ class UrllibLoopbackTransport:
             raise CancellationError("sidecar request was cancelled")
         request_path = _origin_path(path)
         authenticated_nonce = self._effective_nonce(nonce)
+        pcm_bytes = memoryview(pcm).cast("B")
+        parsed = urlsplit(self._endpoint)
+        if parsed.port is None:
+            raise ConfigurationError("transport endpoint must include a port")
+        if len(metadata) > _MAX_RESPONSE_HEADER_BYTES or b"\r" in metadata or b"\n" in metadata:
+            raise ProtocolError("sidecar metadata is not a valid header value")
+        if parsed.path.rstrip("/"):
+            request_path = f"{parsed.path.rstrip('/')}{request_path}"
+        request = self._request_headers(
+            request_path,
+            "application/octet-stream",
+            len(pcm_bytes),
+            authenticated_nonce,
+            metadata_header=True,
+        )
+        return self._post_streamed(
+            request_path,
+            (request, metadata, b"\r\n\r\n", pcm_bytes),
+            None,
+            timeout,
+            max_response_bytes,
+            cancellation,
+            deadline,
+            nonce,
+            already_normalized=True,
+            content_length=len(pcm_bytes),
+        )
+
+    def _post_streamed(
+        self,
+        path: str,
+        parts: tuple[bytes | memoryview, ...] | list[bytes | memoryview],
+        content_type: str | None,
+        timeout: float | None,
+        max_response_bytes: int,
+        cancellation,
+        deadline: float | None,
+        nonce: str | None,
+        *,
+        already_normalized: bool = False,
+        content_length: int | None = None,
+    ) -> TransportResponse:
+        if max_response_bytes < 1:
+            raise ValueError("max_response_bytes must be positive")
+        request_path = path if already_normalized else _origin_path(path)
         parsed = urlsplit(self._endpoint)
         if parsed.port is None:
             raise ConfigurationError("transport endpoint must include a port")
@@ -207,39 +253,66 @@ class UrllibLoopbackTransport:
             if timeout is not None
             else None
         )
+        if content_length is None:
+            content_length = sum(len(part) for part in parts)
+        if content_type is not None:
+            request = self._request_headers(
+                request_path,
+                content_type,
+                content_length,
+                self._effective_nonce(nonce),
+            )
+            wire_parts: tuple[bytes | memoryview, ...] = (request, *parts)
+        else:
+            wire_parts = tuple(parts)
         connection = self._connect_cancellable(
             parsed.hostname, parsed.port, operation_deadline, cancellation
         )
         connection.setblocking(False)
         try:
-            if len(metadata) > _MAX_RESPONSE_HEADER_BYTES or b"\r" in metadata or b"\n" in metadata:
-                raise ProtocolError("sidecar metadata is not a valid header value")
-            if parsed.path.rstrip("/"):
-                request_path = f"{parsed.path.rstrip('/')}{request_path}"
-            host = parsed.hostname
-            host_header = f"[{host}]" if ":" in host else host
-            request = (
-                f"POST {request_path} HTTP/1.1\r\n"
-                f"Host: {host_header}:{parsed.port}\r\n"
-                "Connection: close\r\n"
-                "Content-Type: application/octet-stream\r\n"
-                f"Content-Length: {len(pcm)}\r\n"
-                f"{ASR_NONCE_HEADER}: {authenticated_nonce}\r\n"
-                "X-VoiceInk-ASR-Metadata: "
-            ).encode("ascii")
-            request += metadata + b"\r\n\r\n"
             with selectors.DefaultSelector() as selector:
                 selector.register(connection, selectors.EVENT_WRITE)
-                self._send_cancellable(
-                    selector, connection, request, operation_deadline, cancellation
-                )
-                self._send_cancellable(selector, connection, pcm, operation_deadline, cancellation)
+                for part in wire_parts:
+                    self._send_cancellable(
+                        selector, connection, part, operation_deadline, cancellation
+                    )
                 selector.modify(connection, selectors.EVENT_READ)
                 return self._receive_response(
                     selector, connection, operation_deadline, cancellation, max_response_bytes
                 )
         finally:
             connection.close()
+
+    def _request_headers(
+        self,
+        path: str,
+        content_type: str,
+        content_length: int,
+        nonce: str,
+        *,
+        metadata_header: bool = False,
+    ) -> bytes:
+        parsed = urlsplit(self._endpoint)
+        host = parsed.hostname
+        host_header = f"[{host}]" if ":" in host else host
+        authorization = (
+            f"{ASR_AUTHORIZATION_HEADER}: Bearer {self._api_key}\r\n"
+            if self._api_key is not None
+            else ""
+        )
+        metadata = "X-VoiceInk-ASR-Metadata: " if metadata_header else ""
+        header_terminator = "" if metadata_header else "\r\n"
+        return (
+            f"POST {path} HTTP/1.1\r\n"
+            f"Host: {host_header}:{parsed.port}\r\n"
+            "Connection: close\r\n"
+            f"Content-Type: {content_type}\r\n"
+            f"Content-Length: {content_length}\r\n"
+            f"{ASR_NONCE_HEADER}: {nonce}\r\n"
+            f"{authorization}"
+            f"{metadata}"
+            f"{header_terminator}"
+        ).encode("ascii")
 
     def _connect_cancellable(self, host, port, deadline, cancellation) -> socket.socket:
         if host in {"localhost", "127.0.0.1"}:
@@ -479,11 +552,26 @@ class UrllibLoopbackTransport:
         return headers
 
 
-def _wav_bytes(pcm: memoryview, sample_rate: int) -> bytes:
-    stream = io.BytesIO()
-    with wave.open(stream, "wb") as output:
-        output.setnchannels(1)
-        output.setsampwidth(2)
-        output.setframerate(sample_rate)
-        output.writeframes(pcm)
-    return stream.getvalue()
+def _wav_header(pcm: memoryview, sample_rate: int) -> bytes:
+    if not 1 <= sample_rate <= 0xFFFFFFFF:
+        raise ValueError("sample_rate must be a positive 32-bit integer")
+    if pcm.nbytes % 2:
+        raise ValueError("PCM16 audio must contain an even number of bytes")
+    if pcm.nbytes > 0xFFFFFFFF - 36:
+        raise ValueError("PCM16 audio is too large for a WAV container")
+    return struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + pcm.nbytes,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        sample_rate,
+        sample_rate * 2,
+        2,
+        16,
+        b"data",
+        pcm.nbytes,
+    )

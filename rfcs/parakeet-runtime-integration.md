@@ -232,7 +232,7 @@ Native smoke writes JSONL events with this schema:
   "timestamp_utc": "<RFC 3339 timestamp>",
   "duration_seconds": 7.78,
   "backend": "cpu",
-  "model_id": "parakeet-tdt-v3",
+  "model_id": "parakeet-tdt-0.6b-v3.oss-align.q8_0",
   "transcript_length": 42
 }
 ```

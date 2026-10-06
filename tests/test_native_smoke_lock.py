@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.native_smoke_lock import load_native_smoke_lock, pinned_value
+from scripts.native_smoke_lock import PARAKEET_MODEL_ID, load_native_smoke_lock, pinned_value
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,11 +35,11 @@ def _lock() -> dict[str, object]:
                 "provenance_url": "https://example.invalid/sidecar",
                 "license": "Apache-2.0",
             },
-            "parakeet-tdt-v3": {
+            "parakeet-tdt-0.6b-v3.oss-align.q8_0": {
                 "kind": "model",
                 "url": "https://example.invalid/model.gguf",
                 "sha256": digest,
-                "model_id": "parakeet-tdt-v3",
+                "model_id": "parakeet-tdt-0.6b-v3.oss-align.q8_0",
                 "version": "1",
                 "provenance_url": "https://example.invalid/model",
                 "license": "CC-BY-4.0",
@@ -75,3 +75,10 @@ def test_tracked_lock_is_reviewable_template() -> None:
     loaded = load_native_smoke_lock(path, allow_template=True)
 
     assert loaded["schema"] == "voiceink.native-smoke.artifact-lock.v1"
+
+
+def test_tracked_parakeet_id_matches_the_gguf_general_name() -> None:
+    loaded = load_native_smoke_lock(ROOT / ".github/native-smoke/artifact-lock.template.json")
+
+    assert PARAKEET_MODEL_ID == "parakeet-tdt-0.6b-v3.oss-align.q8_0"
+    assert loaded["artifacts"][PARAKEET_MODEL_ID]["model_id"] == PARAKEET_MODEL_ID
