@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import math
 import os
 import socket
 import subprocess
@@ -193,7 +194,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         raise error
 
     from voiceink_win.application import AsrApplicationService
-    from voiceink_win.domain import AsrRequest, JobId
+    from voiceink_win.domain import JobId
     from voiceink_win.infrastructure import (
         FfmpegArtifactManifest,
         JsonlEventWriter,
@@ -335,21 +336,29 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             normalized = normalizer.normalize(
                 snapshot, workspace, _NeverCancelled(), monotonic() + 60
             )
-            result = asr.transcribe(
-                AsrRequest(
-                    normalized.audio,
-                    request_id="native-smoke",
-                    deadline=monotonic() + 60,
-                )
+            result, cold_timing = _transcribe_with_timing(
+                asr, normalized.audio, "native-smoke-cold"
             )
-            if not result.text.strip():
-                raise RuntimeError("configured ASR returned an empty transcript")
             events.event(
                 "asr.completed",
+                phase="cold",
                 backend=sidecar_config.backend,
                 model_id=sidecar_config.model_id,
                 duration_seconds=result.duration,
                 transcript_length=len(result.text),
+                **cold_timing,
+            )
+            warm_result, warm_timing = _transcribe_with_timing(
+                asr, normalized.audio, "native-smoke-warm"
+            )
+            events.event(
+                "asr.completed",
+                phase="warm",
+                backend=sidecar_config.backend,
+                model_id=sidecar_config.model_id,
+                duration_seconds=warm_result.duration,
+                transcript_length=len(warm_result.text),
+                **warm_timing,
             )
             health = runtime.health()
             if health.status.value != "ready":
@@ -363,6 +372,12 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                     "source_sha256_unchanged": _hash(fixture) == source_sha256,
                     "sample_count": normalized.sample_count,
                     "transcript_non_empty": True,
+                    "warm_transcript_non_empty": True,
+                    "timings": {"cold": cold_timing, "warm": warm_timing},
+                    "quality_gate": {
+                        "status": "not_evaluated",
+                        "reason": "no reference corpus configured",
+                    },
                     "runtime": {
                         "model_id": sidecar_config.model_id,
                         "backend": sidecar_config.backend,
@@ -444,9 +459,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             except Exception as error:
                 report["runtime_close_error"] = type(error).__name__
         if runtime_started:
-            events.event(
-                "runtime.cleaned", status="failed" if "runtime_close_error" in report else "passed"
-            )
+            events.event("runtime.cleaned", status=_cleanup_status(report))
         events.close()
         _write_report(report_path, report)
 
@@ -463,6 +476,41 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     _write_report(report_path, report)
     print("native snapshot/FFmpeg/ASR smoke passed; no fake adapter was used")
     return 0
+
+
+def _transcribe_with_timing(asr, audio, request_id: str):
+    from voiceink_win.domain import AsrRequest
+
+    started = monotonic()
+    result = asr.transcribe(AsrRequest(audio, request_id=request_id, deadline=started + 60))
+    elapsed = max(0.0, monotonic() - started)
+    if not result.text.strip():
+        raise RuntimeError(f"{request_id} returned an empty transcript")
+    return result, {
+        "elapsed_seconds": elapsed,
+        "rtfx": _safe_rtfx(result.duration, elapsed),
+    }
+
+
+def _safe_rtfx(audio_duration: float, elapsed: float) -> float | None:
+    if (
+        not math.isfinite(audio_duration)
+        or not math.isfinite(elapsed)
+        or audio_duration <= 0
+        or elapsed <= 0
+    ):
+        return None
+    return audio_duration / elapsed
+
+
+def _cleanup_status(report: dict[str, object]) -> str:
+    return (
+        "failed"
+        if any(
+            key in report for key in ("cleanup_errors", "asr_close_error", "runtime_close_error")
+        )
+        else "passed"
+    )
 
 
 class _NeverCancelled:
@@ -555,8 +603,8 @@ def _run_snapshot_security_probes_with_store(
 
     inputs = root / "inputs"
     target = root / "junction-target"
-    inputs.mkdir(parents=True)
-    target.mkdir()
+    inputs.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
     original = b"native snapshot security fixture"
 
     def expect_changed(path: Path, mutation) -> None:

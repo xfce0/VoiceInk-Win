@@ -34,8 +34,13 @@ class FakeTransport:
         self.response = response
         self.calls: list[tuple[str, bytes, float | None]] = []
         self.get_calls: list[tuple[str, float | None, int]] = []
+        self.nonces: list[str] = []
         self.api_keys: list[str] = []
+        self.attestation_credentials: list[tuple[str | None, str | None]] = []
         self.closed = False
+
+    def set_nonce(self, nonce: str) -> None:
+        self.nonces.append(nonce)
 
     def set_api_key(self, api_key: str) -> None:
         self.api_keys.append(api_key)
@@ -45,6 +50,9 @@ class FakeTransport:
     ) -> TransportResponse:
         del nonce
         self.get_calls.append((path, timeout, max_response_bytes))
+        self.attestation_credentials.append(
+            (self.nonces[-1] if self.nonces else None, self.api_keys[-1] if self.api_keys else None)
+        )
         return TransportResponse(
             200,
             json.dumps(
@@ -382,6 +390,47 @@ def test_sidecar_restarts_after_crash_for_the_retry_attempt() -> None:
     assert supervisor.terminated
     assert supervisor.running
 
+    assert runtime.transcribe(request()).text == "hello"
+
+
+def test_sidecar_restart_syncs_rotating_credentials_and_repeats_attestation() -> None:
+    class RotatingSupervisor(FakeSupervisor):
+        def start(self) -> None:
+            super().start()
+            self.nonce = f"nonce-{self.start_count}"
+            self.api_key = f"api-key-{self.start_count}"
+
+    class SequencedTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__(TransportResponse(500, error_body("process_crashed")))
+            self.responses = [self.response, TransportResponse(200, result_body())]
+
+        def post_audio(self, *args, **kwargs) -> TransportResponse:
+            del args, kwargs
+            return self.responses.pop(0)
+
+    supervisor = RotatingSupervisor()
+    transport = SequencedTransport()
+    runtime = NeMoSidecarRuntime(
+        SidecarConfig(
+            "http://127.0.0.1:8123",
+            require_model_attestation=True,
+        ),
+        transport,
+        supervisor,
+    )
+    runtime.start()
+
+    with pytest.raises(ProcessCrashedError):
+        runtime.transcribe(request())
+
+    assert transport.nonces == ["nonce-1", "nonce-2"]
+    assert transport.api_keys == ["api-key-1", "api-key-2"]
+    assert transport.attestation_credentials == [
+        ("nonce-1", "api-key-1"),
+        ("nonce-2", "api-key-2"),
+    ]
+    assert len(transport.get_calls) == 2
     assert runtime.transcribe(request()).text == "hello"
 
 

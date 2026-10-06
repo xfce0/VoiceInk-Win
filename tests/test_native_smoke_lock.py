@@ -82,3 +82,13 @@ def test_tracked_parakeet_id_matches_the_gguf_general_name() -> None:
 
     assert PARAKEET_MODEL_ID == "parakeet-tdt-0.6b-v3.oss-align.q8_0"
     assert loaded["artifacts"][PARAKEET_MODEL_ID]["model_id"] == PARAKEET_MODEL_ID
+
+
+def test_native_smoke_lock_rejects_model_id_mismatch_with_artifact_key(tmp_path: Path) -> None:
+    value = _lock()
+    value["artifacts"][PARAKEET_MODEL_ID]["model_id"] = "different-model"
+    path = tmp_path / "lock.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical artifact key"):
+        load_native_smoke_lock(path)

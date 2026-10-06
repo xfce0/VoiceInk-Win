@@ -41,7 +41,7 @@ def load_native_smoke_lock(
         "nemo-speech-cpp-windows-amd64",
         allow_template,
     )
-    _validate_model(artifacts[PARAKEET_MODEL_ID], allow_template)
+    _validate_model(artifacts[PARAKEET_MODEL_ID], PARAKEET_MODEL_ID, allow_template)
     _validate_fixture(artifacts["fixture"], allow_template)
     return value
 
@@ -78,19 +78,21 @@ def _validate_archive(value: object, label: str, allow_template: bool) -> None:
     _text(value["license"], f"{label}.license", allow_template)
 
 
-def _validate_model(value: object, allow_template: bool) -> None:
+def _validate_model(value: object, artifact_key: str, allow_template: bool) -> None:
     _require_fields(
         value,
         {"kind", "url", "sha256", "model_id", "version", "provenance_url", "license"},
-        PARAKEET_MODEL_ID,
+        artifact_key,
     )
     assert isinstance(value, dict)
     if value["kind"] != "model":
         raise ValueError("model kind is invalid")
+    if value["model_id"] != artifact_key:
+        raise ValueError("model.model_id must exactly match its canonical artifact key")
     _https(value["url"], "model.url", allow_template)
     _https(value["provenance_url"], "model.provenance_url", allow_template)
     _hash(value["sha256"], "model.sha256", allow_template)
-    _text(value["model_id"], "model.model_id", allow_template)
+    _text(value["model_id"], f"{artifact_key}.model_id", allow_template)
     _text(value["version"], "model.version", allow_template)
     _text(value["license"], "model.license", allow_template)
 

@@ -193,14 +193,7 @@ class NeMoSidecarRuntime:
         startup_error: AsrError | None = None
         try:
             self._supervisor.start()
-            nonce = getattr(self._supervisor, "nonce", None) or generate_nonce()
-            set_transport_nonce = getattr(self._transport, "set_nonce", None)
-            if set_transport_nonce is not None:
-                set_transport_nonce(nonce)
-            api_key = getattr(self._supervisor, "api_key", None)
-            set_transport_api_key = getattr(self._transport, "set_api_key", None)
-            if api_key is not None and set_transport_api_key is not None:
-                set_transport_api_key(api_key)
+            self._sync_transport_credentials()
             readiness_deadline = self._clock.monotonic() + self._config.readiness_timeout
             ready = self._supervisor.wait_ready(readiness_deadline)
             if not ready:
@@ -500,10 +493,13 @@ class NeMoSidecarRuntime:
             try:
                 self._supervisor.start()
                 started = True
+                self._sync_transport_credentials()
                 if not self._supervisor.wait_ready(deadline):
                     raise RuntimeUnavailableError("sidecar did not become ready after a crash")
                 if not self._supervisor.is_running():
                     raise ProcessCrashedError("sidecar exited during crash recovery")
+                if self._config.require_model_attestation:
+                    self._attest_configured_model(deadline)
             except BaseException as error:
                 if started:
                     self._started = False
@@ -531,6 +527,16 @@ class NeMoSidecarRuntime:
             ) from error
         except Exception as error:
             raise ExecutionError("sidecar crash recovery failed", cause=error) from error
+
+    def _sync_transport_credentials(self) -> None:
+        nonce = getattr(self._supervisor, "nonce", None) or generate_nonce()
+        set_transport_nonce = getattr(self._transport, "set_nonce", None)
+        if set_transport_nonce is not None:
+            set_transport_nonce(nonce)
+        api_key = getattr(self._supervisor, "api_key", None)
+        set_transport_api_key = getattr(self._transport, "set_api_key", None)
+        if api_key is not None and set_transport_api_key is not None:
+            set_transport_api_key(api_key)
 
     def _kill_supervisor(self, deadline: float) -> None:
         kill = self._supervisor.kill
