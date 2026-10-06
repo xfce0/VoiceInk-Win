@@ -13,28 +13,28 @@
     },
     "nemo-speech-cpp-windows-amd64": {
       "kind": "archive",
-      "url": "https://github.com/NVIDIA-NeMo/NeMo-Speech-Cpp/releases/download/<PINNED_VERSION>/nemo-speech-cpp-windows-amd64.zip",
-      "archive_sha256": "REPLACE_WITH_SIDECAR_ARCHIVE_SHA256",
-      "executable_sha256": "REPLACE_WITH_SIDECAR_EXECUTABLE_SHA256",
-      "version": "REPLACE_WITH_SIDECAR_VERSION",
-      "provenance_url": "https://github.com/NVIDIA-NeMo/NeMo-Speech-Cpp/releases/tag/<PINNED_VERSION>",
-      "license": "REPLACE_WITH_SIDECAR_LICENSE"
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.2.0/nemo-speech-0.2.0-windows-x86_64-cpu.zip",
+      "archive_sha256": "82c80451086e86194aba9af19f800da77cd66d1c28d993d0efceffd6cdb49bb8",
+      "executable_sha256": "72ed6e35506150dc7edaa0507904688ace62a8d9a47c4976330b556d361492aa",
+      "version": "0.2.0",
+      "provenance_url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.2.0",
+      "license": "Apache-2.0"
     },
     "parakeet-tdt-v3": {
       "kind": "model",
-      "url": "https://huggingface.co/<PINNED_MODEL_REPOSITORY>/resolve/<PINNED_MODEL_REVISION>/parakeet.gguf",
-      "sha256": "REPLACE_WITH_MODEL_SHA256",
+      "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/parakeet-tdt-0.6b-v3.q8_0.gguf",
+      "sha256": "e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e",
       "model_id": "parakeet-tdt-v3",
-      "version": "REPLACE_WITH_MODEL_VERSION",
-      "provenance_url": "https://huggingface.co/<PINNED_MODEL_REPOSITORY>",
-      "license": "REPLACE_WITH_MODEL_LICENSE"
+      "version": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+      "provenance_url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/tree/541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+      "license": "CC-BY-4.0"
     },
     "fixture": {
       "kind": "fixture",
-      "url": "https://<PINNED_FIXTURE_HOST>/<PINNED_FIXTURE_PATH>",
-      "sha256": "REPLACE_WITH_FIXTURE_SHA256",
-      "provenance_url": "https://<PINNED_FIXTURE_HOST>/<PINNED_FIXTURE_PROVENANCE_PATH>",
-      "license": "REPLACE_WITH_FIXTURE_LICENSE"
+      "url": "https://dldata-public.s3.us-east-2.amazonaws.com/2086-149220-0033.wav",
+      "sha256": "5fceacff0315d49cb59fcc505bcecf1ed5f2f35c2897b1e65a59f30e5d922150",
+      "provenance_url": "https://www.openslr.org/12",
+      "license": "CC-BY-4.0"
     }
   }
 }
