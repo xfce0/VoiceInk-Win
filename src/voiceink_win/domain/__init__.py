@@ -80,6 +80,7 @@ from .models import (
     WordTimestamp,
 )
 from .ports import AsrRuntime
+from .shell import ShellSnapshot, ShellState
 
 __all__ = [
     "AsrCapabilities",
@@ -87,6 +88,8 @@ __all__ = [
     "AsrErrorCode",
     "AsrRequest",
     "AsrRuntime",
+    "ShellSnapshot",
+    "ShellState",
     "AsrTimeoutError",
     "BackendUnavailableError",
     "CancellationError",

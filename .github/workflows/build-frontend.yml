@@ -1,0 +1,70 @@
+name: Windows Frontend Shell Build
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-shell-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Windows x64 GUI and smoke executables
+    runs-on: windows-2022
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+
+      - name: Install GUI and build dependencies
+        run: python -m pip install --editable ".[gui,build]"
+
+      - name: Build frontend shell executables
+        shell: pwsh
+        run: |
+          $commonArgs = @(
+            "--clean",
+            "--noconfirm",
+            "--onefile",
+            "--paths", "src",
+            "--collect-all", "PySide6",
+            "--collect-all", "shiboken6"
+          )
+          python -m PyInstaller @commonArgs --windowed --name voiceink-shell scripts/frontend_entrypoint.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m PyInstaller @commonArgs --console --name voiceink-shell-smoke scripts/frontend_entrypoint.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item packaging\voiceink-shell-windows-x64\README.txt dist\README.txt
+
+      - name: Validate Windows executable without launching Qt
+        run: |
+          python scripts/frontend_package_smoke.py dist/voiceink-shell.exe --subsystem gui
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/frontend_package_smoke.py dist/voiceink-shell-smoke.exe --subsystem console
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Launch frontend shell in offscreen smoke mode
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          & .\dist\voiceink-shell-smoke.exe --smoke
+          if ($LASTEXITCODE -ne 0) { throw "Frontend shell smoke failed with exit code $LASTEXITCODE" }
+
+      - name: Upload frontend shell artifact
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
+        with:
+          name: voiceink-shell-windows-x64
+          path: dist/

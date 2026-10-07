@@ -12,7 +12,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test build diagnostic-build native-smoke check run clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check test build diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -64,6 +64,10 @@ check: spec-check format-check lint test build
 ## run: Start the application after the runtime is implemented
 run:
 	$(VENV_PYTHON) -m voiceink_win
+
+## run-shell: Start the optional PySide6 desktop shell with its fake adapter
+run-shell:
+	$(VENV_PYTHON) -m voiceink_win.presentation.app
 
 ## clean: Remove local caches and generated build directories
 clean:

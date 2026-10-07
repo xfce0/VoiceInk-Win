@@ -25,6 +25,9 @@ documents:
   - path: spec/features/003-parakeet-runtime-integration.md
     kind: feature
     status: proposed
+  - path: spec/features/004-frontend-shell.md
+    kind: feature
+    status: implemented
   - path: rfcs/parakeet-runtime-integration.md
     kind: rfc
     status: proposed
