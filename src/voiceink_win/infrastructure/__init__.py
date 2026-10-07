@@ -20,6 +20,7 @@ from .ffmpeg import (
     WavLimits,
     validate_wav,
 )
+from .loopback_proxy import LoopbackProxy
 from .media_process import (
     ProcessCancelled,
     ProcessResult,
@@ -119,6 +120,7 @@ __all__ = [
     "WindowsJobObjectProcessRunner",
     "WindowsJobObject",
     "WindowsProcessTreeAdapter",
+    "LoopbackProxy",
     "WavLimits",
     "WindowsAdapterRequiredError",
     "NativeWindowsMediaSecurityAdapter",
