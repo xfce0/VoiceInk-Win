@@ -1,0 +1,189 @@
+"""Application composition root for the local ASR backend."""
+
+from __future__ import annotations
+
+import os
+import socket
+from dataclasses import dataclass, field
+from pathlib import Path
+from threading import Lock
+
+from voiceink_win.application import AsrApplicationService
+from voiceink_win.domain import (
+    AsrCapabilities,
+    AsrRequest,
+    ConfigurationError,
+    RuntimeHealth,
+    RuntimeUnavailableError,
+    TranscriptResult,
+)
+from voiceink_win.infrastructure import (
+    LoadedRuntimeManifest,
+    NeMoSidecarRuntime,
+    RuntimeArtifactManifest,
+    SidecarConfig,
+    SubprocessConfig,
+    SubprocessSupervisor,
+    UrllibLoopbackTransport,
+    load_runtime_configuration,
+)
+
+DEFAULT_READINESS_TIMEOUT_SECONDS = 60.0
+
+
+def allocate_loopback_endpoint() -> str:
+    """Select a currently unused loopback port for the owned sidecar."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            listener.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        else:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{listener.getsockname()[1]}"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimePaths:
+    manifest: Path
+    artifact_lock: Path
+    artifact_lock_sha256: str
+
+    @classmethod
+    def from_environment(cls, environ: dict[str, str] | None = None) -> RuntimePaths:
+        values = environ if environ is not None else os.environ
+        missing = [
+            name
+            for name in (
+                "VOICEINK_RUNTIME_MANIFEST",
+                "VOICEINK_ARTIFACT_LOCK",
+                "VOICEINK_ARTIFACT_LOCK_SHA256",
+            )
+            if not values.get(name, "").strip()
+        ]
+        if missing:
+            raise ConfigurationError("runtime configuration requires: " + ", ".join(missing))
+        return cls(
+            manifest=Path(values["VOICEINK_RUNTIME_MANIFEST"]),
+            artifact_lock=Path(values["VOICEINK_ARTIFACT_LOCK"]),
+            artifact_lock_sha256=values["VOICEINK_ARTIFACT_LOCK_SHA256"],
+        )
+
+
+def _artifact_manifest(configuration: LoadedRuntimeManifest, role: str) -> RuntimeArtifactManifest:
+    entry = (
+        configuration.executable_artifact if role == "executable" else configuration.model_artifact
+    )
+    return RuntimeArtifactManifest(
+        version=entry.version,
+        provenance_url=entry.provenance_url,
+        sha256=entry.sha256,
+        license=entry.license,
+        allowed_path=entry.allowed_path,
+    )
+
+
+@dataclass(slots=True)
+class BackendApplication:
+    """Own the application service and the sidecar lifecycle."""
+
+    _asr: AsrApplicationService
+    _runtime: NeMoSidecarRuntime
+    _lifecycle_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _started: bool = False
+    _closed: bool = False
+    _closing: bool = False
+
+    def start(self) -> None:
+        with self._lifecycle_lock:
+            if self._closed or self._closing:
+                raise RuntimeUnavailableError("backend application is closed")
+            if self._started:
+                return
+            self._runtime.start()
+            self._started = True
+
+    def health(self) -> RuntimeHealth:
+        return self._asr.health()
+
+    def capabilities(self) -> AsrCapabilities:
+        return self._asr.capabilities()
+
+    def transcribe(self, request: AsrRequest) -> TranscriptResult:
+        return self._asr.transcribe(request)
+
+    def close(self) -> None:
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+        try:
+            self._asr.close()
+        except Exception:
+            with self._lifecycle_lock:
+                self._closing = False
+            raise
+        with self._lifecycle_lock:
+            self._closing = False
+            self._closed = True
+
+
+def build_application(
+    manifest: Path,
+    artifact_lock: Path,
+    artifact_lock_sha256: str,
+    *,
+    endpoint: str | None = None,
+    readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
+) -> BackendApplication:
+    """Build the production ASR object graph without starting native processes."""
+    configuration = load_runtime_configuration(
+        manifest,
+        artifact_lock,
+        lock_sha256=artifact_lock_sha256,
+    )
+    endpoint = endpoint or allocate_loopback_endpoint()
+    executable_manifest = _artifact_manifest(configuration, "executable")
+    model_manifest = _artifact_manifest(configuration, "model")
+    sidecar_config = SidecarConfig(
+        endpoint=endpoint,
+        model_id=configuration.model_id,
+        backend=configuration.backend,
+        readiness_timeout=readiness_timeout,
+        require_model_attestation=True,
+    )
+    supervisor = SubprocessSupervisor(
+        SubprocessConfig(
+            executable=configuration.executable,
+            model=configuration.model,
+            executable_sha256=executable_manifest.sha256,
+            model_sha256=model_manifest.sha256,
+            executable_manifest=executable_manifest,
+            model_manifest=model_manifest,
+            endpoint=endpoint,
+            backend=configuration.backend,
+            model_id=configuration.model_id,
+        )
+    )
+    runtime = NeMoSidecarRuntime(
+        sidecar_config,
+        UrllibLoopbackTransport(endpoint),
+        supervisor,
+    )
+    return BackendApplication(AsrApplicationService(runtime), runtime)
+
+
+def build_application_from_environment(
+    *,
+    endpoint: str | None = None,
+    readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
+    environ: dict[str, str] | None = None,
+) -> BackendApplication:
+    paths = RuntimePaths.from_environment(environ)
+    return build_application(
+        paths.manifest,
+        paths.artifact_lock,
+        paths.artifact_lock_sha256,
+        endpoint=endpoint,
+        readiness_timeout=readiness_timeout,
+    )
