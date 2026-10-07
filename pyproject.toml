@@ -18,9 +18,15 @@ dev = [
     "PyYAML>=6.0,<7",
     "ruff>=0.9,<1",
 ]
+gui = [
+    "PySide6>=6.8,<7",
+]
 build = [
     "pyinstaller>=6.14,<7",
 ]
+
+[project.scripts]
+voiceink-win-shell = "voiceink_win.presentation.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
