@@ -277,6 +277,33 @@ def test_application_close_preserves_pending_runtime_error_and_retries_with_new_
     assert service._state.value == "closed"
 
 
+def test_application_close_retries_transient_runtime_error() -> None:
+    class TransientCloseRuntime(FakeAsrRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_attempts = 0
+
+        def close(self, deadline=None) -> None:
+            del deadline
+            self.close_attempts += 1
+            if self.close_attempts == 1:
+                raise RuntimeUnavailableError("runtime close temporarily unavailable")
+            super().close()
+
+    runtime = TransientCloseRuntime()
+    service = AsrApplicationService(runtime)
+    first_deadline = time.monotonic() + 5.0
+    second_deadline = first_deadline + 5.0
+
+    with pytest.raises(RuntimeUnavailableError):
+        service.close(deadline=first_deadline)
+
+    service.close(deadline=second_deadline)
+
+    assert runtime.close_attempts == 2
+    assert service._state.value == "closed"
+
+
 def test_application_service_wraps_worker_start_failure(monkeypatch) -> None:
     import voiceink_win.application.asr_service as module
 

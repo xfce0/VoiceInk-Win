@@ -2055,12 +2055,30 @@ def test_sweep_only_removes_owned_old_workspaces(tmp_path: Path) -> None:
     os.utime(unrelated, (1, 1))
     os.utime(unrelated.parent, (1, 1))
     owned = store.create_workspace(JobId("owned"), 1)
-    os.utime(owned.path, (1, 1))
+    os.utime(owned.path, None)
     os.utime(owned.path.parent, (1, 1))
 
     assert store.sweep_orphans(max_age_seconds=1) == 1
     assert unrelated.exists()
     assert not owned.path.exists()
+
+
+def test_windows_sweep_fail_closed_keeps_reparse_like_job_untouched(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "sentinel").write_text("keep", encoding="ascii")
+    job = root / "job"
+    job.symlink_to(external, target_is_directory=True)
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._assert_owned_root_marker = lambda: None
+
+    assert store.sweep_orphans(max_age_seconds=1) == 0
+    assert (external / "sentinel").exists()
+    assert job.is_symlink()
 
 
 @POSIX_ONLY

@@ -871,7 +871,12 @@ class LocalMediaSnapshotStore:
                         if not attempt.is_dir(follow_symlinks=False):
                             continue
                         attempt_path = self.root / entry.name / attempt.name
-                        ownership = self._owned_workspace(entry.name, attempt.name, attempt_path)
+                        ownership = self._owned_workspace(
+                            entry.name,
+                            attempt.name,
+                            attempt_path,
+                            job_mtime=info.st_mtime,
+                        )
                         if ownership is None:
                             continue
                         attempt_identity, attempt_mtime = ownership
@@ -903,7 +908,12 @@ class LocalMediaSnapshotStore:
         return self._owned_workspace(job_name, attempt_name, path) is not None
 
     def _owned_workspace(
-        self, job_name: str, attempt_name: str, path: Path
+        self,
+        job_name: str,
+        attempt_name: str,
+        path: Path,
+        *,
+        job_mtime: float | None = None,
     ) -> tuple[str, float] | None:
         if not attempt_name.startswith("attempt-"):
             return None
@@ -922,11 +932,11 @@ class LocalMediaSnapshotStore:
             and bool(values["attempt_identity"])
         ):
             return None
-        return self._manifest_workspace_identity(values, path)
+        return self._manifest_workspace_identity(values, path, job_mtime=job_mtime)
 
     @staticmethod
     def _manifest_workspace_identity(
-        values: dict[str, object], path: Path
+        values: dict[str, object], path: Path, *, job_mtime: float | None = None
     ) -> tuple[str, float] | None:
         try:
             attempt_info = os.stat(path, follow_symlinks=False)
@@ -940,7 +950,7 @@ class LocalMediaSnapshotStore:
             and values["attempt_identity"] == _identity(attempt_info)
         ):
             return None
-        return _identity(attempt_info), attempt_info.st_mtime
+        return _identity(attempt_info), job_info.st_mtime if job_mtime is None else job_mtime
 
     def _contains_only_owned_workspaces(self) -> bool:
         with os.scandir(self.root) as jobs:

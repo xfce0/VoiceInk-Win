@@ -6,7 +6,6 @@ import ctypes
 import hashlib
 import json
 import os
-import time
 import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -1063,82 +1062,10 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             self._close(handle)
 
     def _sweep_orphans(self, *, max_age_seconds: float) -> int:
-        self._assert_owned_root_marker()
-        lock_supported = hasattr(getattr(self._api, "dll", None), "LockFileEx")
-        if isinstance(self._api, WindowsKernel32) and not lock_supported:
-            raise OSError("Windows workspace locking is unavailable")
-        removed = 0
-        for entry in self.root.iterdir():
-            if entry.name == WORKSPACE_ROOT_MARKER:
-                continue
-            try:
-                job_handle = self._open(
-                    entry, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
-                )
-            except OSError:
-                continue
-            native_lock = None
-            quarantine_path = None
-            removed_from_job = False
-            try:
-                job_identity, _ = self._identity(job_handle)
-                job_mtime = entry.stat().st_mtime
-                if time.time() - job_mtime <= max_age_seconds:
-                    continue
-                if lock_supported:
-                    native_lock = self._acquire_workspace_lock(entry, nonblocking=True)
-                    if native_lock is None:
-                        continue
-                if time.time() - job_mtime <= max_age_seconds:
-                    continue
-                for attempt in tuple(entry.iterdir()):
-                    if not attempt.name.startswith("attempt-"):
-                        continue
-                    try:
-                        attempt_number = int(attempt.name.removeprefix("attempt-"))
-                        attempt_info = attempt.stat()
-                        if time.time() - attempt_info.st_mtime <= max_age_seconds:
-                            continue
-                        manifest_path = attempt / "manifest.json"
-                        if not manifest_path.exists():
-                            continue
-                        values = self._read_manifest(attempt)
-                        if (
-                            values.get("job_id") != entry.name
-                            or values.get("attempt") != attempt_number
-                            or values.get("job_identity") != job_identity
-                            or not values.get("attempt_identity")
-                        ):
-                            continue
-                        attempt_quarantine = self._quarantine_attempt(
-                            attempt, str(values["attempt_identity"])
-                        )
-                        self._remove_tree(
-                            attempt_quarantine,
-                            expected_identity=str(values["attempt_identity"]),
-                        )
-                        self._release_workspace_tree(attempt)
-                        removed += 1
-                        removed_from_job = True
-                    except (OSError, ValueError, TypeError, KeyError):
-                        continue
-                if removed_from_job and not any(
-                    child.is_dir() and child.name.startswith("attempt-")
-                    for child in entry.iterdir()
-                ):
-                    quarantine_path = self._quarantine_empty_job(entry, job_identity)
-            except OSError:
-                pass
-            finally:
-                self._release_workspace_lock(native_lock)
-                self._close(job_handle)
-            if quarantine_path is not None:
-                try:
-                    self._remove_workspace_lock_file(quarantine_path)
-                    self._remove_directory(quarantine_path, expected_identity=job_identity)
-                except OSError:
-                    pass
-        return removed
+        # Windows directory enumeration and rename are not yet fully handle-relative here.
+        # Skipping deletion is safer than trusting a path that may have become a reparse point.
+        del max_age_seconds
+        return 0
 
     def _ensure_owned_root(self, root_existed: bool) -> None:
         marker = self.root / WORKSPACE_ROOT_MARKER
