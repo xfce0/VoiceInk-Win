@@ -7,13 +7,27 @@ from pathlib import Path
 import pytest
 
 import voiceink_win.__main__ as cli
-from voiceink_win.composition import BackendApplication, RuntimePaths, build_application
+import voiceink_win.composition as composition
+from voiceink_win.composition import (
+    BackendApplication,
+    ImportedMediaConfiguration,
+    RuntimePaths,
+    build_application,
+)
 from voiceink_win.domain import (
     AsrCapabilities,
+    Attempt,
     ConfigurationError,
     HealthStatus,
+    ImportedTranscriptionResult,
+    JobId,
+    ProcessingMetadata,
+    RuntimeDiagnostics,
     RuntimeHealth,
     RuntimeUnavailableError,
+    Stage,
+    Success,
+    TranscriptResult,
 )
 
 
@@ -200,3 +214,193 @@ def test_application_rolls_back_workers_when_runtime_start_fails() -> None:
         "asr.close",
         "proxy.close",
     ]
+
+
+def test_imported_media_configuration_is_disabled_or_rejected_explicitly() -> None:
+    assert ImportedMediaConfiguration.from_environment({}) is None
+
+    with pytest.raises(ConfigurationError, match="VOICEINK_IMPORT_ROOTS"):
+        ImportedMediaConfiguration.from_environment(
+            {
+                "VOICEINK_FFMPEG_PATH": "/opt/ffmpeg",
+                "VOICEINK_FFMPEG_MANIFEST": "/opt/ffmpeg.json",
+                "VOICEINK_IMPORT_WORKSPACE_ROOT": "/tmp/work",
+            }
+        )
+
+
+def test_disabled_imported_media_facade_rejects_operations() -> None:
+    application = BackendApplication(
+        _AsrLifecycleFake([]),  # type: ignore[arg-type]
+        _LifecycleFake([], "runtime"),  # type: ignore[arg-type]
+        _LifecycleFake([], "proxy"),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeUnavailableError, match="not configured"):
+        application.submit("/tmp/input.wav")
+    with pytest.raises(RuntimeUnavailableError, match="not configured"):
+        application.status_or_wait(JobId("job"))
+    with pytest.raises(RuntimeUnavailableError, match="not configured"):
+        application.cancel(JobId("job"))
+
+    application.close()
+
+
+class _ImportedServiceFake:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+        self.submitted: tuple[str, object] | None = None
+        self.job_id = JobId("import-job")
+        self.result = Success(
+            "succeeded",
+            self.job_id,
+            Attempt(1),
+            ImportedTranscriptionResult(
+                self.job_id,
+                "input.wav",
+                TranscriptResult("transcript", 0.1),
+                ProcessingMetadata(0.1, 1, (), 0.1, Stage.SUCCEEDED),
+                RuntimeDiagnostics(),
+            ),
+        )
+
+    def submit(self, path: str, options=None):
+        self.submitted = (path, options)
+        return self.job_id
+
+    def wait(self, job_id, timeout=None):
+        assert job_id == self.job_id
+        assert timeout == 1.5
+        return self.result
+
+    def cancel(self, job_id):
+        assert job_id == self.job_id
+        return True
+
+    def close(self) -> None:
+        self._events.append("imports.close")
+
+
+def test_imported_media_facade_exposes_only_typed_job_operations() -> None:
+    events: list[str] = []
+    imports = _ImportedServiceFake(events)
+    application = BackendApplication(
+        _AsrLifecycleFake(events),  # type: ignore[arg-type]
+        _LifecycleFake(events, "runtime"),  # type: ignore[arg-type]
+        _LifecycleFake(events, "proxy"),  # type: ignore[arg-type]
+        imports,  # type: ignore[arg-type]
+    )
+
+    assert application.submit("input.wav") == imports.job_id
+    assert imports.submitted == ("input.wav", None)
+    assert application.status_or_wait(imports.job_id, timeout=1.5) is imports.result
+    assert application.cancel(imports.job_id)
+
+    application.close()
+
+    assert events == ["proxy.stop_accepting", "imports.close", "proxy.close"]
+
+
+def test_composition_wires_one_asr_service_into_imported_media(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_manifest, artifact_lock, lock_sha256 = _runtime_files(tmp_path)
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_bytes(b"ffmpeg")
+    ffmpeg_manifest = tmp_path / "ffmpeg.json"
+    ffmpeg_manifest.write_text(
+        json.dumps(
+            {
+                "version": "ffmpeg-test",
+                "provenance_url": "https://example.invalid/ffmpeg",
+                "sha256": hashlib.sha256(b"ffmpeg").hexdigest(),
+                "license": "GPL-3.0-or-later",
+            }
+        ),
+        encoding="ascii",
+    )
+    import_root = tmp_path / "inputs"
+    import_root.mkdir()
+    configuration = ImportedMediaConfiguration(
+        ffmpeg,
+        ffmpeg_manifest,
+        tmp_path / "work",
+        (import_root,),
+    )
+    captured: dict[str, object] = {}
+
+    class FakeProxy:
+        endpoint = "http://127.0.0.1:45678"
+
+        def __init__(self, target_endpoint, *, listen_endpoint=None) -> None:
+            del target_endpoint, listen_endpoint
+
+        def close(self) -> None:
+            return None
+
+        def stop_accepting(self) -> None:
+            return None
+
+    class FakeRuntime:
+        def __init__(self, *args) -> None:
+            del args
+
+        def capabilities(self):
+            return AsrCapabilities("model", ("cpu",), False)
+
+        def health(self):
+            return RuntimeHealth(HealthStatus.STARTING, "starting", "cpu")
+
+        def close(self, deadline=None) -> None:
+            del deadline
+
+    class FakeAsr:
+        def __init__(self, runtime) -> None:
+            captured["asr_service"] = self
+            captured["asr_runtime"] = runtime
+
+        def close(self, **kwargs) -> None:
+            captured["asr_close"] = kwargs
+
+    class FakeArtifact:
+        executable = ffmpeg
+
+        @classmethod
+        def verify(cls, executable, manifest):
+            captured["artifact"] = (executable, manifest)
+            return cls()
+
+    class FakeNormalizer:
+        def __init__(self, *, executable) -> None:
+            captured["normalizer_artifact"] = executable
+
+    class FakeImports:
+        def __init__(self, normalizer, asr, store) -> None:
+            captured["normalizer"] = normalizer
+            captured["asr"] = asr
+            captured["store"] = store
+
+        def close(self) -> None:
+            captured["imports_close"] = True
+
+    store = object()
+    monkeypatch.setattr(composition, "LoopbackProxy", FakeProxy)
+    monkeypatch.setattr(composition, "NeMoSidecarRuntime", FakeRuntime)
+    monkeypatch.setattr(composition, "AsrApplicationService", FakeAsr)
+    monkeypatch.setattr(composition, "VerifiedFfmpegArtifact", FakeArtifact)
+    monkeypatch.setattr(composition, "SubprocessMediaNormalizer", FakeNormalizer)
+    monkeypatch.setattr(composition, "create_media_snapshot_store", lambda *args, **kwargs: store)
+    monkeypatch.setattr(composition, "ImportedMediaTranscriptionService", FakeImports)
+
+    application = build_application(
+        runtime_manifest,
+        artifact_lock,
+        lock_sha256,
+        imported_media=configuration,
+    )
+    application.close()
+
+    assert captured["asr"] is captured["asr_service"]
+    assert captured["normalizer_artifact"] is not None
+    assert captured["store"] is store
+    assert captured["imports_close"] is True
