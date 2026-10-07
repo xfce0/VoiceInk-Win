@@ -5,6 +5,8 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import os
+import stat
+import tempfile
 from contextlib import contextmanager, nullcontext
 from ctypes import wintypes
 from dataclasses import dataclass, field
@@ -61,10 +63,16 @@ class FfmpegArtifactManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class _FfmpegLaunch:
+    executable: str
+    pass_fds: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class VerifiedFfmpegArtifact:
     executable: Path
     manifest: FfmpegArtifactManifest
-    identity: tuple[int, int, int, int, int] | None = None
+    identity: tuple[int, ...] | None = None
     _handle_registry: object = field(
         default_factory=lambda: _new_handle_registry(), repr=False, compare=False
     )
@@ -90,25 +98,34 @@ class VerifiedFfmpegArtifact:
             if digest.lower() != manifest.sha256.lower():
                 raise ConfigurationError("FFmpeg executable checksum does not match")
             return cls(executable.absolute(), manifest, identity, registry)
-        path = executable.resolve(strict=True)
-        allowed = manifest.allowed_path.resolve(strict=True)
-        if path != allowed or not path.is_file():
-            raise ConfigurationError("FFmpeg executable is outside the approved path")
-        digest = hashlib.sha256()
-        try:
-            with path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-        except OSError as error:
-            raise ConfigurationError("FFmpeg executable cannot be read", cause=error) from error
-        if digest.hexdigest().lower() != manifest.sha256.lower():
-            raise ConfigurationError("FFmpeg executable checksum does not match")
-        return cls(path, manifest)
+        path, identity = _verify_posix_artifact(executable, manifest)
+        return cls(path, manifest, identity)
 
     @contextmanager
     def execution_lock(self):
         if os.name != "nt":
-            yield
+            # POSIX cannot atomically bind a path-based exec to this verification.
+            # Keep the verified descriptor open and launch through its fd when possible.
+            snapshot, fd, identity = _open_posix_artifact(self.executable, self.manifest)
+            try:
+                if self.identity is not None and identity != self.identity:
+                    raise ConfigurationError("FFmpeg executable identity changed before launch")
+                fd_namespace = next(
+                    (
+                        candidate
+                        for candidate in (Path("/proc/self/fd"), Path("/dev/fd"))
+                        if candidate.is_dir()
+                    ),
+                    None,
+                )
+                if fd_namespace is None:
+                    raise ConfigurationError(
+                        "POSIX FFmpeg launch cannot bind execution to a verified fd"
+                    )
+                os.set_inheritable(fd, True)
+                yield _FfmpegLaunch(str(fd_namespace / str(fd)), (fd,))
+            finally:
+                snapshot.close()
             return
         from .windows_snapshot import WindowsKernel32
 
@@ -127,6 +144,111 @@ class VerifiedFfmpegArtifact:
             yield
         finally:
             _close_windows_handles(api, handles, registry=registry)
+
+
+def _verify_posix_artifact(
+    executable: Path, manifest: FfmpegArtifactManifest
+) -> tuple[Path, tuple[int, ...]]:
+    snapshot, _fd, identity = _open_posix_artifact(executable, manifest)
+    snapshot.close()
+    return executable.absolute(), identity
+
+
+def _open_posix_artifact(
+    executable: Path, manifest: FfmpegArtifactManifest
+) -> tuple[object, int, tuple[int, ...]]:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ConfigurationError("POSIX FFmpeg verification cannot reject symbolic links")
+    path = executable.absolute()
+    allowed = manifest.allowed_path.absolute()
+    if path != allowed:
+        raise ConfigurationError("FFmpeg executable is outside the approved path")
+    original_fd = _open_posix_path(path, no_follow)
+    try:
+        before = os.fstat(original_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ConfigurationError("FFmpeg executable is not a private regular file")
+        identity = _posix_identity(before)
+        snapshot_file = tempfile.NamedTemporaryFile(mode="wb", delete=False)
+        snapshot_path = Path(snapshot_file.name)
+        snapshot = None
+        snapshot_fd = -1
+        digest = hashlib.sha256()
+        try:
+            while True:
+                chunk = os.read(original_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                snapshot_file.write(chunk)
+                digest.update(chunk)
+            after = os.fstat(original_fd)
+            if identity != _posix_identity(after):
+                raise ConfigurationError("FFmpeg executable changed during verification")
+            if digest.hexdigest().lower() != manifest.sha256.lower():
+                raise ConfigurationError("FFmpeg executable checksum does not match")
+            snapshot_file.flush()
+            os.fsync(snapshot_file.fileno())
+            os.fchmod(snapshot_file.fileno(), 0o500)
+            snapshot_identity = _posix_identity(os.fstat(snapshot_file.fileno()))
+            snapshot_fd = os.open(snapshot_path, os.O_RDONLY | no_follow)
+            if snapshot_identity != _posix_identity(os.fstat(snapshot_fd)):
+                raise ConfigurationError("FFmpeg snapshot changed before launch")
+            snapshot_file.close()
+            os.unlink(snapshot_path)
+            snapshot = os.fdopen(snapshot_fd, "rb", closefd=True)
+            snapshot_fd = snapshot.fileno()
+            snapshot_digest = hashlib.sha256()
+            while True:
+                chunk = os.read(snapshot_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                snapshot_digest.update(chunk)
+            if snapshot_digest.hexdigest().lower() != manifest.sha256.lower():
+                raise ConfigurationError("FFmpeg snapshot checksum does not match")
+            os.lseek(snapshot_fd, 0, os.SEEK_SET)
+            return snapshot, snapshot_fd, identity
+        except BaseException:
+            if snapshot is not None:
+                snapshot.close()
+            elif snapshot_fd >= 0:
+                os.close(snapshot_fd)
+            if not snapshot_file.file.closed:
+                snapshot_file.close()
+            try:
+                snapshot_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+    finally:
+        os.close(original_fd)
+
+
+def _posix_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def _open_posix_path(path: Path, no_follow: int) -> int:
+    parts = path.parts[1:]
+    if not parts:
+        raise ConfigurationError("FFmpeg executable path is empty")
+    current_fd = os.open(Path(path.anchor), os.O_RDONLY | os.O_DIRECTORY | no_follow)
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | no_follow,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+        return os.open(parts[-1], os.O_RDONLY | no_follow, dir_fd=current_fd)
+    except OSError as error:
+        raise ConfigurationError(
+            "FFmpeg executable path cannot be opened safely", cause=error
+        ) from error
+    finally:
+        os.close(current_fd)
 
 
 def _new_handle_registry():
@@ -493,19 +615,24 @@ class SubprocessMediaNormalizer:
         )
         try:
             execution_lock = self.artifact.execution_lock() if self.artifact else nullcontext()
-            with execution_lock:
+            with execution_lock as launch:
+                launch_argv = argv
+                launch_pass_fds = (source.descriptor,) if source.descriptor is not None else ()
+                if launch is not None:
+                    launch_argv = [launch.executable, *argv[1:]]
+                    launch_pass_fds += launch.pass_fds
                 revalidate = source.verified_input.revalidate
                 if callable(revalidate):
                     revalidate(cancellation=cancellation, deadline=deadline)
                 result = self.runner.run(
-                    argv,
+                    launch_argv,
                     timeout=timeout,
                     deadline=deadline,
                     cancellation=cancellation,
                     max_stdout_bytes=self.limits.pcm_bytes + 64 * 1024,
                     max_stderr_bytes=self.limits.stderr_bytes,
                     stdout_sink=sink,
-                    pass_fds=(source.descriptor,) if source.descriptor is not None else (),
+                    pass_fds=launch_pass_fds,
                 )
         except ProcessCancelled as error:
             raise CancellationError("media normalization was cancelled") from error

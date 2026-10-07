@@ -56,7 +56,9 @@ The first native validation artifact is a portable CLI executable. It writes
 size, checksum, timing, and sanitized exception data, but not raw audio or
 transcript text.
 
-The local build command must run on Windows:
+The local packaging command must run on Windows. The two FFmpeg variables below
+are build inputs only; `VOICEINK_FFMPEG_MANIFEST` is copied into the frozen
+bundle and is not read from the process environment at runtime:
 
 ```text
 VOICEINK_FFMPEG_PATH=C:\\path\\to\\ffmpeg.exe \\
@@ -65,9 +67,18 @@ make diagnostic-build
 voiceink-diagnostic.exe C:\\path\\to\\audio-or-video-file
 ```
 
-`ffmpeg.manifest.json` must contain the pinned executable SHA-256 and provenance
-metadata. The Make target refuses to build without both external paths and
-embeds them into the frozen executable.
+The production imported-media composition contract is typed
+`ImportedMediaConfiguration`, not a mutable manifest path. It requires an
+absolute FFmpeg path, absolute non-empty import roots, an absolute workspace
+root, and a complete `FfmpegArtifactManifest` containing version, HTTPS
+provenance, license, and SHA-256. The environment adapter enables this feature
+only when the complete metadata set is present and rejects partial values.
+
+At runtime, `VerifiedFfmpegArtifact` reopens the executable, validates its
+identity and approved path, and recomputes its SHA-256 before launch. The
+diagnostic CLI accepts an external manifest only with an explicit
+`--ffmpeg-sha256`; only the manifest embedded in the frozen bundle may provide
+the checksum by itself.
 
 The repository workflow `Windows Diagnostic Build` produces a Windows x64
 portable bundle with a verified FFmpeg binary. Windows ARM64 can normally run

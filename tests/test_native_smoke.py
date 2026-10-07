@@ -15,7 +15,11 @@ from scripts.native_smoke import (
     _success_status,
     _transcribe_with_timing,
 )
-from voiceink_win.domain import CanonicalAudio, InvalidSourceError, SourceChangedError
+from voiceink_win.domain import (
+    CanonicalAudio,
+    InvalidSourceError,
+    SourceChangedError,
+)
 from voiceink_win.infrastructure import RuntimeArtifactManifest
 
 ROOT = Path(__file__).resolve().parents[1]
