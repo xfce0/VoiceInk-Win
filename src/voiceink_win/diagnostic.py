@@ -151,6 +151,9 @@ def _load_manifest(
         data = json.loads(path.read_text(encoding="utf-8"))
     else:
         data = {}
+    bundled_manifest = _bundle_directory() / "ffmpeg.manifest.json"
+    if path is not None and sha256 is None and path.resolve() != bundled_manifest.resolve():
+        raise ValueError("external FFmpeg manifests require --ffmpeg-sha256")
     digest = sha256 or str(data.get("sha256", ""))
     if not digest:
         raise ValueError("FFmpeg checksum is required through --ffmpeg-sha256 or manifest")

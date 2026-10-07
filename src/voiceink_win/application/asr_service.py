@@ -240,7 +240,7 @@ class AsrApplicationService:
             with self._lock:
                 if not workers_alive and close_error is None:
                     self._state = _ServiceState.CLOSED
-                elif active_error is None:
+                elif active_error is None and close_error is None:
                     active_error = RuntimeRecoveryPendingError(
                         "ASR shutdown recovery remains pending"
                     )
@@ -278,7 +278,9 @@ class AsrApplicationService:
                 with self._lock:
                     close_error = close_errors[0] if close_errors else None
                     self._runtime_close_error = close_error
-                    if isinstance(close_error, RuntimeRecoveryPendingError):
+                    if isinstance(close_error, RuntimeRecoveryPendingError) or (
+                        close_error is not None and close_error.retryable
+                    ):
                         self._runtime_close_started = False
                         self._runtime_close_thread = None
                     if not close_errors:

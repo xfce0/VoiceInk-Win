@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol
 
@@ -46,6 +47,8 @@ class MediaSnapshotStore(Protocol):
     def release_source(self, source: SourceMedia) -> None: ...
 
     def create_workspace(self, job_id: JobId, attempt: int) -> JobWorkspace: ...
+
+    def workspace_lock(self, workspace: JobWorkspace) -> AbstractContextManager[None]: ...
 
     def cleanup(self, workspace: JobWorkspace, *, deadline: float | None = None) -> None: ...
 

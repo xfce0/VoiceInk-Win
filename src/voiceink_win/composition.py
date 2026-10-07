@@ -8,24 +8,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, Lock
 
-from voiceink_win.application import AsrApplicationService
+from voiceink_win.application import AsrApplicationService, ImportedMediaTranscriptionService
 from voiceink_win.domain import (
     AsrCapabilities,
     AsrRequest,
     ConfigurationError,
+    ImportOptions,
+    JobId,
     RuntimeHealth,
     RuntimeUnavailableError,
+    TerminalResult,
     TranscriptResult,
 )
 from voiceink_win.infrastructure import (
+    FfmpegArtifactManifest,
     LoadedRuntimeManifest,
     LoopbackProxy,
     NeMoSidecarRuntime,
     RuntimeArtifactManifest,
     SidecarConfig,
     SubprocessConfig,
+    SubprocessMediaNormalizer,
     SubprocessSupervisor,
     UrllibLoopbackTransport,
+    VerifiedFfmpegArtifact,
+    create_media_snapshot_store,
     load_runtime_configuration,
 )
 
@@ -71,6 +78,78 @@ class RuntimePaths:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ImportedMediaConfiguration:
+    """Explicit production configuration for the imported-media pipeline."""
+
+    ffmpeg_path: Path
+    ffmpeg_artifact: FfmpegArtifactManifest
+    workspace_root: Path
+    import_roots: tuple[Path, ...]
+
+    def __post_init__(self) -> None:
+        paths = (self.ffmpeg_path, self.workspace_root)
+        if not all(Path(path).is_absolute() for path in paths):
+            raise ConfigurationError("imported-media paths must be absolute")
+        if not self.import_roots or not all(Path(path).is_absolute() for path in self.import_roots):
+            raise ConfigurationError("imported-media import roots must be absolute and non-empty")
+        if not isinstance(self.ffmpeg_artifact, FfmpegArtifactManifest):
+            raise ConfigurationError("imported-media FFmpeg artifact metadata is not trusted")
+        object.__setattr__(self, "ffmpeg_path", Path(self.ffmpeg_path))
+        object.__setattr__(self, "workspace_root", Path(self.workspace_root))
+        object.__setattr__(self, "import_roots", tuple(Path(path) for path in self.import_roots))
+        if Path(self.ffmpeg_artifact.allowed_path) != self.ffmpeg_path:
+            raise ConfigurationError("FFmpeg artifact metadata path does not match executable")
+
+    @classmethod
+    def from_environment(
+        cls, environ: dict[str, str] | None = None
+    ) -> ImportedMediaConfiguration | None:
+        values = environ if environ is not None else os.environ
+        import_names = (
+            "VOICEINK_FFMPEG_PATH",
+            "VOICEINK_IMPORT_WORKSPACE_ROOT",
+            "VOICEINK_IMPORT_ROOTS",
+        )
+        metadata_names = (
+            "VOICEINK_FFMPEG_VERSION",
+            "VOICEINK_FFMPEG_PROVENANCE_URL",
+            "VOICEINK_FFMPEG_SHA256",
+            "VOICEINK_FFMPEG_LICENSE",
+        )
+        if not any(
+            values.get(name, "").strip()
+            for name in ("VOICEINK_IMPORT_WORKSPACE_ROOT", "VOICEINK_IMPORT_ROOTS")
+        ):
+            return None
+        missing = [
+            name for name in (*import_names, *metadata_names) if not values.get(name, "").strip()
+        ]
+        if missing:
+            raise ConfigurationError("imported-media configuration requires: " + ", ".join(missing))
+        try:
+            artifact = FfmpegArtifactManifest(
+                version=values["VOICEINK_FFMPEG_VERSION"],
+                provenance_url=values["VOICEINK_FFMPEG_PROVENANCE_URL"],
+                sha256=values["VOICEINK_FFMPEG_SHA256"],
+                license=values["VOICEINK_FFMPEG_LICENSE"],
+                allowed_path=Path(values["VOICEINK_FFMPEG_PATH"]),
+            )
+        except ConfigurationError:
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            raise ConfigurationError(
+                "imported-media FFmpeg metadata is invalid", cause=error
+            ) from error
+        roots = tuple(Path(value) for value in values["VOICEINK_IMPORT_ROOTS"].split(os.pathsep))
+        return cls(
+            ffmpeg_path=Path(values["VOICEINK_FFMPEG_PATH"]),
+            ffmpeg_artifact=artifact,
+            workspace_root=Path(values["VOICEINK_IMPORT_WORKSPACE_ROOT"]),
+            import_roots=roots,
+        )
+
+
 def _artifact_manifest(configuration: LoadedRuntimeManifest, role: str) -> RuntimeArtifactManifest:
     entry = (
         configuration.executable_artifact if role == "executable" else configuration.model_artifact
@@ -91,11 +170,15 @@ class BackendApplication:
     _asr: AsrApplicationService
     _runtime: NeMoSidecarRuntime
     _proxy: LoopbackProxy
+    _imported_media: ImportedMediaTranscriptionService | None = None
     _lifecycle_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _started: bool = False
     _closed: bool = False
     _closing: bool = False
     _failed: bool = False
+    _imported_media_closed: bool = False
+    _asr_closed: bool = False
+    _proxy_closed: bool = False
     _close_done: Event = field(default_factory=Event, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -116,14 +199,14 @@ class BackendApplication:
                     self._proxy.stop_accepting()
                 except BaseException as cleanup_error:
                     cleanup_errors.append(cleanup_error)
-                try:
-                    self._asr.close()
-                except BaseException as cleanup_error:
-                    cleanup_errors.append(cleanup_error)
-                try:
-                    self._proxy.close()
-                except BaseException as cleanup_error:
-                    cleanup_errors.append(cleanup_error)
+                cleanup_errors.extend(self._close_owned_application_services())
+                if not self._proxy_closed:
+                    try:
+                        self._proxy.close()
+                    except BaseException as cleanup_error:
+                        cleanup_errors.append(cleanup_error)
+                    else:
+                        self._proxy_closed = True
                 self._closed = not cleanup_errors
                 self._failed = bool(cleanup_errors)
                 if cleanup_errors:
@@ -146,6 +229,41 @@ class BackendApplication:
     def transcribe(self, request: AsrRequest) -> TranscriptResult:
         return self._asr.transcribe(request)
 
+    def submit(self, path: str, options: ImportOptions | None = None) -> JobId:
+        """Submit an imported-media job through the configured application service."""
+        return self._require_imported_media().submit(path, options)
+
+    def status_or_wait(self, job_id: JobId, timeout: float | None = None) -> TerminalResult:
+        """Return a terminal imported-media result, waiting up to ``timeout``."""
+        return self._require_imported_media().wait(job_id, timeout=timeout)
+
+    def cancel(self, job_id: JobId) -> bool:
+        """Request cancellation of an imported-media job."""
+        return self._require_imported_media().cancel(job_id)
+
+    def _require_imported_media(self) -> ImportedMediaTranscriptionService:
+        if self._imported_media is None:
+            raise RuntimeUnavailableError("imported media is not configured")
+        return self._imported_media
+
+    def _close_owned_application_services(self) -> list[BaseException]:
+        errors: list[BaseException] = []
+        if self._imported_media is not None and not self._imported_media_closed:
+            try:
+                self._imported_media.close(close_asr=False)
+            except BaseException as error:
+                errors.append(error)
+                return errors
+            self._imported_media_closed = True
+        if not self._asr_closed:
+            try:
+                self._asr.close()
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self._asr_closed = True
+        return errors
+
     def close(self) -> None:
         with self._lifecycle_lock:
             if self._closed:
@@ -164,16 +282,17 @@ class BackendApplication:
             self._proxy.stop_accepting()
         except BaseException as error:
             failure = error
-        try:
-            self._asr.close()
-        except BaseException as error:
+        for error in self._close_owned_application_services():
             if failure is None:
                 failure = error
-        try:
-            self._proxy.close()
-        except BaseException as error:
-            if failure is None:
-                failure = error
+        if not self._proxy_closed:
+            try:
+                self._proxy.close()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+            else:
+                self._proxy_closed = True
         if failure is not None:
             with self._lifecycle_lock:
                 self._closing = False
@@ -194,6 +313,7 @@ def build_application(
     *,
     endpoint: str | None = None,
     readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
+    imported_media: ImportedMediaConfiguration | None = None,
 ) -> BackendApplication:
     """Load trusted configuration and build the production ASR object graph."""
     configuration = load_runtime_configuration(
@@ -205,6 +325,7 @@ def build_application(
         configuration,
         endpoint=endpoint,
         readiness_timeout=readiness_timeout,
+        imported_media=imported_media,
     )
 
 
@@ -213,10 +334,13 @@ def build_application_from_configuration(
     *,
     endpoint: str | None = None,
     readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
+    imported_media: ImportedMediaConfiguration | None = None,
 ) -> BackendApplication:
     """Build the ASR object graph from one already validated runtime configuration."""
     sidecar_endpoint = allocate_loopback_endpoint()
     proxy = LoopbackProxy(sidecar_endpoint, listen_endpoint=endpoint)
+    asr: AsrApplicationService | None = None
+    imported_service: ImportedMediaTranscriptionService | None = None
     try:
         endpoint = proxy.endpoint
         executable_manifest = _artifact_manifest(configuration, "executable")
@@ -246,10 +370,53 @@ def build_application_from_configuration(
             UrllibLoopbackTransport(endpoint),
             supervisor,
         )
-        return BackendApplication(AsrApplicationService(runtime), runtime, proxy)
-    except Exception:
-        proxy.close()
+        asr = AsrApplicationService(runtime)
+        if imported_media is not None:
+            imported_service = _build_imported_media_service(imported_media, asr)
+        return BackendApplication(asr, runtime, proxy, imported_service)
+    except BaseException as error:
+        cleanup_errors: list[BaseException] = []
+        if imported_service is not None:
+            try:
+                imported_service.close(close_asr=False)
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if asr is not None:
+            try:
+                asr.close()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        try:
+            proxy.close()
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            raise BaseExceptionGroup(
+                "backend composition rollback failed", [error, *cleanup_errors]
+            ) from error
         raise
+
+
+def _build_imported_media_service(
+    configuration: ImportedMediaConfiguration,
+    asr: AsrApplicationService,
+) -> ImportedMediaTranscriptionService:
+    try:
+        artifact = VerifiedFfmpegArtifact.verify(
+            configuration.ffmpeg_path, configuration.ffmpeg_artifact
+        )
+        normalizer = SubprocessMediaNormalizer(executable=artifact)
+        store = create_media_snapshot_store(
+            configuration.workspace_root,
+            import_roots=configuration.import_roots,
+        )
+        return ImportedMediaTranscriptionService(normalizer, asr, store)
+    except ConfigurationError:
+        raise
+    except (OSError, ValueError) as error:
+        raise ConfigurationError(
+            "imported-media infrastructure is unavailable", cause=error
+        ) from error
 
 
 def build_application_from_environment(
@@ -259,10 +426,12 @@ def build_application_from_environment(
     environ: dict[str, str] | None = None,
 ) -> BackendApplication:
     paths = RuntimePaths.from_environment(environ)
+    imported_media = ImportedMediaConfiguration.from_environment(environ)
     return build_application(
         paths.manifest,
         paths.artifact_lock,
         paths.artifact_lock_sha256,
         endpoint=endpoint,
         readiness_timeout=readiness_timeout,
+        imported_media=imported_media,
     )

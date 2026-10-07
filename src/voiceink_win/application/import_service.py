@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from inspect import signature
 from pathlib import Path
@@ -293,7 +294,10 @@ class ImportedMediaTranscriptionService:
             self._interrupt_active_stage(record)
             self._await_stage_owner(record, now)
 
-    def close(self, timeout: float = 5.0) -> None:
+    def close(self, timeout: float = 5.0, *, close_asr: bool | None = None) -> None:
+        if close_asr is not None and not isinstance(close_asr, bool):
+            raise ValueError("close_asr must be boolean or None")
+        should_close_asr = close_asr is not False
         with self._lock:
             if self._state is _ServiceState.CLOSED:
                 return
@@ -411,16 +415,16 @@ class ImportedMediaTranscriptionService:
                 or any(thread.is_alive() for thread in retry_threads)
                 or any(thread.is_alive() for thread in stage_owner_threads)
             )
-            if threads_stopped:
+            if threads_stopped and should_close_asr:
                 try:
                     self._asr.close(deadline=close_deadline)
                 except BaseException as error:
                     if shutdown_error is None:
                         shutdown_error = error
-                if shutdown_error is None:
-                    with self._lock:
-                        self._state = _ServiceState.CLOSED
-                        self._shutdown_deadline = None
+            if threads_stopped and shutdown_error is None:
+                with self._lock:
+                    self._state = _ServiceState.CLOSED
+                    self._shutdown_deadline = None
         if shutdown_error is not None:
             raise shutdown_error
 
@@ -512,24 +516,25 @@ class ImportedMediaTranscriptionService:
                 self._cleanup_and_publish(record)
                 return
             assert record.workspace is not None
-            snapshot = self._store.snapshot(
-                record.source,
-                record.workspace,
-                cancellation=record.cancellation.token,
-                deadline=stage_deadline,
-            )
-            snapshot = self._store.verify(
-                snapshot,
-                cancellation=record.cancellation.token,
-                deadline=stage_deadline,
-            )
-            record.snapshot = snapshot
-            normalized_result = self._normalizer.normalize(
-                snapshot,
-                record.workspace,
-                record.cancellation.token,
-                stage_deadline,
-            )
+            with self._workspace_processing_lock(record.workspace):
+                snapshot = self._store.snapshot(
+                    record.source,
+                    record.workspace,
+                    cancellation=record.cancellation.token,
+                    deadline=stage_deadline,
+                )
+                snapshot = self._store.verify(
+                    snapshot,
+                    cancellation=record.cancellation.token,
+                    deadline=stage_deadline,
+                )
+                record.snapshot = snapshot
+                normalized_result = self._normalizer.normalize(
+                    snapshot,
+                    record.workspace,
+                    record.cancellation.token,
+                    stage_deadline,
+                )
             self._finish_stage(record, Stage.NORMALIZING)
             if record.stage_owner_done.is_set():
                 normalized_committed = self._accept_stage_result(
@@ -584,7 +589,8 @@ class ImportedMediaTranscriptionService:
                 cancellation=record.cancellation.token,
             )
             record.normalized = None
-            transcript_result = self._asr.transcribe(request)
+            with self._workspace_processing_lock(record.workspace):
+                transcript_result = self._asr.transcribe(request)
             self._finish_stage(record, Stage.TRANSCRIBING)
             if record.stage_owner_done.is_set():
                 transcript_committed = self._accept_stage_result(
@@ -997,6 +1003,15 @@ class ImportedMediaTranscriptionService:
     @staticmethod
     def _result_warnings(record: _Record) -> tuple[WarningCode, ...]:
         return (WarningCode.CLEANUP_WARNING,) if record.cleanup_warning else ()
+
+    @contextmanager
+    def _workspace_processing_lock(self, workspace: JobWorkspace):
+        lock_factory = getattr(self._store, "workspace_lock", None)
+        if lock_factory is None:
+            yield
+            return
+        with lock_factory(workspace):
+            yield
 
     def _runtime_diagnostics(self, record: _Record) -> RuntimeDiagnostics:
         artifact = getattr(self._normalizer, "artifact", None)

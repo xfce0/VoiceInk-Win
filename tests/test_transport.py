@@ -20,6 +20,10 @@ from voiceink_win.infrastructure import (
     validate_nonce,
 )
 
+_TEST_TIMEOUT_SECONDS = 5.0
+_SERVER_ACCEPT_TIMEOUT_SECONDS = 0.25
+_SERVER_JOIN_TIMEOUT_SECONDS = _TEST_TIMEOUT_SECONDS
+
 
 class FakeHttpResponse:
     status = 200
@@ -294,19 +298,34 @@ def test_post_audio_rejects_non_origin_form_path_before_connecting(monkeypatch, 
 
 
 def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcript() -> None:
+    test_timeout = _TEST_TIMEOUT_SECONDS
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
+    listener.settimeout(_SERVER_ACCEPT_TIMEOUT_SECONDS)
     port = listener.getsockname()[1]
     received: list[bytes] = []
+    server_stop = Event()
+    worker_errors: list[BaseException] = []
 
     def serve() -> None:
-        connection, _ = listener.accept()
+        connection: socket.socket | None = None
         try:
-            connection.settimeout(1.0)
+            while not server_stop.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                break
+            if connection is None:
+                return
+            connection.settimeout(test_timeout)
             data = bytearray()
             while b"\r\n\r\n" not in data:
-                data.extend(connection.recv(4096))
+                chunk = connection.recv(4096)
+                if not chunk:
+                    raise AssertionError("transport client closed before request headers")
+                data.extend(chunk)
             content_length = int(
                 next(
                     line.split(b":", 1)[1]
@@ -318,8 +337,11 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
                 data.extend(connection.recv(4096))
             received.append(bytes(data))
             connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        except BaseException as error:
+            worker_errors.append(error)
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     worker = Thread(target=serve, daemon=True)
     worker.start()
@@ -328,11 +350,20 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
         audio = b"\x01\x02\x03\x04"
         response = UrllibLoopbackTransport(
             f"http://127.0.0.1:{port}", nonce="test-nonce"
-        ).post_audio("/transcribe", metadata, memoryview(audio), timeout=1.0, max_response_bytes=8)
+        ).post_audio(
+            "/transcribe",
+            metadata,
+            memoryview(audio),
+            timeout=test_timeout,
+            max_response_bytes=8,
+        )
     finally:
-        worker.join(1.0)
+        server_stop.set()
+        worker.join(test_timeout)
         listener.close()
 
+    assert not worker.is_alive(), "raw metadata test server did not shut down"
+    assert not worker_errors, f"raw metadata test server failed: {worker_errors[0]!r}"
     assert response.body == b"ok"
     assert len(received) == 1
     wire = received[0]
@@ -346,19 +377,34 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
 
 
 def test_post_multipart_audio_uses_official_wav_form_and_auth_headers() -> None:
+    test_timeout = _TEST_TIMEOUT_SECONDS
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
+    listener.settimeout(_SERVER_ACCEPT_TIMEOUT_SECONDS)
     port = listener.getsockname()[1]
     received: list[bytes] = []
+    worker_errors: list[Exception] = []
+    server_stop = Event()
 
     def serve() -> None:
-        connection, _ = listener.accept()
+        connection: socket.socket | None = None
         try:
-            connection.settimeout(1.0)
+            while not server_stop.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                break
+            if connection is None:
+                return
+            connection.settimeout(test_timeout)
             data = bytearray()
             while b"\r\n\r\n" not in data:
-                data.extend(connection.recv(4096))
+                chunk = connection.recv(4096)
+                if not chunk:
+                    raise AssertionError("multipart client closed before request headers")
+                data.extend(chunk)
             header_end = data.find(b"\r\n\r\n")
             content_length = int(
                 next(
@@ -371,8 +417,11 @@ def test_post_multipart_audio_uses_official_wav_form_and_auth_headers() -> None:
                 data.extend(connection.recv(4096))
             received.append(bytes(data))
             connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        except Exception as error:
+            worker_errors.append(error)
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     worker = Thread(target=serve, daemon=True)
     worker.start()
@@ -387,13 +436,16 @@ def test_post_multipart_audio_uses_official_wav_form_and_auth_headers() -> None:
             "parakeet-tdt-0.6b-v3.oss-align.q8_0",
             "en",
             "verbose_json",
-            timeout=1.0,
+            timeout=test_timeout,
             max_response_bytes=8,
         )
     finally:
-        worker.join(1.0)
+        server_stop.set()
+        worker.join(_SERVER_JOIN_TIMEOUT_SECONDS)
         listener.close()
 
+    assert not worker.is_alive(), "multipart test server did not shut down"
+    assert not worker_errors, f"multipart test server failed: {worker_errors[0]!r}"
     assert response.body == b"ok"
     wire = received[0]
     headers, body = wire.split(b"\r\n\r\n", 1)
@@ -427,17 +479,31 @@ def test_post_multipart_audio_cancellation_closes_connection_and_discards_result
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
+    listener.settimeout(_SERVER_ACCEPT_TIMEOUT_SECONDS)
     port = listener.getsockname()[1]
     request_received = Event()
     client_closed = Event()
+    server_stop = Event()
+    server_errors: list[BaseException] = []
 
     def serve() -> None:
-        connection, _ = listener.accept()
+        connection: socket.socket | None = None
         try:
-            connection.settimeout(1.0)
+            while not server_stop.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                break
+            if connection is None:
+                return
+            connection.settimeout(_TEST_TIMEOUT_SECONDS)
             data = bytearray()
             while b"\r\n\r\n" not in data:
-                data.extend(connection.recv(4096))
+                chunk = connection.recv(4096)
+                if not chunk:
+                    raise AssertionError("cancellation client closed before request headers")
+                data.extend(chunk)
             header_end = data.find(b"\r\n\r\n")
             content_length = int(
                 next(
@@ -447,13 +513,19 @@ def test_post_multipart_audio_cancellation_closes_connection_and_discards_result
                 )
             )
             while len(data) < header_end + 4 + content_length:
-                data.extend(connection.recv(4096))
+                chunk = connection.recv(4096)
+                if not chunk:
+                    raise AssertionError("cancellation client closed before request body")
+                data.extend(chunk)
             request_received.set()
             while connection.recv(1):
                 pass
             client_closed.set()
+        except BaseException as error:
+            server_errors.append(error)
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     server = Thread(target=serve, daemon=True)
     server.start()
@@ -472,7 +544,7 @@ def test_post_multipart_audio_cancellation_closes_connection_and_discards_result
                     "parakeet-tdt-0.6b-v3.oss-align.q8_0",
                     None,
                     "json",
-                    timeout=5.0,
+                    timeout=_TEST_TIMEOUT_SECONDS,
                     max_response_bytes=8,
                     cancellation=source.token,
                 )
@@ -483,13 +555,16 @@ def test_post_multipart_audio_cancellation_closes_connection_and_discards_result
     client = Thread(target=request, daemon=True)
     client.start()
     try:
-        assert request_received.wait(1.0)
+        assert request_received.wait(_TEST_TIMEOUT_SECONDS)
         source.cancel()
-        client.join(1.0)
-        server.join(1.0)
+        client.join(_TEST_TIMEOUT_SECONDS)
     finally:
+        server_stop.set()
+        server.join(_SERVER_JOIN_TIMEOUT_SECONDS)
         listener.close()
 
     assert not client.is_alive()
+    assert not server.is_alive()
+    assert not server_errors, f"cancellation test server failed: {server_errors[0]!r}"
     assert isinstance(outcome[0], CancellationError)
     assert client_closed.is_set()

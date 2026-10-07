@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -23,11 +24,14 @@ from voiceink_win.application import (
 )
 from voiceink_win.domain import (
     AsrTimeoutError,
+    Attempt,
+    ConfigurationError,
     ErrorCode,
     ImportRecoveryPendingError,
     ImportShutdownError,
     InvalidSourceError,
     JobId,
+    JobWorkspace,
     MalformedWavError,
     ProcessCrashedError,
     QueueFullRejectedError,
@@ -56,7 +60,11 @@ from voiceink_win.infrastructure import (
     media_process,
     validate_wav,
 )
-from voiceink_win.infrastructure.ffmpeg import SubprocessMediaNormalizer
+from voiceink_win.infrastructure.ffmpeg import (
+    FfmpegArtifactManifest,
+    SubprocessMediaNormalizer,
+    VerifiedFfmpegArtifact,
+)
 from voiceink_win.infrastructure.media_process import ProcessResult
 from voiceink_win.infrastructure.media_snapshot import (
     LocalMediaSnapshotStore,
@@ -163,6 +171,27 @@ def test_import_service_passes_absolute_close_deadline_to_asr(tmp_path: Path) ->
     application.close(timeout=7.0)
 
     assert asr.deadline == 57.0
+
+
+def test_import_service_can_leave_shared_asr_close_to_composition(tmp_path: Path) -> None:
+    class RecordingAsr:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self, *, deadline=None) -> None:
+            del deadline
+            self.close_calls += 1
+
+    asr = RecordingAsr()
+    application = ImportedMediaTranscriptionService(
+        FakeMediaNormalizer(),
+        asr,
+        FakeSnapshotStore(tmp_path / "work"),
+    )
+
+    application.close(close_asr=False)
+
+    assert asr.close_calls == 0
 
 
 def test_close_keeps_store_worker_owned_until_it_finishes(tmp_path: Path) -> None:
@@ -1099,17 +1128,19 @@ def test_recovery_cleanup_runs_once_while_reconciliation_is_pending(tmp_path: Pa
     application._stopping.set()
     application._monitor.join(1.0)
 
-    first_recovery = Thread(target=application._retry_recovery_workspaces_impl)
+    first_recovery = Thread(target=application._retry_recovery_workspaces_impl, daemon=True)
     first_recovery.start()
     assert application.reconciliation_started.wait(1.0)
 
-    second_recovery = Thread(target=application._retry_recovery_workspaces_impl)
+    second_recovery = Thread(target=application._retry_recovery_workspaces_impl, daemon=True)
     second_recovery.start()
     assert not second_recovery_cleanup_started.wait(0.1)
 
     application.release_reconciliation.set()
     first_recovery.join(1.0)
     second_recovery.join(1.0)
+    assert not first_recovery.is_alive()
+    assert not second_recovery.is_alive()
     application.close(timeout=2.0)
 
     assert store.cleanup_attempts == 2
@@ -1362,6 +1393,20 @@ def test_source_and_workspace_quotas_are_independent(tmp_path: Path) -> None:
         store._reserve_snapshot(first.path, 1)
     with pytest.raises(ResourceLimitExceededError):
         store._reserve_workspace(second.path, 100)
+
+
+@POSIX_ONLY
+def test_workspace_usage_counts_dot_prefixed_job_ids(tmp_path: Path) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "private")
+    workspace = store.create_workspace(JobId(".hidden-job"), 1)
+    (workspace.path / "payload").write_bytes(b"payload")
+
+    recovered = LocalMediaSnapshotStore(store.root)
+
+    assert workspace.path in recovered._workspace_reserved
+    assert recovered._workspace_reserved[workspace.path] == recovered._directory_size(
+        workspace.path, exclude_snapshot=True
+    )
 
 
 @POSIX_ONLY
@@ -1980,6 +2025,67 @@ def test_windows_snapshot_store_is_native_only_on_windows(tmp_path: Path) -> Non
         WindowsMediaSnapshotStore(tmp_path / "workspace")
 
 
+def test_windows_cleanup_quarantines_job_after_active_lock_release(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    workspace_path = root / "job" / "attempt-1"
+    workspace_path.mkdir(parents=True)
+    workspace = JobWorkspace(
+        workspace_path,
+        JobId("job"),
+        Attempt(1),
+        "job-identity",
+        "attempt-identity",
+    )
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._clock = FakeClock()
+    store.root = root
+    events: list[str] = []
+
+    class ActiveLock:
+        def __enter__(self):
+            events.append("active-lock-acquired")
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            del exc_type, exc_value, traceback
+            events.append("active-lock-released")
+
+    store.workspace_lock = lambda _workspace: ActiveLock()
+    root_lock = object()
+    store._acquire_root_lock = lambda **kwargs: root_lock
+    store._release_workspace_lock = lambda lock: (
+        events.append("root-lock-released") if lock is root_lock else None
+    )
+    store._cleanup_contents = lambda _workspace, **kwargs: (
+        events.append("attempt-cleaned") or workspace_path.parent
+    )
+
+    def quarantine_job(path: Path, identity: str) -> Path:
+        assert path == workspace_path.parent
+        assert identity == workspace.job_identity
+        assert events[-1] == "active-lock-released"
+        events.append("job-quarantined")
+        return root / ".voiceink-quarantine-test"
+
+    store._quarantine_empty_job = quarantine_job
+    store._remove_workspace_lock_file = lambda _path: events.append("lock-file-removed")
+    store._remove_quarantine_tree = lambda _path, **kwargs: events.append("quarantine-removed")
+    store._release_workspace_tree = lambda _path: events.append("quota-released")
+
+    store.cleanup(workspace)
+
+    assert events == [
+        "active-lock-acquired",
+        "attempt-cleaned",
+        "active-lock-released",
+        "job-quarantined",
+        "lock-file-removed",
+        "quarantine-removed",
+        "quota-released",
+        "root-lock-released",
+    ]
+
+
 def test_windows_native_path_policy_rejects_extended_unc() -> None:
     assert NativeWindowsMediaSecurityAdapter._is_unc(r"\\server\share\input.wav")
     assert NativeWindowsMediaSecurityAdapter._is_unc(r"\\?\UNC\server\share\input.wav")
@@ -2007,6 +2113,448 @@ def test_native_smoke_awaits_store_reapers_before_temp_cleanup() -> None:
     assert store.closed_while_present
     assert report["overlapped_reapers_awaited"] is True
     assert not marker.exists()
+
+
+@POSIX_ONLY
+def test_sweep_only_removes_owned_old_workspaces(tmp_path: Path) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "shared")
+    unrelated = store.root / "unrelated" / "attempt-1"
+    unrelated.mkdir(parents=True)
+    (unrelated / "manifest.json").write_text(
+        json.dumps(
+            {
+                "job_id": "unrelated",
+                "attempt": 1,
+                "job_identity": "not-the-directory",
+                "attempt_identity": "not-the-directory",
+            }
+        ),
+        encoding="ascii",
+    )
+    os.utime(unrelated, (1, 1))
+    os.utime(unrelated.parent, (1, 1))
+    unrelated_sentinel = unrelated.parent / "sentinel.bin"
+    unrelated_sentinel.write_bytes(b"do not mutate")
+    os.utime(unrelated.parent, (1, 1))
+    unknown_dot = store.root / ".unknown-stale-directory"
+    unknown_dot.mkdir()
+    (unknown_dot / "sentinel.bin").write_bytes(b"also do not mutate")
+    os.utime(unknown_dot, (1, 1))
+    before = {
+        path.relative_to(store.root): path.read_bytes()
+        for path in (unrelated / "manifest.json", unrelated_sentinel, unknown_dot / "sentinel.bin")
+    }
+    owned = store.create_workspace(JobId("owned"), 1)
+    os.utime(owned.path, None)
+    os.utime(owned.path.parent, (1, 1))
+
+    assert store.sweep_orphans(max_age_seconds=1) == 1
+    assert unrelated.exists()
+    assert not (unrelated.parent / media_snapshot.WORKSPACE_ACTIVE_LOCK).exists()
+    assert not (unrelated.parent / ".voiceink.lock").exists()
+    assert unknown_dot.exists()
+    assert {
+        path.relative_to(store.root): path.read_bytes()
+        for path in (unrelated / "manifest.json", unrelated_sentinel, unknown_dot / "sentinel.bin")
+    } == before
+    assert not owned.path.exists()
+
+
+@POSIX_ONLY
+def test_sweep_rejects_mixed_owned_and_unknown_children_without_mutation(tmp_path: Path) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "shared")
+    workspace = store.create_workspace(JobId("mixed"), 1)
+    unknown_file = workspace.path.parent / "unrelated.bin"
+    unknown_file.write_bytes(b"preserve")
+    invalid_attempt = workspace.path.parent / "attempt-2"
+    invalid_attempt.mkdir()
+    (invalid_attempt / "sentinel").write_bytes(b"preserve too")
+    os.utime(workspace.path.parent, (1, 1))
+    before = {
+        path.relative_to(store.root): path.read_bytes()
+        for path in (unknown_file, invalid_attempt / "sentinel")
+    }
+
+    assert store.sweep_orphans(max_age_seconds=1) == 0
+    assert workspace.path.exists()
+    assert unknown_file.exists()
+    assert invalid_attempt.exists()
+    assert not (workspace.path.parent / media_snapshot.WORKSPACE_ACTIVE_LOCK).exists()
+    assert {
+        path.relative_to(store.root): path.read_bytes()
+        for path in (unknown_file, invalid_attempt / "sentinel")
+    } == before
+
+
+@POSIX_ONLY
+def test_root_quarantine_recovers_after_deletion_failure_and_releases_reservations(
+    tmp_path: Path,
+) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "shared")
+    workspace = store.create_workspace(JobId("restart-recovery"), 1)
+    shutil.rmtree(workspace.path)
+    unrelated = store.root / ".unrelated-stale-directory"
+    unrelated.mkdir()
+    sentinel = unrelated / "sentinel"
+    sentinel.write_bytes(b"keep untouched")
+    os.utime(workspace.path.parent, (1, 1))
+
+    root_fd = store._open_dir(store.root)
+    job_fd = store._open_child_dir(root_fd, workspace.job_id.value)
+    original_remove = store._remove_quarantine_directory_locked
+    store._remove_quarantine_directory_locked = lambda *args, **kwargs: (_ for _ in ()).throw(
+        OSError("simulated deletion failure")
+    )
+    try:
+        with pytest.raises(OSError, match="simulated deletion failure"):
+            store._remove_empty_job_files_locked(
+                root_fd,
+                workspace.job_id.value,
+                job_fd,
+                workspace.job_identity,
+            )
+    finally:
+        store._remove_quarantine_directory_locked = original_remove
+        os.close(job_fd)
+        os.close(root_fd)
+
+    quarantines = tuple(store.root.glob(f"{media_snapshot.ROOT_QUARANTINE_PREFIX}*"))
+    assert len(quarantines) == 1
+    metadata_path = quarantines[0] / media_snapshot.QUARANTINE_METADATA
+    metadata = json.loads(metadata_path.read_text(encoding="ascii"))
+    metadata.pop("kind")
+    metadata_path.write_text(json.dumps(metadata), encoding="ascii")
+    recovered = LocalMediaSnapshotStore(store.root)
+
+    assert not quarantines[0].exists()
+    assert sentinel.read_bytes() == b"keep untouched"
+    assert recovered._workspace_reserved == {}
+    assert recovered._snapshot_reserved == {}
+
+
+def test_windows_sweep_fail_closed_keeps_reparse_like_job_untouched(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "sentinel").write_text("keep", encoding="ascii")
+    job = root / "job"
+    job.symlink_to(external, target_is_directory=True)
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(
+        dll=SimpleNamespace(
+            LockFileEx=lambda *args: True,
+            UnlockFileEx=lambda *args: True,
+        ),
+        GENERIC_READ=1,
+        GENERIC_WRITE=2,
+        DELETE=4,
+        OPEN_ALWAYS=4,
+        OPEN_EXISTING=3,
+        SHARE=7,
+        LOCKFILE_EXCLUSIVE_LOCK=2,
+        LOCKFILE_FAIL_IMMEDIATELY=1,
+    )
+    store._assert_owned_root_marker = lambda: None
+    store._assert_no_reparse_components = lambda path: (
+        (_ for _ in ()).throw(OSError("reparse point")) if path.is_symlink() else None
+    )
+
+    assert store.sweep_orphans(max_age_seconds=1) == 0
+    assert (external / "sentinel").exists()
+    assert job.is_symlink()
+
+
+def test_windows_sweep_does_not_lock_unknown_stale_job(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(parents=True)
+    job = root / "unknown-job"
+    job.mkdir()
+    sentinel = job / "sentinel.bin"
+    sentinel.write_bytes(b"preserve")
+    os.utime(job, (1, 1))
+    lock_calls: list[object] = []
+
+    class Dll:
+        def LockFileEx(self, *args):
+            lock_calls.append(args)
+            return True
+
+        def UnlockFileEx(self, *args):
+            return True
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(
+        dll=Dll(),
+        GENERIC_READ=1,
+        GENERIC_WRITE=2,
+        DELETE=4,
+        OPEN_ALWAYS=4,
+        OPEN_EXISTING=3,
+        SHARE=7,
+        LOCKFILE_EXCLUSIVE_LOCK=2,
+        LOCKFILE_FAIL_IMMEDIATELY=1,
+    )
+    store._assert_owned_root_marker = lambda: None
+    store._assert_no_reparse_components = lambda path: None
+    store._assert_contained_handle = lambda handle: None
+    store._open = lambda path, *args, **kwargs: path
+    store._identity = lambda handle: ("job", 0)
+    store._handle_mtime = lambda handle: 1.0
+    store._close = lambda handle: None
+
+    assert store.sweep_orphans(max_age_seconds=1) == 0
+    assert sentinel.read_bytes() == b"preserve"
+    assert not (job / media_snapshot.WORKSPACE_ACTIVE_LOCK).exists()
+    assert not (job / ".voiceink.lock").exists()
+    assert lock_calls == []
+
+
+def test_windows_sweep_removes_valid_stale_workspace_using_job_age(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(parents=True)
+    attempt = root / "job" / "attempt-1"
+    attempt.mkdir(parents=True)
+    os.utime(attempt, None)
+    os.utime(attempt.parent, (1, 1))
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(
+        dll=SimpleNamespace(
+            LockFileEx=lambda *args: True,
+            UnlockFileEx=lambda *args: True,
+        ),
+        GENERIC_READ=1,
+        GENERIC_WRITE=2,
+        DELETE=4,
+        OPEN_ALWAYS=4,
+        OPEN_EXISTING=3,
+        SHARE=7,
+        LOCKFILE_EXCLUSIVE_LOCK=2,
+        LOCKFILE_FAIL_IMMEDIATELY=1,
+    )
+    store._assert_owned_root_marker = lambda: None
+    store._assert_no_reparse_components = lambda path: None
+    store._assert_contained_handle = lambda handle: None
+    store._open = lambda path, *args, **kwargs: path
+    store._identity = lambda handle: ("job" if Path(handle) == attempt.parent else "attempt", 0)
+    store._handle_mtime = lambda handle: 1.0
+    store._close = lambda handle: None
+    store._remove_tree = lambda path, **kwargs: shutil.rmtree(path)
+    store._quarantine_attempt = lambda path, expected_identity, metadata: path
+    store._release_workspace_tree = lambda path: None
+    store._read_manifest = lambda path, **kwargs: {
+        "job_id": "job",
+        "attempt": 1,
+        "job_identity": "job",
+        "attempt_identity": "attempt",
+    }
+    store._quarantine_empty_job = lambda path, expected_identity: None
+
+    assert store.sweep_orphans(max_age_seconds=1) == 1
+    assert not attempt.exists()
+
+
+def test_windows_quarantine_recovery_rewrites_metadata_after_transient_failure(
+    tmp_path: Path,
+) -> None:
+    quarantine = tmp_path / "job" / ".voiceink-attempt-quarantine-retry"
+    quarantine.mkdir(parents=True)
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._api = SimpleNamespace(GENERIC_READ=1, GENERIC_WRITE=2, OPEN_EXISTING=3)
+    store._open = lambda path, *args, **kwargs: path
+    store._identity = lambda handle: ("attempt", 0)
+    store._close = lambda handle: None
+    writes: list[dict[str, object]] = []
+    store._write_manifest = lambda path, values, **kwargs: writes.append(values)
+    failed = True
+
+    def remove_once(path, **kwargs):
+        nonlocal failed
+        if failed:
+            failed = False
+            raise OSError("transient deletion failure")
+        shutil.rmtree(path)
+
+    store._remove_tree = remove_once
+    metadata = {
+        "job_id": "job",
+        "attempt": 1,
+        "job_identity": "job",
+        "attempt_identity": "attempt",
+    }
+
+    with pytest.raises(OSError, match="transient deletion failure"):
+        store._remove_quarantine_tree(
+            quarantine,
+            expected_identity="attempt",
+            metadata=metadata,
+        )
+
+    assert writes == [metadata]
+    store._remove_quarantine_tree(
+        quarantine,
+        expected_identity="attempt",
+        metadata=metadata,
+    )
+    assert not quarantine.exists()
+
+
+def test_windows_usage_scan_reopens_persisted_workspace_with_service_lock(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    attempt = root / "job" / "attempt-1"
+    attempt.mkdir(parents=True)
+    source_snapshot = attempt / "source.snapshot"
+    source_snapshot.write_bytes(b"snapshot")
+    manifest = attempt / "manifest.json"
+    manifest.write_bytes(b"manifest")
+    (root / "job" / media_snapshot.WORKSPACE_ACTIVE_LOCK).write_bytes(b"")
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(
+        GENERIC_READ=1,
+        OPEN_EXISTING=3,
+        FILE_ATTRIBUTE_DIRECTORY=0x10,
+        FILE_ATTRIBUTE_REPARSE_POINT=0x400,
+        dll=SimpleNamespace(
+            GetFileInformationByHandle=lambda handle, info: (
+                setattr(
+                    ctypes.cast(
+                        info,
+                        ctypes.POINTER(windows_snapshot._WindowsFileInformation),
+                    ).contents,
+                    "attributes",
+                    0x10 if Path(handle).is_dir() else 0,
+                )
+                or True
+            )
+        ),
+    )
+    store._open = lambda path, *args, **kwargs: path
+    store._close = lambda handle: None
+    store._assert_contained_handle = lambda handle: None
+    store._identity = lambda handle: (str(Path(handle)), Path(handle).stat().st_size)
+
+    first_usage, first_snapshots = store._scan_workspace_usage()
+    second_usage, second_snapshots = store._scan_workspace_usage()
+
+    assert first_usage == second_usage
+    assert first_snapshots == second_snapshots
+    assert first_snapshots[attempt] == source_snapshot.stat().st_size
+    assert first_usage[attempt] == manifest.stat().st_size
+
+
+def test_windows_root_quarantine_recovery_skips_unvalidated_dot_entries(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir()
+    valid = root / ".voiceink-quarantine-recovery"
+    valid.mkdir()
+    (valid / media_snapshot.WORKSPACE_ACTIVE_LOCK).write_bytes(b"")
+    (valid / media_snapshot.QUARANTINE_METADATA).write_text("metadata", encoding="ascii")
+    unknown = root / ".voiceink-quarantine-unknown"
+    unknown.mkdir()
+    (unknown / "sentinel").write_text("keep", encoding="ascii")
+    unrelated = root / ".voiceink-unrelated"
+    unrelated.write_text("keep", encoding="ascii")
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(GENERIC_READ=1, OPEN_EXISTING=3, dll=None)
+    store._assert_no_reparse_components = lambda path: None
+    store._open = lambda path, *args, **kwargs: path
+    store._close = lambda handle: None
+    store._identity = lambda handle: ("job-identity", 0)
+    store._read_manifest = lambda path, **kwargs: {
+        "job_id": "persisted-job",
+        "job_identity": "job-identity",
+    }
+    store._remove_workspace_lock_file = lambda path: (
+        path / media_snapshot.WORKSPACE_ACTIVE_LOCK
+    ).unlink()
+
+    def remove_tree(path: Path, *, expected_identity: str, **kwargs) -> None:
+        del kwargs
+        assert expected_identity == "job-identity"
+        children = tuple(path.iterdir())
+        assert children, "cleanup must handle a non-empty quarantine"
+        for child in children:
+            if child.is_dir():
+                remove_tree(child, expected_identity=expected_identity)
+            else:
+                child.unlink()
+        path.rmdir()
+
+    store._remove_tree = remove_tree
+
+    store._recover_root_quarantines()
+
+    assert not valid.exists()
+    assert unknown.exists()
+    assert unrelated.exists()
+
+
+@POSIX_ONLY
+def test_existing_valid_workspace_root_is_marked_during_upgrade(tmp_path: Path) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "legacy")
+    store.create_workspace(JobId("legacy"), 1)
+    (store.root / media_snapshot.WORKSPACE_ROOT_MARKER).rmdir()
+
+    upgraded = LocalMediaSnapshotStore(store.root)
+
+    assert (upgraded.root / media_snapshot.WORKSPACE_ROOT_MARKER).is_dir()
+
+
+@POSIX_ONLY
+def test_existing_workspace_root_without_marker_fails_closed(tmp_path: Path) -> None:
+    root = tmp_path / "existing"
+    root.mkdir()
+    root.chmod(0o700)
+    unrelated = root / "unrelated"
+    unrelated.mkdir()
+
+    with pytest.raises(OSError, match="established safely"):
+        LocalMediaSnapshotStore(root)
+    assert unrelated.exists()
+
+
+@POSIX_ONLY
+def test_workspace_root_rejects_group_or_world_access(tmp_path: Path) -> None:
+    root = tmp_path / "existing"
+    root.mkdir(mode=0o700)
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(mode=0o700)
+    root.chmod(0o720)
+
+    with pytest.raises(OSError, match="workspace root"):
+        LocalMediaSnapshotStore(root)
+
+
+@POSIX_ONLY
+def test_workspace_root_rejects_marker_with_group_or_world_access(tmp_path: Path) -> None:
+    root = tmp_path / "existing"
+    root.mkdir(mode=0o700)
+    marker = root / media_snapshot.WORKSPACE_ROOT_MARKER
+    marker.mkdir(mode=0o700)
+    marker.chmod(0o720)
+
+    with pytest.raises(OSError, match="workspace ownership marker"):
+        LocalMediaSnapshotStore(root)
+
+
+@POSIX_ONLY
+def test_workspace_root_rejects_wrong_owner(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "existing"
+    root.mkdir(mode=0o700)
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(mode=0o700)
+    current_uid = os.getuid()
+    monkeypatch.setattr(media_snapshot.os, "getuid", lambda: current_uid + 1)
+
+    with pytest.raises(OSError, match="owner"):
+        LocalMediaSnapshotStore(root)
 
 
 @POSIX_ONLY
@@ -2049,6 +2597,45 @@ def test_cleanup_fails_closed_when_attempt_directory_is_replaced(tmp_path: Path)
         store.cleanup(workspace)
 
     assert workspace.path.exists()
+
+
+@POSIX_ONLY
+def test_cleanup_reclaims_owned_attempt_quarantine_after_transient_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "private")
+    workspace = store.create_workspace(JobId("quarantine-retry"), 1)
+    (workspace.path / "payload").write_text("payload", encoding="ascii")
+    original_rmdir = media_snapshot.os.rmdir
+    failed = False
+
+    def fail_once(name, **kwargs):
+        nonlocal failed
+        if (
+            isinstance(name, str)
+            and name.startswith(".voiceink-attempt-quarantine-")
+            and not failed
+        ):
+            failed = True
+            raise OSError("transient deletion failure")
+        return original_rmdir(name, **kwargs)
+
+    monkeypatch.setattr(media_snapshot.os, "rmdir", fail_once)
+
+    with pytest.raises(OSError, match="transient deletion failure"):
+        store.cleanup(workspace)
+
+    quarantines = tuple(workspace.path.parent.glob(".voiceink-attempt-quarantine-*"))
+    assert len(quarantines) == 1
+    assert not (quarantines[0] / "manifest.json").exists()
+    assert (quarantines[0] / media_snapshot.QUARANTINE_METADATA).exists()
+    unrelated = workspace.path.parent / ".unrelated"
+    unrelated.mkdir()
+
+    store.cleanup(workspace)
+
+    assert not quarantines[0].exists()
+    assert unrelated.exists()
 
 
 @POSIX_ONLY
@@ -2096,8 +2683,9 @@ def test_windows_workspace_creation_exposes_partial_workspace() -> None:
     assert partial.job_identity == "job-identity"
 
 
-def test_windows_sweep_removes_old_unmanifested_workspace_safely(tmp_path: Path) -> None:
+def test_windows_sweep_keeps_old_unmanifested_workspace_safely(tmp_path: Path) -> None:
     root = tmp_path / "private"
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(parents=True)
     attempt = root / "job" / "attempt-1"
     attempt.mkdir(parents=True)
     os.utime(attempt, (1, 1))
@@ -2108,14 +2696,16 @@ def test_windows_sweep_removes_old_unmanifested_workspace_safely(tmp_path: Path)
     store._api = SimpleNamespace(GENERIC_READ=1, DELETE=2, OPEN_EXISTING=3)
     store._open = lambda *args, **kwargs: 1
     store._identity = lambda handle: ("job" if handle == 1 else "attempt", 0)
+    store._handle_mtime = lambda handle: 1.0
     store._assert_contained_handle = lambda handle: None
     store._close = lambda handle: None
     store._remove_tree = lambda path, **kwargs: shutil.rmtree(path)
     store._remove_directory = lambda path, **kwargs: path.rmdir()
     store._release_workspace_tree = lambda path: None
+    store._read_manifest = lambda path, **kwargs: (_ for _ in ()).throw(FileNotFoundError())
 
-    assert store.sweep_orphans(max_age_seconds=1) == 1
-    assert not root.joinpath("job").exists()
+    assert store.sweep_orphans(max_age_seconds=1) == 0
+    assert root.joinpath("job").exists()
 
 
 def test_reservation_release_is_owner_checked_and_idempotent() -> None:
@@ -2179,3 +2769,26 @@ def test_ffmpeg_normalizer_builds_safe_first_audio_stream_argv(tmp_path: Path) -
 def test_ffmpeg_normalizer_accepts_windows_drive_paths() -> None:
     assert SubprocessMediaNormalizer._is_allowed_input(r"C:\workspace\input.wav")
     assert not SubprocessMediaNormalizer._is_allowed_input("https://example.test/input.wav")
+
+
+@POSIX_ONLY
+def test_ffmpeg_execution_lock_rejects_replaced_executable(tmp_path: Path) -> None:
+    executable = tmp_path / "ffmpeg"
+    executable.write_bytes(b"trusted ffmpeg")
+    artifact = VerifiedFfmpegArtifact.verify(
+        executable,
+        FfmpegArtifactManifest(
+            "ffmpeg-test",
+            "https://example.invalid/ffmpeg",
+            hashlib.sha256(b"trusted ffmpeg").hexdigest(),
+            "GPL-3.0-or-later",
+            executable,
+        ),
+    )
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(b"untrusted ffmpeg")
+    replacement.replace(executable)
+
+    with pytest.raises(ConfigurationError, match="identity|checksum"):
+        with artifact.execution_lock():
+            pass
