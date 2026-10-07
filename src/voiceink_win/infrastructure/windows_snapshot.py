@@ -47,6 +47,8 @@ from .media_snapshot import (
     _WindowsFileInformation,
 )
 
+ROOT_ACTIVE_LOCK = ".voiceink-root.active.lock"
+
 
 def _check_lifecycle(
     cancellation: CancellationToken | None,
@@ -522,7 +524,11 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
 
     def create_workspace(self, job_id: JobId, attempt: int) -> JobWorkspace:
         job_path = self.root / job_id.value
-        self._mkdir(job_path)
+        root_lock = self._acquire_root_lock()
+        try:
+            self._mkdir(job_path)
+        finally:
+            self._release_workspace_lock(root_lock)
         self._assert_no_reparse_components(job_path)
         if not hasattr(getattr(self._api, "dll", None), "LockFileEx"):
             if isinstance(self._api, WindowsKernel32):
@@ -914,33 +920,44 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
 
     def cleanup(self, workspace: JobWorkspace, *, deadline: float | None = None) -> None:
         _check_cleanup_deadline(deadline, self._clock)
-        quarantine_path = None
-        with self.workspace_lock(workspace):
-            try:
-                quarantine_path = self._cleanup_contents(workspace, deadline=deadline)
-            finally:
+        job_path_to_quarantine = None
+        root_lock = None
+        try:
+            with self.workspace_lock(workspace):
                 try:
-                    if not workspace.path.exists():
-                        self._release_workspace(workspace.path)
-                        self._release_snapshot(workspace.path)
-                except OSError:
+                    job_path_to_quarantine = self._cleanup_contents(workspace, deadline=deadline)
+                    if job_path_to_quarantine is not None:
+                        root_lock = self._acquire_root_lock()
+                finally:
+                    try:
+                        if not workspace.path.exists():
+                            self._release_workspace(workspace.path)
+                            self._release_snapshot(workspace.path)
+                    except OSError:
+                        pass
+            if job_path_to_quarantine is not None and root_lock is not None:
+                try:
+                    quarantine_path = self._quarantine_empty_job(
+                        job_path_to_quarantine, workspace.job_identity
+                    )
+                    if quarantine_path is None:
+                        return
+                    self._remove_workspace_lock_file(quarantine_path)
+                    self._remove_quarantine_tree(
+                        quarantine_path,
+                        expected_identity=workspace.job_identity,
+                        metadata={
+                            "kind": "job",
+                            "job_id": workspace.job_id.value,
+                            "job_identity": workspace.job_identity,
+                        },
+                        deadline=deadline,
+                    )
+                    self._release_workspace_tree(quarantine_path)
+                except FileNotFoundError:
                     pass
-        if quarantine_path is not None:
-            try:
-                self._remove_workspace_lock_file(quarantine_path)
-                self._remove_quarantine_tree(
-                    quarantine_path,
-                    expected_identity=workspace.job_identity,
-                    metadata={
-                        "kind": "job",
-                        "job_id": workspace.job_id.value,
-                        "job_identity": workspace.job_identity,
-                    },
-                    deadline=deadline,
-                )
-                self._release_workspace_tree(quarantine_path)
-            except FileNotFoundError:
-                pass
+        finally:
+            self._release_workspace_lock(root_lock)
 
     def _cleanup_contents(
         self, workspace: JobWorkspace, *, deadline: float | None = None
@@ -975,8 +992,8 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                     deadline=deadline,
                 )
                 self._release_workspace_tree(attempt_quarantine)
-                return self._quarantine_empty_job(expected.parent, workspace.job_identity)
-            return self._quarantine_empty_job(expected.parent, workspace.job_identity)
+                return expected.parent
+            return expected.parent
         else:
             self._close(attempt_handle)
         attempt_quarantine = self._quarantine_attempt(
@@ -1000,7 +1017,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             deadline=deadline,
         )
         self._release_workspace_tree(attempt_quarantine)
-        return self._quarantine_empty_job(expected.parent, workspace.job_identity)
+        return expected.parent
 
     def _quarantine_empty_job(self, job_path: Path, expected_identity: str) -> Path | None:
         if any(child.name != ".voiceink.active.lock" for child in job_path.iterdir()):
@@ -1128,13 +1145,26 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
     def sweep_orphans(self, *, max_age_seconds: float) -> int:
         return self._sweep_orphans(max_age_seconds=max_age_seconds)
 
+    def _acquire_root_lock(
+        self, *, nonblocking: bool = False
+    ) -> tuple[int, _WindowsOverlapped] | None:
+        return self._acquire_workspace_lock(
+            self.root,
+            nonblocking=nonblocking,
+            lock_name=ROOT_ACTIVE_LOCK,
+        )
+
     def _acquire_workspace_lock(
-        self, job_path: Path, *, nonblocking: bool = False
+        self,
+        job_path: Path,
+        *,
+        nonblocking: bool = False,
+        lock_name: str = WORKSPACE_ACTIVE_LOCK,
     ) -> tuple[int, _WindowsOverlapped] | None:
         dll = getattr(self._api, "dll", None)
         if dll is None or not hasattr(dll, "LockFileEx"):
             return None
-        lock_path = job_path / ".voiceink.active.lock"
+        lock_path = job_path / lock_name
         handle = self._open(
             lock_path,
             self._api.GENERIC_READ | self._api.GENERIC_WRITE | self._api.DELETE,
@@ -1234,7 +1264,9 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             except OSError:
                 continue
             native_lock = None
+            root_lock = None
             quarantine_path = None
+            job_path_to_quarantine = None
             removed_from_job = False
             try:
                 job_identity, _ = self._identity(job_handle)
@@ -1258,6 +1290,9 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 finally:
                     self._close(locked_job_handle)
                 if time.time() - job_mtime <= max_age_seconds:
+                    continue
+                root_lock = self._acquire_root_lock(nonblocking=True)
+                if root_lock is None:
                     continue
                 for attempt in tuple(entry.iterdir()):
                     if attempt.name.startswith(ATTEMPT_QUARANTINE_PREFIX):
@@ -1344,19 +1379,37 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                     child.is_dir() and child.name.startswith("attempt-")
                     for child in entry.iterdir()
                 ):
-                    quarantine_path = self._quarantine_empty_job(entry, job_identity)
+                    job_path_to_quarantine = entry
             except OSError:
                 pass
             finally:
                 self._release_workspace_lock(native_lock)
                 self._close(job_handle)
-            if quarantine_path is not None:
+            if root_lock is not None:
                 try:
-                    self._remove_workspace_lock_file(quarantine_path)
-                    self._remove_directory(quarantine_path, expected_identity=job_identity)
-                    self._release_workspace_tree(quarantine_path)
+                    if job_path_to_quarantine is not None:
+                        try:
+                            quarantine_path = self._quarantine_empty_job(
+                                job_path_to_quarantine, job_identity
+                            )
+                        except OSError:
+                            quarantine_path = None
+                    if quarantine_path is not None:
+                        self._remove_workspace_lock_file(quarantine_path)
+                        self._remove_quarantine_tree(
+                            quarantine_path,
+                            expected_identity=job_identity,
+                            metadata={
+                                "kind": "job",
+                                "job_id": entry.name,
+                                "job_identity": job_identity,
+                            },
+                        )
+                        self._release_workspace_tree(quarantine_path)
                 except OSError:
                     pass
+                finally:
+                    self._release_workspace_lock(root_lock)
         return removed
 
     def _preflight_orphan_job(self, job_path: Path, job_identity: str) -> bool:
@@ -1493,6 +1546,8 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         except OSError:
             return False
         for job in entries:
+            if job.name == ROOT_ACTIVE_LOCK:
+                continue
             if not job.is_dir() or job.name == WORKSPACE_ROOT_MARKER:
                 return False
             job_handle: int | None = None

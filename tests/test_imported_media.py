@@ -24,12 +24,14 @@ from voiceink_win.application import (
 )
 from voiceink_win.domain import (
     AsrTimeoutError,
+    Attempt,
     ConfigurationError,
     ErrorCode,
     ImportRecoveryPendingError,
     ImportShutdownError,
     InvalidSourceError,
     JobId,
+    JobWorkspace,
     MalformedWavError,
     ProcessCrashedError,
     QueueFullRejectedError,
@@ -2019,6 +2021,67 @@ def test_windows_snapshot_store_is_native_only_on_windows(tmp_path: Path) -> Non
         pytest.skip("contract assertion is for the non-Windows test host")
     with pytest.raises(RuntimeError):
         WindowsMediaSnapshotStore(tmp_path / "workspace")
+
+
+def test_windows_cleanup_quarantines_job_after_active_lock_release(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    workspace_path = root / "job" / "attempt-1"
+    workspace_path.mkdir(parents=True)
+    workspace = JobWorkspace(
+        workspace_path,
+        JobId("job"),
+        Attempt(1),
+        "job-identity",
+        "attempt-identity",
+    )
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._clock = FakeClock()
+    store.root = root
+    events: list[str] = []
+
+    class ActiveLock:
+        def __enter__(self):
+            events.append("active-lock-acquired")
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            del exc_type, exc_value, traceback
+            events.append("active-lock-released")
+
+    store.workspace_lock = lambda _workspace: ActiveLock()
+    root_lock = object()
+    store._acquire_root_lock = lambda **kwargs: root_lock
+    store._release_workspace_lock = lambda lock: (
+        events.append("root-lock-released") if lock is root_lock else None
+    )
+    store._cleanup_contents = lambda _workspace, **kwargs: (
+        events.append("attempt-cleaned") or workspace_path.parent
+    )
+
+    def quarantine_job(path: Path, identity: str) -> Path:
+        assert path == workspace_path.parent
+        assert identity == workspace.job_identity
+        assert events[-1] == "active-lock-released"
+        events.append("job-quarantined")
+        return root / ".voiceink-quarantine-test"
+
+    store._quarantine_empty_job = quarantine_job
+    store._remove_workspace_lock_file = lambda _path: events.append("lock-file-removed")
+    store._remove_quarantine_tree = lambda _path, **kwargs: events.append("quarantine-removed")
+    store._release_workspace_tree = lambda _path: events.append("quota-released")
+
+    store.cleanup(workspace)
+
+    assert events == [
+        "active-lock-acquired",
+        "attempt-cleaned",
+        "active-lock-released",
+        "job-quarantined",
+        "lock-file-removed",
+        "quarantine-removed",
+        "quota-released",
+        "root-lock-released",
+    ]
 
 
 def test_windows_native_path_policy_rejects_extended_unc() -> None:

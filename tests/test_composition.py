@@ -83,6 +83,10 @@ def _runtime_files(tmp_path: Path) -> tuple[Path, Path, str]:
     return manifest_path, lock_path, hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
 
+def _absolute_test_path(*parts: str) -> Path:
+    return Path.cwd().joinpath("composition-test", *parts)
+
+
 def test_runtime_paths_require_all_trusted_configuration_values() -> None:
     with pytest.raises(ConfigurationError, match="VOICEINK_ARTIFACT_LOCK_SHA256"):
         RuntimePaths.from_environment(
@@ -226,31 +230,34 @@ def test_application_rolls_back_workers_when_runtime_start_fails() -> None:
 
 
 def test_imported_media_configuration_is_disabled_or_rejected_explicitly() -> None:
+    ffmpeg = _absolute_test_path("ffmpeg.exe")
+    workspace = _absolute_test_path("workspace")
+    imports = _absolute_test_path("imports")
     assert ImportedMediaConfiguration.from_environment({}) is None
     assert (
-        ImportedMediaConfiguration.from_environment({"VOICEINK_FFMPEG_PATH": "/opt/ffmpeg"}) is None
+        ImportedMediaConfiguration.from_environment({"VOICEINK_FFMPEG_PATH": str(ffmpeg)}) is None
     )
 
     with pytest.raises(ConfigurationError, match="VOICEINK_IMPORT_ROOTS"):
         ImportedMediaConfiguration.from_environment(
             {
-                "VOICEINK_FFMPEG_PATH": "/opt/ffmpeg",
-                "VOICEINK_IMPORT_WORKSPACE_ROOT": "/tmp/work",
+                "VOICEINK_FFMPEG_PATH": str(ffmpeg),
+                "VOICEINK_IMPORT_WORKSPACE_ROOT": str(workspace),
             }
         )
 
     with pytest.raises(ConfigurationError, match="metadata path does not match"):
         ImportedMediaConfiguration(
-            Path("/opt/ffmpeg"),
+            ffmpeg,
             FfmpegArtifactManifest(
                 "ffmpeg-test",
                 "https://example.invalid/ffmpeg",
                 "0" * 64,
                 "GPL-3.0-or-later",
-                Path("/opt/other-ffmpeg"),
+                _absolute_test_path("other-ffmpeg.exe"),
             ),
-            Path("/tmp/work"),
-            (Path("/tmp/imports"),),
+            workspace,
+            (imports,),
         )
 
 
@@ -258,6 +265,11 @@ def test_environment_build_supports_ffmpeg_path_only_and_complete_import_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[object] = []
+    runtime_manifest = _absolute_test_path("runtime.json")
+    artifact_lock = _absolute_test_path("lock.json")
+    ffmpeg = _absolute_test_path("ffmpeg.exe")
+    workspace = _absolute_test_path("workspace")
+    imports = _absolute_test_path("imports")
 
     def fake_build(*args, **kwargs):
         captured.append(kwargs["imported_media"])
@@ -265,10 +277,10 @@ def test_environment_build_supports_ffmpeg_path_only_and_complete_import_config(
 
     monkeypatch.setattr(composition, "build_application", fake_build)
     base = {
-        "VOICEINK_RUNTIME_MANIFEST": "/opt/runtime.json",
-        "VOICEINK_ARTIFACT_LOCK": "/opt/lock.json",
+        "VOICEINK_RUNTIME_MANIFEST": str(runtime_manifest),
+        "VOICEINK_ARTIFACT_LOCK": str(artifact_lock),
         "VOICEINK_ARTIFACT_LOCK_SHA256": "0" * 64,
-        "VOICEINK_FFMPEG_PATH": "/opt/ffmpeg",
+        "VOICEINK_FFMPEG_PATH": str(ffmpeg),
     }
 
     assert composition.build_application_from_environment(environ=base) is not None
@@ -276,8 +288,8 @@ def test_environment_build_supports_ffmpeg_path_only_and_complete_import_config(
 
     complete = {
         **base,
-        "VOICEINK_IMPORT_WORKSPACE_ROOT": "/tmp/voiceink-work",
-        "VOICEINK_IMPORT_ROOTS": "/tmp/imports",
+        "VOICEINK_IMPORT_WORKSPACE_ROOT": str(workspace),
+        "VOICEINK_IMPORT_ROOTS": str(imports),
         "VOICEINK_FFMPEG_VERSION": "ffmpeg-test",
         "VOICEINK_FFMPEG_PROVENANCE_URL": "https://example.invalid/ffmpeg",
         "VOICEINK_FFMPEG_SHA256": "1" * 64,
