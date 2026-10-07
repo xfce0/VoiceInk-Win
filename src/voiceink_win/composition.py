@@ -19,6 +19,7 @@ from voiceink_win.domain import (
 )
 from voiceink_win.infrastructure import (
     LoadedRuntimeManifest,
+    LoopbackProxy,
     NeMoSidecarRuntime,
     RuntimeArtifactManifest,
     SidecarConfig,
@@ -89,6 +90,7 @@ class BackendApplication:
 
     _asr: AsrApplicationService
     _runtime: NeMoSidecarRuntime
+    _proxy: LoopbackProxy
     _lifecycle_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _started: bool = False
     _closed: bool = False
@@ -100,8 +102,18 @@ class BackendApplication:
                 raise RuntimeUnavailableError("backend application is closed")
             if self._started:
                 return
-            self._runtime.start()
+            self._proxy.start()
+            try:
+                self._runtime.start()
+            except BaseException:
+                self._proxy.close()
+                self._closed = True
+                raise
             self._started = True
+
+    @property
+    def endpoint(self) -> str:
+        return self._proxy.endpoint
 
     def health(self) -> RuntimeHealth:
         return self._asr.health()
@@ -117,12 +129,20 @@ class BackendApplication:
             if self._closed:
                 return
             self._closing = True
+        failure: BaseException | None = None
         try:
             self._asr.close()
-        except Exception:
+        except BaseException as error:
+            failure = error
+        try:
+            self._proxy.close()
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
             with self._lifecycle_lock:
                 self._closing = False
-            raise
+            raise failure
         with self._lifecycle_lock:
             self._closing = False
             self._closed = True
@@ -142,35 +162,41 @@ def build_application(
         artifact_lock,
         lock_sha256=artifact_lock_sha256,
     )
-    endpoint = endpoint or allocate_loopback_endpoint()
-    executable_manifest = _artifact_manifest(configuration, "executable")
-    model_manifest = _artifact_manifest(configuration, "model")
-    sidecar_config = SidecarConfig(
-        endpoint=endpoint,
-        model_id=configuration.model_id,
-        backend=configuration.backend,
-        readiness_timeout=readiness_timeout,
-        require_model_attestation=True,
-    )
-    supervisor = SubprocessSupervisor(
-        SubprocessConfig(
-            executable=configuration.executable,
-            model=configuration.model,
-            executable_sha256=executable_manifest.sha256,
-            model_sha256=model_manifest.sha256,
-            executable_manifest=executable_manifest,
-            model_manifest=model_manifest,
+    sidecar_endpoint = allocate_loopback_endpoint()
+    proxy = LoopbackProxy(sidecar_endpoint, listen_endpoint=endpoint)
+    try:
+        endpoint = proxy.endpoint
+        executable_manifest = _artifact_manifest(configuration, "executable")
+        model_manifest = _artifact_manifest(configuration, "model")
+        sidecar_config = SidecarConfig(
             endpoint=endpoint,
-            backend=configuration.backend,
             model_id=configuration.model_id,
+            backend=configuration.backend,
+            readiness_timeout=readiness_timeout,
+            require_model_attestation=True,
         )
-    )
-    runtime = NeMoSidecarRuntime(
-        sidecar_config,
-        UrllibLoopbackTransport(endpoint),
-        supervisor,
-    )
-    return BackendApplication(AsrApplicationService(runtime), runtime)
+        supervisor = SubprocessSupervisor(
+            SubprocessConfig(
+                executable=configuration.executable,
+                model=configuration.model,
+                executable_sha256=executable_manifest.sha256,
+                model_sha256=model_manifest.sha256,
+                executable_manifest=executable_manifest,
+                model_manifest=model_manifest,
+                endpoint=sidecar_endpoint,
+                backend=configuration.backend,
+                model_id=configuration.model_id,
+            )
+        )
+        runtime = NeMoSidecarRuntime(
+            sidecar_config,
+            UrllibLoopbackTransport(endpoint),
+            supervisor,
+        )
+        return BackendApplication(AsrApplicationService(runtime), runtime, proxy)
+    except Exception:
+        proxy.close()
+        raise
 
 
 def build_application_from_environment(

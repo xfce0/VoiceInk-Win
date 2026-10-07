@@ -58,6 +58,7 @@ def _health_payload(application: BackendApplication) -> dict[str, object]:
         "message": health.message,
         "backend": health.backend,
         "model_id": capabilities.model_id,
+        "endpoint": application.endpoint,
     }
 
 

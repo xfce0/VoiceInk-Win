@@ -101,6 +101,10 @@ class _FakeApplication:
         self._status = status
         self._close_error = close_error
 
+    @property
+    def endpoint(self) -> str:
+        return "http://127.0.0.1:45678"
+
     def start(self) -> None:
         return None
 
