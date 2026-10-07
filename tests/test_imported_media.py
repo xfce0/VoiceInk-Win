@@ -2054,12 +2054,30 @@ def test_sweep_only_removes_owned_old_workspaces(tmp_path: Path) -> None:
     )
     os.utime(unrelated, (1, 1))
     os.utime(unrelated.parent, (1, 1))
+    unrelated_sentinel = unrelated.parent / "sentinel.bin"
+    unrelated_sentinel.write_bytes(b"do not mutate")
+    os.utime(unrelated.parent, (1, 1))
+    unknown_dot = store.root / ".unknown-stale-directory"
+    unknown_dot.mkdir()
+    (unknown_dot / "sentinel.bin").write_bytes(b"also do not mutate")
+    os.utime(unknown_dot, (1, 1))
+    before = {
+        path.relative_to(store.root): path.read_bytes()
+        for path in (unrelated / "manifest.json", unrelated_sentinel, unknown_dot / "sentinel.bin")
+    }
     owned = store.create_workspace(JobId("owned"), 1)
     os.utime(owned.path, None)
     os.utime(owned.path.parent, (1, 1))
 
     assert store.sweep_orphans(max_age_seconds=1) == 1
     assert unrelated.exists()
+    assert not (unrelated.parent / media_snapshot.WORKSPACE_ACTIVE_LOCK).exists()
+    assert not (unrelated.parent / ".voiceink.lock").exists()
+    assert unknown_dot.exists()
+    assert {
+        path.relative_to(store.root): path.read_bytes()
+        for path in (unrelated / "manifest.json", unrelated_sentinel, unknown_dot / "sentinel.bin")
+    } == before
     assert not owned.path.exists()
 
 
@@ -2260,7 +2278,20 @@ def test_windows_root_quarantine_recovery_skips_unvalidated_dot_entries(tmp_path
     store._remove_workspace_lock_file = lambda path: (
         path / media_snapshot.WORKSPACE_ACTIVE_LOCK
     ).unlink()
-    store._remove_directory = lambda path, **kwargs: shutil.rmtree(path)
+
+    def remove_tree(path: Path, *, expected_identity: str, **kwargs) -> None:
+        del kwargs
+        assert expected_identity == "job-identity"
+        children = tuple(path.iterdir())
+        assert children, "cleanup must handle a non-empty quarantine"
+        for child in children:
+            if child.is_dir():
+                remove_tree(child, expected_identity=expected_identity)
+            else:
+                child.unlink()
+        path.rmdir()
+
+    store._remove_tree = remove_tree
 
     store._recover_root_quarantines()
 

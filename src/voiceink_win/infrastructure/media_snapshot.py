@@ -857,12 +857,19 @@ class LocalMediaSnapshotStore:
         removed = 0
         try:
             for entry in os.scandir(root_fd):
-                if entry.name == WORKSPACE_ROOT_MARKER:
+                if entry.name == WORKSPACE_ROOT_MARKER or entry.name.startswith("."):
                     continue
                 info = os.stat(entry.name, dir_fd=root_fd, follow_symlinks=False)
                 if not stat.S_ISDIR(info.st_mode):
                     continue
                 if time.time() - info.st_mtime <= max_age_seconds:
+                    continue
+                if not self._read_only_orphan_candidate(
+                    entry.name,
+                    self.root / entry.name,
+                    job_mtime=info.st_mtime,
+                    max_age_seconds=max_age_seconds,
+                ):
                     continue
                 job_fd = self._open_child_dir(root_fd, entry.name)
                 active_lock_fd = self._try_workspace_lock_file(job_fd, WORKSPACE_ACTIVE_LOCK)
@@ -945,6 +952,50 @@ class LocalMediaSnapshotStore:
         finally:
             os.close(root_fd)
         return removed
+
+    def _read_only_orphan_candidate(
+        self,
+        job_name: str,
+        job_path: Path,
+        *,
+        job_mtime: float,
+        max_age_seconds: float,
+    ) -> bool:
+        try:
+            with os.scandir(job_path) as entries:
+                children = tuple(entries)
+        except OSError:
+            return False
+        owned_orphan = False
+        for child in children:
+            if child.name in {".voiceink.lock", WORKSPACE_ACTIVE_LOCK}:
+                if not child.is_file(follow_symlinks=False):
+                    return False
+                continue
+            child_path = Path(child.path)
+            if child.name.startswith("attempt-"):
+                if not child.is_dir(follow_symlinks=False):
+                    return False
+                ownership = self._owned_workspace(
+                    job_name,
+                    child.name,
+                    child_path,
+                    job_mtime=job_mtime,
+                )
+            elif child.name.startswith(ATTEMPT_QUARANTINE_PREFIX):
+                if not child.is_dir(follow_symlinks=False):
+                    return False
+                ownership = self._owned_attempt_quarantine(
+                    job_name,
+                    child.name,
+                    child_path,
+                    job_mtime=job_mtime,
+                )
+            else:
+                return False
+            if ownership is not None and time.time() - ownership[1] > max_age_seconds:
+                owned_orphan = True
+        return owned_orphan
 
     def _is_owned_workspace(self, job_name: str, attempt_name: str, path: Path) -> bool:
         return self._owned_workspace(job_name, attempt_name, path) is not None
@@ -1052,7 +1103,9 @@ class LocalMediaSnapshotStore:
                 return False
             with os.scandir(job.path) as attempts:
                 attempt_entries = tuple(
-                    attempt for attempt in attempts if attempt.name != ".voiceink.lock"
+                    attempt
+                    for attempt in attempts
+                    if attempt.name not in {".voiceink.lock", WORKSPACE_ACTIVE_LOCK}
                 )
             if not attempt_entries or any(
                 not attempt.is_dir(follow_symlinks=False)

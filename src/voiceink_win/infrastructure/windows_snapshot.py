@@ -1393,7 +1393,11 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                     self._close(handle)
             try:
                 self._remove_workspace_lock_file(entry)
-                self._remove_directory(entry, expected_identity=identity)
+                self._remove_quarantine_tree(
+                    entry,
+                    expected_identity=identity,
+                    metadata=values,
+                )
             except OSError:
                 continue
 
