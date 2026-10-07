@@ -89,8 +89,9 @@ become empty successful transcripts.
 - Unit tests cover initial state, valid transitions, empty results, typed
   runtime failures, invalid actions, and listener removal.
 - Existing repository tests remain the regression suite for backend contracts.
-- GUI smoke validation is deferred because PySide6 is optional and macOS CI
-  may not provide a display server.
+- The Windows packaging workflow validates the frozen x64 PE and launches the
+  shell through its real entrypoint with Qt's offscreen platform plugin.
+- Interactive GUI validation remains a Windows user acceptance step.
 
 ## Open Questions and Deferred Work
 
@@ -98,4 +99,6 @@ become empty successful transcripts.
 - Native global hotkey and WASAPI adapters.
 - Connecting the shell controller to `AsrApplicationService` after microphone
   capture and an audio input port are specified.
-- Packaging PySide6 and selecting the supported Qt deployment strategy.
+- The PyInstaller Windows x64 shell artifact is now packaged by the pinned
+  `Windows Frontend Shell Build` workflow; packaging a production ASR runtime
+  remains deferred.

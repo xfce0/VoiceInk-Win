@@ -48,6 +48,25 @@ make check
 make push
 ```
 
+## Windows Frontend Shell Artifact
+
+The `Windows Frontend Shell Build` workflow publishes the single-file artifact
+`voiceink-shell-windows-x64`. GitHub CLI downloads and extracts it into the
+requested directory:
+
+```powershell
+gh run download RUN_ID --repo xfce0/VoiceInk-Win --name voiceink-shell-windows-x64 --dir .\voiceink-shell-windows-x64
+& .\voiceink-shell-windows-x64\voiceink-shell.exe
+```
+
+Replace `RUN_ID` with the workflow run ID, or download the artifact ZIP from
+the Actions page and extract it with `Expand-Archive`. The artifact includes
+the same command in its `README.txt`.
+
+This is the first desktop shell demo. It uses a deterministic fake backend;
+microphone capture, real ASR, global hotkeys, system tray, history persistence,
+and imported-media actions are not wired yet.
+
 ## Windows Diagnostic Build
 
 The first native validation artifact is a portable CLI executable. It writes

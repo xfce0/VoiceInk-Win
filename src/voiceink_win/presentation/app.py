@@ -8,8 +8,9 @@ from voiceink_win.application import ShellController
 from voiceink_win.infrastructure import FakeShellBackend
 
 
-def main() -> int:
+def main(*, smoke: bool = False) -> int:
     try:
+        from PySide6.QtCore import QTimer
         from PySide6.QtGui import QFont, QFontDatabase
         from PySide6.QtWidgets import QApplication
     except ImportError as error:
@@ -30,6 +31,8 @@ def main() -> int:
     controller = ShellController(FakeShellBackend())
     window = MainWindow(controller)
     window.show()
+    if smoke:
+        QTimer.singleShot(100, application.quit)
     return application.exec()
 
 
