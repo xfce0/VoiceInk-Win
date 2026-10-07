@@ -8,11 +8,13 @@ from pathlib import Path
 EXPECTED_MACHINE = 0x8664
 EXPECTED_PE32_PLUS = 0x20B
 WINDOWS_GUI_SUBSYSTEM = 2
+WINDOWS_CONSOLE_SUBSYSTEM = 3
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
+    parser.add_argument("--subsystem", choices=("gui", "console"), default="gui")
     return parser
 
 
@@ -31,7 +33,7 @@ def _read_uint16(data: bytes, offset: int) -> int:
     return int.from_bytes(data[offset:end], "little")
 
 
-def validate_executable(path: Path) -> None:
+def validate_executable(path: Path, *, expected_subsystem: int = WINDOWS_GUI_SUBSYSTEM) -> None:
     with path.open("rb") as stream:
         dos_header = _read_exact(stream, 0, 0x40)
         if dos_header[:2] != b"MZ":
@@ -54,18 +56,26 @@ def validate_executable(path: Path) -> None:
         optional_header = _read_exact(stream, pe_offset + 24, optional_size)
         if _read_uint16(optional_header, 0) != EXPECTED_PE32_PLUS:
             raise ValueError("executable is not a 64-bit PE32+ image")
-        if _read_uint16(optional_header, 68) != WINDOWS_GUI_SUBSYSTEM:
-            raise ValueError("executable is not a Windows GUI subsystem image")
+        subsystem = _read_uint16(optional_header, 68)
+        if subsystem != expected_subsystem:
+            raise ValueError(f"expected Windows subsystem {expected_subsystem}, got {subsystem}")
 
 
 def main() -> int:
-    path = _parser().parse_args().executable
-    if path.name.lower() != "voiceink-shell.exe":
-        raise SystemExit("frontend package smoke: unexpected executable name")
+    arguments = _parser().parse_args()
+    path = arguments.executable
+    expected_name = (
+        "voiceink-shell.exe" if arguments.subsystem == "gui" else "voiceink-shell-smoke.exe"
+    )
+    if path.name.lower() != expected_name:
+        raise SystemExit(f"frontend package smoke: expected {expected_name}")
     if not path.is_file():
         raise SystemExit(f"frontend package smoke: missing executable: {path}")
     try:
-        validate_executable(path)
+        expected_subsystem = (
+            WINDOWS_GUI_SUBSYSTEM if arguments.subsystem == "gui" else WINDOWS_CONSOLE_SUBSYSTEM
+        )
+        validate_executable(path, expected_subsystem=expected_subsystem)
     except (OSError, ValueError) as error:
         raise SystemExit(f"frontend package smoke: {error}") from error
     print(f"frontend package smoke: passed ({path})")
