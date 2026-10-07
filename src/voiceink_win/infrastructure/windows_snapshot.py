@@ -7,7 +7,9 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 from threading import Event, Lock, Thread, current_thread
@@ -35,6 +37,7 @@ from .clock import SystemMonotonicClock
 from .media_snapshot import (
     SOURCE_LIMIT,
     WORKSPACE_LIMIT,
+    WORKSPACE_ROOT_MARKER,
     LocalMediaSnapshotStore,
     WindowsAdapterRequiredError,
     _WindowsFileInformation,
@@ -222,6 +225,8 @@ class WindowsKernel32:
     FILE_OPEN = 1
     FILE_OPEN_IF = 3
     OBJ_CASE_INSENSITIVE = 0x40
+    LOCKFILE_FAIL_IMMEDIATELY = 0x1
+    LOCKFILE_EXCLUSIVE_LOCK = 0x2
 
     def __init__(self, dll: object | None = None) -> None:
         self.dll = dll or ctypes.WinDLL("kernel32", use_last_error=True)
@@ -271,6 +276,30 @@ class WindowsKernel32:
             wintypes.HANDLE,
         )
         self.dll.CreateFileW.errcheck = _check_handle
+        if hasattr(self.dll, "LockFileEx"):
+            _signature(
+                self.dll.LockFileEx,
+                [
+                    wintypes.HANDLE,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    ctypes.POINTER(_WindowsOverlapped),
+                ],
+                wintypes.BOOL,
+            )
+            _signature(
+                self.dll.UnlockFileEx,
+                [
+                    wintypes.HANDLE,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    ctypes.POINTER(_WindowsOverlapped),
+                ],
+                wintypes.BOOL,
+            )
         _signature(
             self.dll.GetFileInformationByHandle,
             [wintypes.HANDLE, ctypes.POINTER(_WindowsFileInformation)],
@@ -404,6 +433,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             raise ValueError("snapshot quota must be positive")
         self._api = WindowsKernel32(kernel32)
         requested_root = Path(root).absolute()
+        root_existed = requested_root.exists()
         existing_parent = requested_root
         while not existing_parent.exists() and existing_parent != existing_parent.parent:
             existing_parent = existing_parent.parent
@@ -413,6 +443,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         self.root = requested_root
         self._assert_directory(self.root)
         self._root_canonical = self._canonical(self.root)
+        self._ensure_owned_root(root_existed)
         root_handle = self._open(
             self.root,
             self._api.GENERIC_READ,
@@ -480,9 +511,23 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
 
     def create_workspace(self, job_id: JobId, attempt: int) -> JobWorkspace:
         job_path = self.root / job_id.value
-        attempt_path = job_path / f"attempt-{attempt}"
         self._mkdir(job_path)
         self._assert_no_reparse_components(job_path)
+        if not hasattr(getattr(self._api, "dll", None), "LockFileEx"):
+            if isinstance(self._api, WindowsKernel32):
+                raise OSError("Windows workspace locking is unavailable")
+            return self._create_workspace_locked(job_id, attempt)
+        native_lock = self._acquire_workspace_lock(job_path)
+        if native_lock is None:
+            raise OSError("workspace active lock could not be acquired")
+        try:
+            return self._create_workspace_locked(job_id, attempt)
+        finally:
+            self._release_workspace_lock(native_lock)
+
+    def _create_workspace_locked(self, job_id: JobId, attempt: int) -> JobWorkspace:
+        job_path = self.root / job_id.value
+        attempt_path = job_path / f"attempt-{attempt}"
         job_identity = ""
         partial_workspace = JobWorkspace(attempt_path, job_id, Attempt(attempt))
         job_handle: int | None = None
@@ -547,11 +592,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 directory_handle=manifest_directory,
             )
         except Exception as error:
-            try:
-                self.cleanup(workspace)
-            except BaseException as cleanup_error:
-                error.partial_workspace = workspace
-                error.add_note(f"workspace rollback failed: {cleanup_error}")
+            error.partial_workspace = workspace
             raise
         finally:
             errors = self._close_handles((manifest_directory,))
@@ -862,17 +903,31 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
 
     def cleanup(self, workspace: JobWorkspace, *, deadline: float | None = None) -> None:
         _check_cleanup_deadline(deadline, self._clock)
-        try:
-            self._cleanup_contents(workspace, deadline=deadline)
-        finally:
+        quarantine_path = None
+        with self.workspace_lock(workspace):
             try:
-                if not workspace.path.exists():
-                    self._release_workspace(workspace.path)
-                    self._release_snapshot(workspace.path)
-            except OSError:
+                quarantine_path = self._cleanup_contents(workspace, deadline=deadline)
+            finally:
+                try:
+                    if not workspace.path.exists():
+                        self._release_workspace(workspace.path)
+                        self._release_snapshot(workspace.path)
+                except OSError:
+                    pass
+        if quarantine_path is not None:
+            try:
+                self._remove_workspace_lock_file(quarantine_path)
+                self._remove_directory(
+                    quarantine_path,
+                    expected_identity=workspace.job_identity,
+                    deadline=deadline,
+                )
+            except FileNotFoundError:
                 pass
 
-    def _cleanup_contents(self, workspace: JobWorkspace, *, deadline: float | None = None) -> None:
+    def _cleanup_contents(
+        self, workspace: JobWorkspace, *, deadline: float | None = None
+    ) -> Path | None:
         _check_cleanup_deadline(deadline, self._clock)
         expected = self.root / workspace.job_id.value / f"attempt-{workspace.attempt.value}"
         if Path(workspace.path) != expected or not self._contained_path(expected.parent, self.root):
@@ -887,33 +942,154 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 directory=True,
             )
         except FileNotFoundError:
-            self._remove_directory(
-                expected.parent,
-                expected_identity=workspace.job_identity,
-                deadline=deadline,
-            )
-            return
+            return self._quarantine_empty_job(expected.parent, workspace.job_identity)
         else:
             self._close(attempt_handle)
-        self._remove_tree(expected, expected_identity=workspace.attempt_identity, deadline=deadline)
-        self._remove_directory(
-            expected.parent,
-            expected_identity=workspace.job_identity,
+        attempt_quarantine = self._quarantine_attempt(expected, workspace.attempt_identity)
+        self._remove_tree(
+            attempt_quarantine,
+            expected_identity=workspace.attempt_identity,
             deadline=deadline,
         )
+        return self._quarantine_empty_job(expected.parent, workspace.job_identity)
+
+    def _quarantine_empty_job(self, job_path: Path, expected_identity: str) -> Path | None:
+        if any(child.name != ".voiceink.active.lock" for child in job_path.iterdir()):
+            return None
+        current_handle = self._open(
+            job_path, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+        )
+        try:
+            if expected_identity and self._identity(current_handle)[0] != expected_identity:
+                raise OSError("job workspace identity changed before quarantine")
+        finally:
+            self._close(current_handle)
+        quarantine = self.root / f".voiceink-quarantine-{uuid.uuid4().hex}"
+        job_path.rename(quarantine)
+        quarantine_handle = self._open(
+            quarantine, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+        )
+        try:
+            if expected_identity and self._identity(quarantine_handle)[0] != expected_identity:
+                raise OSError("job workspace identity changed during quarantine")
+        finally:
+            self._close(quarantine_handle)
+        return quarantine
+
+    def _quarantine_attempt(self, attempt_path: Path, expected_identity: str) -> Path:
+        current_handle = self._open(
+            attempt_path, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+        )
+        try:
+            if self._identity(current_handle)[0] != expected_identity:
+                raise OSError("attempt workspace identity changed before quarantine")
+        finally:
+            self._close(current_handle)
+        quarantine = attempt_path.parent / f".voiceink-attempt-quarantine-{uuid.uuid4().hex}"
+        attempt_path.rename(quarantine)
+        quarantine_handle = self._open(
+            quarantine, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+        )
+        try:
+            if self._identity(quarantine_handle)[0] != expected_identity:
+                raise OSError("attempt workspace identity changed during quarantine")
+        finally:
+            self._close(quarantine_handle)
+        return quarantine
+
+    @contextmanager
+    def workspace_lock(self, workspace: JobWorkspace):
+        if not hasattr(getattr(self._api, "dll", None), "LockFileEx"):
+            raise OSError("Windows workspace locking is unavailable")
+        native_lock = self._acquire_workspace_lock(workspace.path.parent)
+        if native_lock is None:
+            raise OSError("workspace active lock could not be acquired")
+        try:
+            yield
+        finally:
+            self._release_workspace_lock(native_lock)
 
     def sweep_orphans(self, *, max_age_seconds: float) -> int:
+        return self._sweep_orphans(max_age_seconds=max_age_seconds)
+
+    def _acquire_workspace_lock(
+        self, job_path: Path, *, nonblocking: bool = False
+    ) -> tuple[int, _WindowsOverlapped] | None:
+        dll = getattr(self._api, "dll", None)
+        if dll is None or not hasattr(dll, "LockFileEx"):
+            return None
+        lock_path = job_path / ".voiceink.active.lock"
+        handle = self._open(
+            lock_path,
+            self._api.GENERIC_READ | self._api.GENERIC_WRITE | self._api.DELETE,
+            self._api.OPEN_ALWAYS,
+            share=self._api.SHARE,
+        )
+        overlapped = _WindowsOverlapped()
+        flags = self._api.LOCKFILE_EXCLUSIVE_LOCK
+        if nonblocking:
+            flags |= self._api.LOCKFILE_FAIL_IMMEDIATELY
+        if not dll.LockFileEx(handle, flags, 0, 1, 0, ctypes.byref(overlapped)):
+            error = ctypes.get_last_error()
+            self._close(handle)
+            if nonblocking:
+                return None
+            raise OSError(error, "LockFileEx failed")
+        return handle, overlapped
+
+    def _release_workspace_lock(self, lock: tuple[int, _WindowsOverlapped] | None) -> None:
+        if lock is None:
+            return
+        handle, overlapped = lock
+        try:
+            self._api.dll.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped))
+        finally:
+            self._close(handle)
+
+    def _remove_workspace_lock_file(self, job_path: Path) -> None:
+        lock_path = job_path / ".voiceink.active.lock"
+        try:
+            handle = self._open(
+                lock_path,
+                self._api.GENERIC_READ | self._api.DELETE,
+                self._api.OPEN_EXISTING,
+                share=self._api.SHARE,
+            )
+        except FileNotFoundError:
+            return
+        try:
+            self._delete_handle(handle, path=lock_path)
+        finally:
+            self._close(handle)
+
+    def _sweep_orphans(self, *, max_age_seconds: float) -> int:
+        self._assert_owned_root_marker()
+        lock_supported = hasattr(getattr(self._api, "dll", None), "LockFileEx")
+        if isinstance(self._api, WindowsKernel32) and not lock_supported:
+            raise OSError("Windows workspace locking is unavailable")
         removed = 0
         for entry in self.root.iterdir():
+            if entry.name == WORKSPACE_ROOT_MARKER:
+                continue
             try:
                 job_handle = self._open(
                     entry, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
                 )
             except OSError:
                 continue
+            native_lock = None
+            quarantine_path = None
+            removed_from_job = False
             try:
                 job_identity, _ = self._identity(job_handle)
-                if time.time() - entry.stat().st_mtime <= max_age_seconds:
+                job_mtime = entry.stat().st_mtime
+                if time.time() - job_mtime <= max_age_seconds:
+                    continue
+                if lock_supported:
+                    native_lock = self._acquire_workspace_lock(entry, nonblocking=True)
+                    if native_lock is None:
+                        continue
+                if time.time() - job_mtime <= max_age_seconds:
                     continue
                 for attempt in tuple(entry.iterdir()):
                     if not attempt.name.startswith("attempt-"):
@@ -925,23 +1101,6 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                             continue
                         manifest_path = attempt / "manifest.json"
                         if not manifest_path.exists():
-                            attempt_handle = self._open(
-                                attempt,
-                                self._api.GENERIC_READ | self._api.DELETE,
-                                self._api.OPEN_EXISTING,
-                                directory=True,
-                            )
-                            try:
-                                self._assert_contained_handle(attempt_handle)
-                                attempt_identity, _ = self._identity(attempt_handle)
-                            finally:
-                                self._close(attempt_handle)
-                            self._remove_tree(
-                                attempt,
-                                expected_identity=attempt_identity,
-                            )
-                            self._release_workspace_tree(attempt)
-                            removed += 1
                             continue
                         values = self._read_manifest(attempt)
                         if (
@@ -951,22 +1110,94 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                             or not values.get("attempt_identity")
                         ):
                             continue
+                        attempt_quarantine = self._quarantine_attempt(
+                            attempt, str(values["attempt_identity"])
+                        )
                         self._remove_tree(
-                            attempt,
+                            attempt_quarantine,
                             expected_identity=str(values["attempt_identity"]),
                         )
                         self._release_workspace_tree(attempt)
                         removed += 1
+                        removed_from_job = True
                     except (OSError, ValueError, TypeError, KeyError):
                         continue
-                if not any(entry.iterdir()):
-                    self._remove_directory(entry, expected_identity=job_identity, handle=job_handle)
-                    self._release_workspace_tree(entry)
+                if removed_from_job and not any(
+                    child.is_dir() and child.name.startswith("attempt-")
+                    for child in entry.iterdir()
+                ):
+                    quarantine_path = self._quarantine_empty_job(entry, job_identity)
             except OSError:
                 pass
             finally:
+                self._release_workspace_lock(native_lock)
                 self._close(job_handle)
+            if quarantine_path is not None:
+                try:
+                    self._remove_workspace_lock_file(quarantine_path)
+                    self._remove_directory(quarantine_path, expected_identity=job_identity)
+                except OSError:
+                    pass
         return removed
+
+    def _ensure_owned_root(self, root_existed: bool) -> None:
+        marker = self.root / WORKSPACE_ROOT_MARKER
+        if marker.exists() or marker.is_symlink():
+            self._assert_no_reparse_components(marker)
+            self._assert_directory(marker)
+            return
+        if root_existed:
+            if not self._contains_only_owned_workspaces():
+                raise OSError("workspace root ownership cannot be established safely")
+        self._mkdir(marker)
+
+    def _assert_owned_root_marker(self) -> None:
+        marker = self.root / WORKSPACE_ROOT_MARKER
+        self._assert_no_reparse_components(marker)
+        self._assert_directory(marker)
+
+    def _contains_only_owned_workspaces(self) -> bool:
+        try:
+            entries = tuple(self.root.iterdir())
+        except OSError:
+            return False
+        for job in entries:
+            if not job.is_dir() or job.name == WORKSPACE_ROOT_MARKER:
+                return False
+            job_handle: int | None = None
+            try:
+                job_handle = self._open(
+                    job, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+                )
+                job_identity, _ = self._identity(job_handle)
+                attempts = tuple(job.iterdir())
+                if not attempts:
+                    return False
+                for attempt in attempts:
+                    if not attempt.is_dir() or not attempt.name.startswith("attempt-"):
+                        return False
+                    attempt_number = int(attempt.name.removeprefix("attempt-"))
+                    attempt_handle = self._open(
+                        attempt, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+                    )
+                    try:
+                        attempt_identity, _ = self._identity(attempt_handle)
+                        values = self._read_manifest(attempt, directory_handle=attempt_handle)
+                    finally:
+                        self._close(attempt_handle)
+                    if (
+                        values.get("job_id") != job.name
+                        or values.get("attempt") != attempt_number
+                        or values.get("job_identity") != job_identity
+                        or values.get("attempt_identity") != attempt_identity
+                    ):
+                        return False
+            except (OSError, ValueError, TypeError, KeyError):
+                return False
+            finally:
+                if job_handle is not None:
+                    self._close(job_handle)
+        return True
 
     def _open(
         self,

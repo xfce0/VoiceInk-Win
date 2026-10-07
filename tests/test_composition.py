@@ -227,8 +227,11 @@ def test_application_rolls_back_workers_when_runtime_start_fails() -> None:
 
 def test_imported_media_configuration_is_disabled_or_rejected_explicitly() -> None:
     assert ImportedMediaConfiguration.from_environment({}) is None
+    assert (
+        ImportedMediaConfiguration.from_environment({"VOICEINK_FFMPEG_PATH": "/opt/ffmpeg"}) is None
+    )
 
-    with pytest.raises(ConfigurationError, match="trusted FFmpeg artifact metadata"):
+    with pytest.raises(ConfigurationError, match="VOICEINK_IMPORT_ROOTS"):
         ImportedMediaConfiguration.from_environment(
             {
                 "VOICEINK_FFMPEG_PATH": "/opt/ffmpeg",
@@ -249,6 +252,42 @@ def test_imported_media_configuration_is_disabled_or_rejected_explicitly() -> No
             Path("/tmp/work"),
             (Path("/tmp/imports"),),
         )
+
+
+def test_environment_build_supports_ffmpeg_path_only_and_complete_import_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[object] = []
+
+    def fake_build(*args, **kwargs):
+        captured.append(kwargs["imported_media"])
+        return object()
+
+    monkeypatch.setattr(composition, "build_application", fake_build)
+    base = {
+        "VOICEINK_RUNTIME_MANIFEST": "/opt/runtime.json",
+        "VOICEINK_ARTIFACT_LOCK": "/opt/lock.json",
+        "VOICEINK_ARTIFACT_LOCK_SHA256": "0" * 64,
+        "VOICEINK_FFMPEG_PATH": "/opt/ffmpeg",
+    }
+
+    assert composition.build_application_from_environment(environ=base) is not None
+    assert captured == [None]
+
+    complete = {
+        **base,
+        "VOICEINK_IMPORT_WORKSPACE_ROOT": "/tmp/voiceink-work",
+        "VOICEINK_IMPORT_ROOTS": "/tmp/imports",
+        "VOICEINK_FFMPEG_VERSION": "ffmpeg-test",
+        "VOICEINK_FFMPEG_PROVENANCE_URL": "https://example.invalid/ffmpeg",
+        "VOICEINK_FFMPEG_SHA256": "1" * 64,
+        "VOICEINK_FFMPEG_LICENSE": "GPL-3.0-or-later",
+    }
+
+    assert composition.build_application_from_environment(environ=complete) is not None
+    configuration = captured[1]
+    assert isinstance(configuration, ImportedMediaConfiguration)
+    assert configuration.ffmpeg_artifact.sha256 == "1" * 64
 
 
 def test_disabled_imported_media_facade_rejects_operations() -> None:

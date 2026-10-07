@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -23,6 +24,7 @@ from voiceink_win.application import (
 )
 from voiceink_win.domain import (
     AsrTimeoutError,
+    ConfigurationError,
     ErrorCode,
     ImportRecoveryPendingError,
     ImportShutdownError,
@@ -56,7 +58,11 @@ from voiceink_win.infrastructure import (
     media_process,
     validate_wav,
 )
-from voiceink_win.infrastructure.ffmpeg import SubprocessMediaNormalizer
+from voiceink_win.infrastructure.ffmpeg import (
+    FfmpegArtifactManifest,
+    SubprocessMediaNormalizer,
+    VerifiedFfmpegArtifact,
+)
 from voiceink_win.infrastructure.media_process import ProcessResult
 from voiceink_win.infrastructure.media_snapshot import (
     LocalMediaSnapshotStore,
@@ -2031,6 +2037,56 @@ def test_native_smoke_awaits_store_reapers_before_temp_cleanup() -> None:
 
 
 @POSIX_ONLY
+def test_sweep_only_removes_owned_old_workspaces(tmp_path: Path) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "shared")
+    unrelated = store.root / "unrelated" / "attempt-1"
+    unrelated.mkdir(parents=True)
+    (unrelated / "manifest.json").write_text(
+        json.dumps(
+            {
+                "job_id": "unrelated",
+                "attempt": 1,
+                "job_identity": "not-the-directory",
+                "attempt_identity": "not-the-directory",
+            }
+        ),
+        encoding="ascii",
+    )
+    os.utime(unrelated, (1, 1))
+    os.utime(unrelated.parent, (1, 1))
+    owned = store.create_workspace(JobId("owned"), 1)
+    os.utime(owned.path, (1, 1))
+    os.utime(owned.path.parent, (1, 1))
+
+    assert store.sweep_orphans(max_age_seconds=1) == 1
+    assert unrelated.exists()
+    assert not owned.path.exists()
+
+
+@POSIX_ONLY
+def test_existing_valid_workspace_root_is_marked_during_upgrade(tmp_path: Path) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "legacy")
+    store.create_workspace(JobId("legacy"), 1)
+    (store.root / media_snapshot.WORKSPACE_ROOT_MARKER).rmdir()
+
+    upgraded = LocalMediaSnapshotStore(store.root)
+
+    assert (upgraded.root / media_snapshot.WORKSPACE_ROOT_MARKER).is_dir()
+
+
+@POSIX_ONLY
+def test_existing_workspace_root_without_marker_fails_closed(tmp_path: Path) -> None:
+    root = tmp_path / "existing"
+    root.mkdir()
+    unrelated = root / "unrelated"
+    unrelated.mkdir()
+
+    with pytest.raises(OSError, match="established safely"):
+        LocalMediaSnapshotStore(root)
+    assert unrelated.exists()
+
+
+@POSIX_ONLY
 def test_source_symlink_is_rejected_without_following_target(tmp_path: Path) -> None:
     target = source_file(tmp_path)
     link = tmp_path / "linked-media"
@@ -2117,8 +2173,9 @@ def test_windows_workspace_creation_exposes_partial_workspace() -> None:
     assert partial.job_identity == "job-identity"
 
 
-def test_windows_sweep_removes_old_unmanifested_workspace_safely(tmp_path: Path) -> None:
+def test_windows_sweep_keeps_old_unmanifested_workspace_safely(tmp_path: Path) -> None:
     root = tmp_path / "private"
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(parents=True)
     attempt = root / "job" / "attempt-1"
     attempt.mkdir(parents=True)
     os.utime(attempt, (1, 1))
@@ -2135,8 +2192,8 @@ def test_windows_sweep_removes_old_unmanifested_workspace_safely(tmp_path: Path)
     store._remove_directory = lambda path, **kwargs: path.rmdir()
     store._release_workspace_tree = lambda path: None
 
-    assert store.sweep_orphans(max_age_seconds=1) == 1
-    assert not root.joinpath("job").exists()
+    assert store.sweep_orphans(max_age_seconds=1) == 0
+    assert root.joinpath("job").exists()
 
 
 def test_reservation_release_is_owner_checked_and_idempotent() -> None:
@@ -2200,3 +2257,26 @@ def test_ffmpeg_normalizer_builds_safe_first_audio_stream_argv(tmp_path: Path) -
 def test_ffmpeg_normalizer_accepts_windows_drive_paths() -> None:
     assert SubprocessMediaNormalizer._is_allowed_input(r"C:\workspace\input.wav")
     assert not SubprocessMediaNormalizer._is_allowed_input("https://example.test/input.wav")
+
+
+@POSIX_ONLY
+def test_ffmpeg_execution_lock_rejects_replaced_executable(tmp_path: Path) -> None:
+    executable = tmp_path / "ffmpeg"
+    executable.write_bytes(b"trusted ffmpeg")
+    artifact = VerifiedFfmpegArtifact.verify(
+        executable,
+        FfmpegArtifactManifest(
+            "ffmpeg-test",
+            "https://example.invalid/ffmpeg",
+            hashlib.sha256(b"trusted ffmpeg").hexdigest(),
+            "GPL-3.0-or-later",
+            executable,
+        ),
+    )
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(b"untrusted ffmpeg")
+    replacement.replace(executable)
+
+    with pytest.raises(ConfigurationError, match="identity|checksum"):
+        with artifact.execution_lock():
+            pass

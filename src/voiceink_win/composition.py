@@ -106,15 +106,47 @@ class ImportedMediaConfiguration:
         cls, environ: dict[str, str] | None = None
     ) -> ImportedMediaConfiguration | None:
         values = environ if environ is not None else os.environ
-        names = (
+        import_names = (
             "VOICEINK_FFMPEG_PATH",
             "VOICEINK_IMPORT_WORKSPACE_ROOT",
             "VOICEINK_IMPORT_ROOTS",
         )
-        if not any(values.get(name, "").strip() for name in names):
+        metadata_names = (
+            "VOICEINK_FFMPEG_VERSION",
+            "VOICEINK_FFMPEG_PROVENANCE_URL",
+            "VOICEINK_FFMPEG_SHA256",
+            "VOICEINK_FFMPEG_LICENSE",
+        )
+        if not any(
+            values.get(name, "").strip()
+            for name in ("VOICEINK_IMPORT_WORKSPACE_ROOT", "VOICEINK_IMPORT_ROOTS")
+        ):
             return None
-        raise ConfigurationError(
-            "imported-media environment wiring requires trusted FFmpeg artifact metadata"
+        missing = [
+            name for name in (*import_names, *metadata_names) if not values.get(name, "").strip()
+        ]
+        if missing:
+            raise ConfigurationError("imported-media configuration requires: " + ", ".join(missing))
+        try:
+            artifact = FfmpegArtifactManifest(
+                version=values["VOICEINK_FFMPEG_VERSION"],
+                provenance_url=values["VOICEINK_FFMPEG_PROVENANCE_URL"],
+                sha256=values["VOICEINK_FFMPEG_SHA256"],
+                license=values["VOICEINK_FFMPEG_LICENSE"],
+                allowed_path=Path(values["VOICEINK_FFMPEG_PATH"]),
+            )
+        except ConfigurationError:
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            raise ConfigurationError(
+                "imported-media FFmpeg metadata is invalid", cause=error
+            ) from error
+        roots = tuple(Path(value) for value in values["VOICEINK_IMPORT_ROOTS"].split(os.pathsep))
+        return cls(
+            ffmpeg_path=Path(values["VOICEINK_FFMPEG_PATH"]),
+            ffmpeg_artifact=artifact,
+            workspace_root=Path(values["VOICEINK_IMPORT_WORKSPACE_ROOT"]),
+            import_roots=roots,
         )
 
 

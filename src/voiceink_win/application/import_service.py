@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from inspect import signature
 from pathlib import Path
@@ -515,24 +516,25 @@ class ImportedMediaTranscriptionService:
                 self._cleanup_and_publish(record)
                 return
             assert record.workspace is not None
-            snapshot = self._store.snapshot(
-                record.source,
-                record.workspace,
-                cancellation=record.cancellation.token,
-                deadline=stage_deadline,
-            )
-            snapshot = self._store.verify(
-                snapshot,
-                cancellation=record.cancellation.token,
-                deadline=stage_deadline,
-            )
-            record.snapshot = snapshot
-            normalized_result = self._normalizer.normalize(
-                snapshot,
-                record.workspace,
-                record.cancellation.token,
-                stage_deadline,
-            )
+            with self._workspace_processing_lock(record.workspace):
+                snapshot = self._store.snapshot(
+                    record.source,
+                    record.workspace,
+                    cancellation=record.cancellation.token,
+                    deadline=stage_deadline,
+                )
+                snapshot = self._store.verify(
+                    snapshot,
+                    cancellation=record.cancellation.token,
+                    deadline=stage_deadline,
+                )
+                record.snapshot = snapshot
+                normalized_result = self._normalizer.normalize(
+                    snapshot,
+                    record.workspace,
+                    record.cancellation.token,
+                    stage_deadline,
+                )
             self._finish_stage(record, Stage.NORMALIZING)
             if record.stage_owner_done.is_set():
                 normalized_committed = self._accept_stage_result(
@@ -587,7 +589,8 @@ class ImportedMediaTranscriptionService:
                 cancellation=record.cancellation.token,
             )
             record.normalized = None
-            transcript_result = self._asr.transcribe(request)
+            with self._workspace_processing_lock(record.workspace):
+                transcript_result = self._asr.transcribe(request)
             self._finish_stage(record, Stage.TRANSCRIBING)
             if record.stage_owner_done.is_set():
                 transcript_committed = self._accept_stage_result(
@@ -1000,6 +1003,15 @@ class ImportedMediaTranscriptionService:
     @staticmethod
     def _result_warnings(record: _Record) -> tuple[WarningCode, ...]:
         return (WarningCode.CLEANUP_WARNING,) if record.cleanup_warning else ()
+
+    @contextmanager
+    def _workspace_processing_lock(self, workspace: JobWorkspace):
+        lock_factory = getattr(self._store, "workspace_lock", None)
+        if lock_factory is None:
+            yield
+            return
+        with lock_factory(workspace):
+            yield
 
     def _runtime_diagnostics(self, record: _Record) -> RuntimeDiagnostics:
         artifact = getattr(self._normalizer, "artifact", None)
