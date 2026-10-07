@@ -9,6 +9,9 @@ import pytest
 from scripts.native_smoke_lock import PARAKEET_MODEL_ID, load_native_smoke_lock, pinned_value
 
 ROOT = Path(__file__).resolve().parents[1]
+VERIFIED_SIDECAR_EXECUTABLE_SHA256 = (
+    "72ed6e35506150dc7edaa0507904688ace62a8d9a47c4976330b556d361492aa"
+)
 
 
 def _lock() -> dict[str, object]:
@@ -88,6 +91,15 @@ def test_tracked_parakeet_id_matches_the_gguf_general_name() -> None:
 
     assert PARAKEET_MODEL_ID == "parakeet-tdt-0.6b-v3.oss-align.q8_0"
     assert loaded["artifacts"][PARAKEET_MODEL_ID]["model_id"] == PARAKEET_MODEL_ID
+
+
+def test_tracked_sidecar_hash_matches_the_verified_pinned_archive() -> None:
+    loaded = load_native_smoke_lock(ROOT / ".github/native-smoke/artifact-lock.template.json")
+
+    assert (
+        loaded["artifacts"]["nemo-speech-cpp-windows-amd64"]["executable_sha256"]
+        == VERIFIED_SIDECAR_EXECUTABLE_SHA256
+    )
 
 
 def test_native_smoke_lock_rejects_model_id_mismatch_with_artifact_key(tmp_path: Path) -> None:
