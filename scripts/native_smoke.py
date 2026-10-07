@@ -7,7 +7,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -20,33 +19,6 @@ NATIVE_SMOKE_READINESS_TIMEOUT = 60.0
 
 class NativeSmokeDiagnosticsError(RuntimeError):
     """The smoke diagnostics stream could not be written reliably."""
-
-
-_SENSITIVE_DETAIL = re.compile(
-    r"(?i)(?<![A-Za-z0-9])"
-    r"(authorization|api[-_ ]?key|access[-_ ]?token|client[-_ ]?secret|"
-    r"private[-_ ]?key|token|nonce|password|secret)"
-    r"(?![A-Za-z0-9])\s*[:=]\s*['\"]?(?:bearer\s+)?[^\s,;}'\"]+"
-)
-
-
-def _safe_failure_detail(error: BaseException) -> str:
-    """Keep bounded, redacted exception context in the smoke artifact."""
-    from voiceink_win.infrastructure import sanitize_report_value
-
-    details: list[str] = []
-    current: BaseException | None = error
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen and len(details) < 3:
-        seen.add(id(current))
-        message = getattr(current, "message", None) or str(current)
-        message = str(sanitize_report_value(message))
-        message = _SENSITIVE_DETAIL.sub(r"\1=<redacted>", message)
-        message = " ".join(message.split())[:256]
-        if message:
-            details.append(f"{type(current).__name__}: {message}")
-        current = getattr(current, "cause", None) or current.__cause__
-    return " <- ".join(details)[:1024]
 
 
 def _required(name: str) -> str:
@@ -241,7 +213,6 @@ def main() -> int:
         from voiceink_win.infrastructure import safe_failure
 
         report["failure"] = safe_failure(error)
-        report["failure_detail"] = _safe_failure_detail(error)
         _write_report_best_effort(report_path, report)
         if isinstance(error, NativeSmokeDiagnosticsError) or _cleanup_failed(report):
             return 4
@@ -267,7 +238,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         _write_report(report_path, report)
         raise error
 
-    from voiceink_win.domain import JobId
+    from voiceink_win.domain import ConfigurationError, JobId
     from voiceink_win.infrastructure import (
         FfmpegArtifactManifest,
         RuntimeArtifactManifest,
@@ -339,10 +310,31 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         allowed_path=runtime_configuration.model_artifact.allowed_path,
     )
     report["failure_stage"] = "runtime_artifact_verification"
-    RuntimeArtifactVerifier().verify_manifest(
-        runtime_path, executable_manifest, label="runtime executable"
-    )
-    RuntimeArtifactVerifier().verify_manifest(model_path, model_manifest, label="runtime model")
+    verifier = RuntimeArtifactVerifier()
+    try:
+        verifier.verify_manifest(runtime_path, executable_manifest, label="runtime executable")
+        verifier.verify_manifest(model_path, model_manifest, label="runtime model")
+    except ConfigurationError as error:
+        if "checksum does not match" in str(error):
+            if "runtime executable" in str(error):
+                try:
+                    report["runtime_hash_diagnostics"] = {
+                        "artifact": "executable",
+                        "expected": executable_manifest.sha256,
+                        "actual": verifier.sha256(runtime_path),
+                    }
+                except Exception:
+                    pass
+            elif "runtime model" in str(error):
+                try:
+                    report["runtime_hash_diagnostics"] = {
+                        "artifact": "model",
+                        "expected": model_manifest.sha256,
+                        "actual": verifier.sha256(model_path),
+                    }
+                except Exception:
+                    pass
+        raise
     report["failure_stage"] = "application_build"
     application, events = _build_native_smoke_application(
         runtime_configuration,

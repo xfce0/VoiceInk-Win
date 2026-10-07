@@ -11,14 +11,12 @@ from scripts.native_smoke import (
     _build_native_smoke_application,
     _cleanup_status,
     _run_snapshot_security_probes_with_store,
-    _safe_failure_detail,
     _safe_rtfx,
     _success_status,
     _transcribe_with_timing,
 )
 from voiceink_win.domain import (
     CanonicalAudio,
-    ConfigurationError,
     InvalidSourceError,
     SourceChangedError,
 )
@@ -35,23 +33,6 @@ def _artifact(path: Path, digest: str) -> RuntimeArtifactManifest:
         license="Apache-2.0",
         allowed_path=path,
     )
-
-
-def test_native_smoke_failure_detail_is_bounded_and_redacted() -> None:
-    error = ConfigurationError(
-        "runtime manifest failed at C:\\private\\runtime.json "
-        "Authorization: Bearer real-token access_token=another-token "
-        "client_secret=secret-value",
-        cause=OSError("C:\\private\\cause.log"),
-    )
-
-    detail = _safe_failure_detail(error)
-
-    assert "<path>" in detail
-    assert "real-token" not in detail
-    assert "another-token" not in detail
-    assert "secret-value" not in detail
-    assert len(detail) <= 1024
 
 
 def test_native_smoke_selects_named_sidecar_executable() -> None:
