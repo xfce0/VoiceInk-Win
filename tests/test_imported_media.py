@@ -1128,17 +1128,19 @@ def test_recovery_cleanup_runs_once_while_reconciliation_is_pending(tmp_path: Pa
     application._stopping.set()
     application._monitor.join(1.0)
 
-    first_recovery = Thread(target=application._retry_recovery_workspaces_impl)
+    first_recovery = Thread(target=application._retry_recovery_workspaces_impl, daemon=True)
     first_recovery.start()
     assert application.reconciliation_started.wait(1.0)
 
-    second_recovery = Thread(target=application._retry_recovery_workspaces_impl)
+    second_recovery = Thread(target=application._retry_recovery_workspaces_impl, daemon=True)
     second_recovery.start()
     assert not second_recovery_cleanup_started.wait(0.1)
 
     application.release_reconciliation.set()
     first_recovery.join(1.0)
     second_recovery.join(1.0)
+    assert not first_recovery.is_alive()
+    assert not second_recovery.is_alive()
     application.close(timeout=2.0)
 
     assert store.cleanup_attempts == 2
