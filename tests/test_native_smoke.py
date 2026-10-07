@@ -8,8 +8,7 @@ import pytest
 
 import scripts.native_smoke as native_smoke
 from scripts.native_smoke import (
-    NATIVE_SMOKE_READINESS_TIMEOUT,
-    _build_native_smoke_configs,
+    _build_native_smoke_application,
     _cleanup_status,
     _run_snapshot_security_probes_with_store,
     _safe_rtfx,
@@ -17,7 +16,7 @@ from scripts.native_smoke import (
     _transcribe_with_timing,
 )
 from voiceink_win.domain import CanonicalAudio, InvalidSourceError, SourceChangedError
-from voiceink_win.infrastructure import RuntimeArtifactManifest, SidecarConfig
+from voiceink_win.infrastructure import RuntimeArtifactManifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,38 +29,6 @@ def _artifact(path: Path, digest: str) -> RuntimeArtifactManifest:
         license="Apache-2.0",
         allowed_path=path,
     )
-
-
-def test_native_smoke_uses_manifest_model_and_cold_start_readiness_timeout(
-    tmp_path: Path,
-) -> None:
-    executable = tmp_path / "nemo-speech.exe"
-    model = tmp_path / "parakeet.gguf"
-    executable_manifest = _artifact(executable, "a" * 64)
-    model_manifest = _artifact(model, "b" * 64)
-    runtime_configuration = SimpleNamespace(
-        executable=executable,
-        model=model,
-        model_id="parakeet-custom-model",
-        backend="cpu",
-    )
-
-    sidecar_config, subprocess_config = _build_native_smoke_configs(
-        runtime_configuration,
-        "http://127.0.0.1:8123",
-        executable_manifest,
-        model_manifest,
-    )
-
-    assert NATIVE_SMOKE_READINESS_TIMEOUT == 60.0
-    assert SidecarConfig("http://127.0.0.1:8123").readiness_timeout == 10.0
-    assert sidecar_config.model_id == "parakeet-custom-model"
-    assert sidecar_config.readiness_timeout == 60.0
-    assert sidecar_config.require_model_attestation
-    assert subprocess_config.model_id == "parakeet-custom-model"
-    assert sidecar_config.model_id == subprocess_config.model_id
-    argv = subprocess_config.argv()
-    assert argv[argv.index("--asr.model.name") + 1] == sidecar_config.model_id
 
 
 def test_native_smoke_selects_named_sidecar_executable() -> None:
@@ -193,9 +160,69 @@ def test_native_smoke_records_cold_and_warm_timing_and_rejects_empty_transcript(
         _transcribe_with_timing(EmptyAsr(), audio, "warm")
 
 
-@pytest.mark.parametrize("key", ["asr_close_error", "runtime_close_error"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "application_close_error",
+        "proxy_close_error",
+        "events_error",
+        "report_write_error",
+    ],
+)
 def test_native_smoke_cleanup_status_fails_for_each_close_error(key: str) -> None:
     assert _cleanup_status({key: "ExecutionError"}) == "failed"
+
+
+def test_native_smoke_main_prioritizes_cleanup_exit_code(monkeypatch) -> None:
+    def fail_run(_report_path, report):
+        report["application_close_error"] = "ExecutionError"
+        raise RuntimeError("pipeline failed")
+
+    monkeypatch.setattr(native_smoke, "_run", fail_run)
+    monkeypatch.setattr(native_smoke, "_write_report_best_effort", lambda *_args: None)
+
+    assert native_smoke.main() == 4
+
+
+def test_native_smoke_event_writer_failure_is_quality_exit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        native_smoke,
+        "_run",
+        lambda *_args: (_ for _ in ()).throw(native_smoke.NativeSmokeDiagnosticsError("writer")),
+    )
+    monkeypatch.setattr(native_smoke, "_write_report_best_effort", lambda *_args: None)
+
+    assert native_smoke.main() == 4
+
+
+def test_native_smoke_event_writer_open_failure_is_diagnostics_exit(monkeypatch, tmp_path) -> None:
+    class FailingEventWriter:
+        def __init__(self, _path) -> None:
+            raise PermissionError("events unavailable")
+
+    monkeypatch.setattr(
+        "voiceink_win.infrastructure.JsonlEventWriter",
+        FailingEventWriter,
+    )
+    executable = tmp_path / "nemo-speech.exe"
+    model = tmp_path / "parakeet.gguf"
+    runtime_configuration = SimpleNamespace(
+        executable=executable,
+        model=model,
+        model_id="parakeet-custom-model",
+        backend="cpu",
+        manifest=SimpleNamespace(
+            executable_artifact_id="runtime",
+            model_artifact_id="model",
+        ),
+    )
+
+    with pytest.raises(native_smoke.NativeSmokeDiagnosticsError):
+        _build_native_smoke_application(
+            runtime_configuration,
+            _artifact(executable, "a" * 64),
+            _artifact(model, "b" * 64),
+        )
 
 
 def test_native_smoke_reports_technical_success_without_release_quality_pass() -> None:

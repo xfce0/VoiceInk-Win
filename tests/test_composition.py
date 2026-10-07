@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import voiceink_win.__main__ as cli
-from voiceink_win.composition import RuntimePaths, build_application
+from voiceink_win.composition import BackendApplication, RuntimePaths, build_application
 from voiceink_win.domain import (
     AsrCapabilities,
     ConfigurationError,
@@ -135,3 +135,68 @@ def test_cli_reports_cleanup_failure_as_nonzero(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(cli, "_build_from_args", lambda _args: application)
 
     assert cli.main(["--once"]) == 4
+
+
+class _LifecycleFake:
+    def __init__(
+        self,
+        events: list[str],
+        label: str,
+        *,
+        start_error: Exception | None = None,
+    ) -> None:
+        self._events = events
+        self._label = label
+        self._start_error = start_error
+
+    def start(self) -> None:
+        self._events.append(f"{self._label}.start")
+        if self._start_error is not None:
+            raise self._start_error
+
+    def stop_accepting(self) -> None:
+        self._events.append("proxy.stop_accepting")
+
+    def close(self) -> None:
+        self._events.append(f"{self._label}.close")
+
+
+class _AsrLifecycleFake:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def close(self) -> None:
+        self._events.append("asr.close")
+
+
+def test_application_stops_ingress_before_draining_asr() -> None:
+    events: list[str] = []
+    application = BackendApplication(
+        _AsrLifecycleFake(events),  # type: ignore[arg-type]
+        _LifecycleFake(events, "runtime"),  # type: ignore[arg-type]
+        _LifecycleFake(events, "proxy"),  # type: ignore[arg-type]
+    )
+
+    application.close()
+
+    assert events == ["proxy.stop_accepting", "asr.close", "proxy.close"]
+
+
+def test_application_rolls_back_workers_when_runtime_start_fails() -> None:
+    events: list[str] = []
+    application = BackendApplication(
+        _AsrLifecycleFake(events),  # type: ignore[arg-type]
+        _LifecycleFake(events, "runtime", start_error=RuntimeError("startup failed")),  # type: ignore[arg-type]
+        _LifecycleFake(events, "proxy"),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="startup failed"):
+        application.start()
+
+    assert events == [
+        "proxy.start",
+        "runtime.start",
+        "proxy.stop_accepting",
+        "asr.close",
+        "proxy.close",
+    ]

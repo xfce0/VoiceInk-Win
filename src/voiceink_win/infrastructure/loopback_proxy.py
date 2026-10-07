@@ -75,6 +75,7 @@ class LoopbackProxy:
         formatted_host = f"[{bound_host}]" if family == socket.AF_INET6 else bound_host
         self._endpoint = f"http://{formatted_host}:{bound_port}"
         self._stop = Event()
+        self._accept_stop = Event()
         self._thread: Thread | None = None
         self._connections: set[socket.socket] = set()
         self._connections_lock = Lock()
@@ -87,7 +88,7 @@ class LoopbackProxy:
         return self._endpoint
 
     def start(self) -> None:
-        if self._stop.is_set():
+        if self._stop.is_set() or self._accept_stop.is_set():
             raise ConfigurationError("loopback proxy is closed")
         if self._thread is not None:
             return
@@ -97,30 +98,41 @@ class LoopbackProxy:
     def close(self) -> None:
         if self._closed:
             return
+        accepting_error: BaseException | None = None
+        try:
+            self.stop_accepting()
+        except BaseException as error:
+            accepting_error = error
         self._stop.set()
         workers: tuple[Thread, ...] = ()
-        try:
-            self._listener.close()
-        finally:
-            with self._connections_lock:
-                connections = tuple(self._connections)
-            for connection in connections:
-                self._close_socket(connection)
-            if self._thread is not None and self._thread is not current_thread():
-                self._thread.join(timeout=1.0)
-            with self._connections_lock:
-                workers = tuple(self._workers)
-            for worker in workers:
-                if worker is not current_thread():
-                    worker.join(timeout=1.0)
-        if (self._thread is not None and self._thread.is_alive()) or any(
-            worker.is_alive() for worker in workers
-        ):
+        with self._connections_lock:
+            connections = tuple(self._connections)
+        for connection in connections:
+            self._close_socket(connection)
+        with self._connections_lock:
+            workers = tuple(self._workers)
+        for worker in workers:
+            if worker is not current_thread():
+                worker.join(timeout=1.0)
+        if accepting_error is not None:
+            raise accepting_error
+        if any(worker.is_alive() for worker in workers):
             raise RuntimeRecoveryPendingError("loopback proxy cleanup remains pending")
         self._closed = True
 
+    def stop_accepting(self) -> None:
+        self._accept_stop.set()
+        try:
+            self._listener.close()
+        except OSError:
+            pass
+        if self._thread is not None and self._thread is not current_thread():
+            self._thread.join(timeout=1.0)
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeRecoveryPendingError("loopback proxy listener cleanup remains pending")
+
     def _accept_loop(self) -> None:
-        while not self._stop.is_set():
+        while not self._accept_stop.is_set():
             try:
                 client, _ = self._listener.accept()
             except (OSError, TimeoutError):

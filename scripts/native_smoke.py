@@ -7,7 +7,6 @@ import hashlib
 import json
 import math
 import os
-import socket
 import subprocess
 import sys
 import tempfile
@@ -16,6 +15,10 @@ from threading import Thread, Timer
 from time import monotonic, sleep
 
 NATIVE_SMOKE_READINESS_TIMEOUT = 60.0
+
+
+class NativeSmokeDiagnosticsError(RuntimeError):
+    """The smoke diagnostics stream could not be written reliably."""
 
 
 def _required(name: str) -> str:
@@ -63,13 +66,6 @@ def _pinned_required(name: str, expected: str) -> str:
     return pinned_value(name, expected, _required(name))
 
 
-def _allocate_loopback_endpoint() -> str:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("127.0.0.1", 0))
-        return f"http://127.0.0.1:{listener.getsockname()[1]}"
-
-
 def _write_report(path: Path, report: dict[str, object]) -> None:
     from voiceink_win.infrastructure import sanitize_report_value
 
@@ -78,33 +74,79 @@ def _write_report(path: Path, report: dict[str, object]) -> None:
     )
 
 
-def _build_native_smoke_configs(
+def _write_report_best_effort(path: Path, report: dict[str, object]) -> None:
+    try:
+        _write_report(path, report)
+    except Exception:
+        report["report_write_error"] = True
+
+
+def _emit_event(events, name: str, **fields: object) -> None:
+    try:
+        events.event(name, **fields)
+    except Exception as error:
+        raise NativeSmokeDiagnosticsError("native smoke event writer failed") from error
+
+
+def _build_native_smoke_application(
     runtime_configuration,
-    endpoint: str,
     executable_manifest,
     model_manifest,
 ):
-    from voiceink_win.infrastructure import SidecarConfig, SubprocessConfig
+    from voiceink_win.composition import build_application_from_configuration
+    from voiceink_win.infrastructure import (
+        JsonlEventWriter,
+    )
 
-    sidecar_config = SidecarConfig(
-        endpoint=endpoint,
-        model_id=runtime_configuration.model_id,
-        backend=runtime_configuration.backend,
-        readiness_timeout=NATIVE_SMOKE_READINESS_TIMEOUT,
-        require_model_attestation=True,
-    )
-    subprocess_config = SubprocessConfig(
-        executable=runtime_configuration.executable,
-        model=runtime_configuration.model,
-        executable_sha256=executable_manifest.sha256,
-        model_sha256=model_manifest.sha256,
-        executable_manifest=executable_manifest,
-        model_manifest=model_manifest,
-        endpoint=sidecar_config.endpoint,
-        backend=sidecar_config.backend,
-        model_id=runtime_configuration.model_id,
-    )
-    return sidecar_config, subprocess_config
+    events = None
+    application = None
+    try:
+        try:
+            events = JsonlEventWriter(
+                Path(os.environ.get("VOICEINK_NATIVE_SMOKE_EVENTS", "native-smoke-events.jsonl"))
+            )
+        except Exception as error:
+            raise NativeSmokeDiagnosticsError(
+                "native smoke event writer could not be opened"
+            ) from error
+        _emit_event(
+            events,
+            "runtime.verified",
+            artifact_id=runtime_configuration.manifest.executable_artifact_id,
+            version=executable_manifest.version,
+            provenance_url=executable_manifest.provenance_url,
+            sha256=executable_manifest.sha256,
+            license=executable_manifest.license,
+        )
+        _emit_event(
+            events,
+            "model.verified",
+            artifact_id=runtime_configuration.manifest.model_artifact_id,
+            version=model_manifest.version,
+            provenance_url=model_manifest.provenance_url,
+            sha256=model_manifest.sha256,
+            license=model_manifest.license,
+        )
+        application = build_application_from_configuration(
+            runtime_configuration,
+            readiness_timeout=NATIVE_SMOKE_READINESS_TIMEOUT,
+        )
+        return application, events
+    except Exception as error:
+        cleanup_errors: list[BaseException] = []
+        if application is not None:
+            try:
+                application.close()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if events is not None:
+            try:
+                events.close()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            raise NativeSmokeDiagnosticsError("native smoke setup cleanup failed") from error
+        raise
 
 
 class _NativeSmokeTemporaryDirectory:
@@ -171,7 +213,9 @@ def main() -> int:
         from voiceink_win.infrastructure import safe_failure
 
         report["failure"] = safe_failure(error)
-        _write_report(report_path, report)
+        _write_report_best_effort(report_path, report)
+        if isinstance(error, NativeSmokeDiagnosticsError) or _cleanup_failed(report):
+            return 4
         if isinstance(error, FileNotFoundError | ValueError):
             return 2
         if getattr(error, "code", None) in {"configuration", "missing_model"}:
@@ -193,17 +237,12 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         _write_report(report_path, report)
         raise error
 
-    from voiceink_win.application import AsrApplicationService
     from voiceink_win.domain import JobId
     from voiceink_win.infrastructure import (
         FfmpegArtifactManifest,
-        JsonlEventWriter,
-        NeMoSidecarRuntime,
         RuntimeArtifactManifest,
         RuntimeArtifactVerifier,
         SubprocessMediaNormalizer,
-        SubprocessSupervisor,
-        UrllibLoopbackTransport,
         VerifiedFfmpegArtifact,
         WindowsMediaSnapshotStore,
         safe_failure,
@@ -252,7 +291,6 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     if _hash(ffmpeg_path).lower() != ffmpeg_sha256.lower():
         raise RuntimeError("FFmpeg checksum changed between verification and smoke setup")
 
-    endpoint = _allocate_loopback_endpoint()
     executable_manifest = RuntimeArtifactManifest(
         version=runtime_configuration.executable_artifact.version,
         provenance_url=runtime_configuration.executable_artifact.provenance_url,
@@ -271,50 +309,27 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         runtime_path, executable_manifest, label="runtime executable"
     )
     RuntimeArtifactVerifier().verify_manifest(model_path, model_manifest, label="runtime model")
-    sidecar_config, subprocess_config = _build_native_smoke_configs(
+    application, events = _build_native_smoke_application(
         runtime_configuration,
-        endpoint,
         executable_manifest,
         model_manifest,
     )
-    supervisor = SubprocessSupervisor(subprocess_config)
-    events = JsonlEventWriter(
-        Path(os.environ.get("VOICEINK_NATIVE_SMOKE_EVENTS", "native-smoke-events.jsonl"))
-    )
-    events.event(
-        "runtime.verified",
-        artifact_id=runtime_configuration.manifest.executable_artifact_id,
-        version=executable_manifest.version,
-        provenance_url=executable_manifest.provenance_url,
-        sha256=executable_manifest.sha256,
-        license=executable_manifest.license,
-    )
-    events.event(
-        "model.verified",
-        artifact_id=runtime_configuration.manifest.model_artifact_id,
-        version=model_manifest.version,
-        provenance_url=model_manifest.provenance_url,
-        sha256=model_manifest.sha256,
-        license=model_manifest.license,
-    )
-    runtime = NeMoSidecarRuntime(
-        sidecar_config,
-        UrllibLoopbackTransport(sidecar_config.endpoint),
-        supervisor,
-    )
-    asr = None
+    asr = application
     store = None
     source = None
     workspace = None
     snapshot = None
     runtime_started = False
     try:
-        runtime.start()
+        capabilities = application.capabilities()
+        application.start()
         runtime_started = True
-        events.event(
-            "sidecar.ready", backend=sidecar_config.backend, model_id=sidecar_config.model_id
+        _emit_event(
+            events,
+            "sidecar.ready",
+            backend=capabilities.backends[0],
+            model_id=capabilities.model_id,
         )
-        asr = AsrApplicationService(runtime)
         temporary_directory = _NativeSmokeTemporaryDirectory(report)
         with temporary_directory as temporary:
             root = Path(temporary) / "workspace"
@@ -324,8 +339,8 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                 Path(temporary) / "snapshot-security", report
             )
             workspace = store.create_workspace(JobId("native-smoke"), 1)
-            source = store.validate_source(fixture, max_bytes=2 * 1024**3)
             temporary_directory.workspace = workspace
+            source = store.validate_source(fixture, max_bytes=2 * 1024**3)
             temporary_directory.source = source
             snapshot = store.verify(store.snapshot(source, workspace))
             temporary_directory.snapshot = snapshot
@@ -339,11 +354,12 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             result, cold_timing = _transcribe_with_timing(
                 asr, normalized.audio, "native-smoke-cold"
             )
-            events.event(
+            _emit_event(
+                events,
                 "asr.completed",
                 phase="cold",
-                backend=sidecar_config.backend,
-                model_id=sidecar_config.model_id,
+                backend=capabilities.backends[0],
+                model_id=capabilities.model_id,
                 duration_seconds=result.duration,
                 transcript_length=len(result.text),
                 **cold_timing,
@@ -351,16 +367,17 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             warm_result, warm_timing = _transcribe_with_timing(
                 asr, normalized.audio, "native-smoke-warm"
             )
-            events.event(
+            _emit_event(
+                events,
                 "asr.completed",
                 phase="warm",
-                backend=sidecar_config.backend,
-                model_id=sidecar_config.model_id,
+                backend=capabilities.backends[0],
+                model_id=capabilities.model_id,
                 duration_seconds=warm_result.duration,
                 transcript_length=len(warm_result.text),
                 **warm_timing,
             )
-            health = runtime.health()
+            health = application.health()
             if health.status.value != "ready":
                 raise RuntimeError(f"configured ASR health is {health.status.value}")
             report.update(
@@ -379,8 +396,8 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                         "reason": "reference corpus, WER, and RSS thresholds are not configured",
                     },
                     "runtime": {
-                        "model_id": sidecar_config.model_id,
-                        "backend": sidecar_config.backend,
+                        "model_id": capabilities.model_id,
+                        "backend": capabilities.backends[0],
                         "health": health.status.value,
                         "executable": {
                             "version": executable_manifest.version,
@@ -452,28 +469,44 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             try:
                 asr.close()
             except Exception as error:
-                report["asr_close_error"] = type(error).__name__
-        else:
-            try:
-                runtime.close()
-            except Exception as error:
-                report["runtime_close_error"] = type(error).__name__
+                report["application_close_error"] = type(error).__name__
         if runtime_started:
-            events.event("runtime.cleaned", status=_cleanup_status(report))
-        events.close()
-        _write_report(report_path, report)
+            try:
+                _emit_event(events, "runtime.cleaned", status=_cleanup_status(report))
+            except Exception as error:
+                report["events_error"] = type(error).__name__
+        try:
+            events.close()
+        except Exception as error:
+            report["events_error"] = type(error).__name__
+        try:
+            _write_report(report_path, report)
+        except Exception:
+            report["report_write_error"] = True
 
     report["source_sha256_unchanged"] = _hash(fixture) == source_sha256
-    _write_report(report_path, report)
+    _write_report_best_effort(report_path, report)
     if not report["source_sha256_unchanged"]:
         raise RuntimeError("source SHA-256 changed during native smoke")
     cleanup_errors = [
-        key for key in ("cleanup_errors", "asr_close_error", "runtime_close_error") if key in report
+        key
+        for key in (
+            "cleanup_errors",
+            "application_close_error",
+            "asr_close_error",
+            "runtime_close_error",
+            "proxy_close_error",
+            "events_error",
+            "report_write_error",
+        )
+        if key in report
     ]
     if cleanup_errors:
         raise RuntimeError(f"native smoke cleanup failed: {', '.join(cleanup_errors)}")
     report["status"] = _success_status(report)
-    _write_report(report_path, report)
+    _write_report_best_effort(report_path, report)
+    if _cleanup_failed(report):
+        raise RuntimeError("native smoke diagnostics finalization failed")
     print("native snapshot/FFmpeg/ASR technical smoke passed; no fake adapter was used")
     return 0
 
@@ -504,12 +537,21 @@ def _safe_rtfx(audio_duration: float, elapsed: float) -> float | None:
 
 
 def _cleanup_status(report: dict[str, object]) -> str:
-    return (
-        "failed"
-        if any(
-            key in report for key in ("cleanup_errors", "asr_close_error", "runtime_close_error")
+    return "failed" if _cleanup_failed(report) else "passed"
+
+
+def _cleanup_failed(report: dict[str, object]) -> bool:
+    return any(
+        key in report
+        for key in (
+            "cleanup_errors",
+            "application_close_error",
+            "asr_close_error",
+            "runtime_close_error",
+            "proxy_close_error",
+            "events_error",
+            "report_write_error",
         )
-        else "passed"
     )
 
 

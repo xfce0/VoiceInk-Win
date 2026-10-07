@@ -21,10 +21,11 @@ def test_loopback_proxy_forwards_bidirectional_bytes() -> None:
     server = Thread(target=serve_once)
     server.start()
     proxy = LoopbackProxy(target_endpoint)
-    proxy.start()
     try:
         parsed = urlsplit(proxy.endpoint)
+        assert proxy.endpoint != target_endpoint
         with socket.create_connection((parsed.hostname, parsed.port), timeout=2.0) as client:
+            proxy.start()
             client.sendall(b"GET /ready HTTP/1.1\r\n\r\n")
             assert client.recv(64 * 1024) == b"GET /ready HTTP/1.1\r\n\r\n"
     finally:

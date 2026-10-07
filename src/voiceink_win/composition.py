@@ -6,7 +6,7 @@ import os
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 
 from voiceink_win.application import AsrApplicationService
 from voiceink_win.domain import (
@@ -95,19 +95,41 @@ class BackendApplication:
     _started: bool = False
     _closed: bool = False
     _closing: bool = False
+    _failed: bool = False
+    _close_done: Event = field(default_factory=Event, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._close_done.set()
 
     def start(self) -> None:
         with self._lifecycle_lock:
-            if self._closed or self._closing:
+            if self._closed or self._closing or self._failed:
                 raise RuntimeUnavailableError("backend application is closed")
             if self._started:
                 return
-            self._proxy.start()
             try:
+                self._proxy.start()
                 self._runtime.start()
-            except BaseException:
-                self._proxy.close()
-                self._closed = True
+            except BaseException as startup_error:
+                cleanup_errors: list[BaseException] = []
+                try:
+                    self._proxy.stop_accepting()
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                try:
+                    self._asr.close()
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                try:
+                    self._proxy.close()
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                self._closed = not cleanup_errors
+                self._failed = bool(cleanup_errors)
+                if cleanup_errors:
+                    raise BaseExceptionGroup(
+                        "backend startup rollback failed", [startup_error, *cleanup_errors]
+                    ) from startup_error
                 raise
             self._started = True
 
@@ -128,12 +150,25 @@ class BackendApplication:
         with self._lifecycle_lock:
             if self._closed:
                 return
-            self._closing = True
+            if self._closing:
+                close_done = self._close_done
+            else:
+                close_done = None
+                self._closing = True
+                self._close_done.clear()
+        if close_done is not None:
+            close_done.wait()
+            return self.close()
         failure: BaseException | None = None
+        try:
+            self._proxy.stop_accepting()
+        except BaseException as error:
+            failure = error
         try:
             self._asr.close()
         except BaseException as error:
-            failure = error
+            if failure is None:
+                failure = error
         try:
             self._proxy.close()
         except BaseException as error:
@@ -142,10 +177,14 @@ class BackendApplication:
         if failure is not None:
             with self._lifecycle_lock:
                 self._closing = False
+                self._failed = True
+            self._close_done.set()
             raise failure
         with self._lifecycle_lock:
             self._closing = False
             self._closed = True
+            self._failed = False
+        self._close_done.set()
 
 
 def build_application(
@@ -156,12 +195,26 @@ def build_application(
     endpoint: str | None = None,
     readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
 ) -> BackendApplication:
-    """Build the production ASR object graph without starting native processes."""
+    """Load trusted configuration and build the production ASR object graph."""
     configuration = load_runtime_configuration(
         manifest,
         artifact_lock,
         lock_sha256=artifact_lock_sha256,
     )
+    return build_application_from_configuration(
+        configuration,
+        endpoint=endpoint,
+        readiness_timeout=readiness_timeout,
+    )
+
+
+def build_application_from_configuration(
+    configuration: LoadedRuntimeManifest,
+    *,
+    endpoint: str | None = None,
+    readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
+) -> BackendApplication:
+    """Build the ASR object graph from one already validated runtime configuration."""
     sidecar_endpoint = allocate_loopback_endpoint()
     proxy = LoopbackProxy(sidecar_endpoint, listen_endpoint=endpoint)
     try:
