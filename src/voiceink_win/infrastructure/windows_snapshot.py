@@ -37,6 +37,7 @@ from .clock import SystemMonotonicClock
 from .media_snapshot import (
     ATTEMPT_QUARANTINE_PREFIX,
     QUARANTINE_METADATA,
+    ROOT_QUARANTINE_PREFIX,
     SOURCE_LIMIT,
     WORKSPACE_ACTIVE_LOCK,
     WORKSPACE_LIMIT,
@@ -927,11 +928,17 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         if quarantine_path is not None:
             try:
                 self._remove_workspace_lock_file(quarantine_path)
-                self._remove_directory(
+                self._remove_quarantine_tree(
                     quarantine_path,
                     expected_identity=workspace.job_identity,
+                    metadata={
+                        "kind": "job",
+                        "job_id": workspace.job_id.value,
+                        "job_identity": workspace.job_identity,
+                    },
                     deadline=deadline,
                 )
+                self._release_workspace_tree(quarantine_path)
             except FileNotFoundError:
                 pass
 
@@ -967,6 +974,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                     },
                     deadline=deadline,
                 )
+                self._release_workspace_tree(attempt_quarantine)
                 return self._quarantine_empty_job(expected.parent, workspace.job_identity)
             return self._quarantine_empty_job(expected.parent, workspace.job_identity)
         else:
@@ -991,6 +999,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             },
             deadline=deadline,
         )
+        self._release_workspace_tree(attempt_quarantine)
         return self._quarantine_empty_job(expected.parent, workspace.job_identity)
 
     def _quarantine_empty_job(self, job_path: Path, expected_identity: str) -> Path | None:
@@ -1004,7 +1013,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 raise OSError("job workspace identity changed before quarantine")
         finally:
             self._close(current_handle)
-        quarantine = self.root / f".voiceink-quarantine-{uuid.uuid4().hex}"
+        quarantine = self.root / f"{ROOT_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
         job_path.rename(quarantine)
         quarantine_handle = self._open(
             quarantine,
@@ -1017,7 +1026,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 raise OSError("job workspace identity changed during quarantine")
             self._write_manifest(
                 quarantine,
-                {"job_id": job_path.name, "job_identity": expected_identity},
+                {"kind": "job", "job_id": job_path.name, "job_identity": expected_identity},
                 filename=QUARANTINE_METADATA,
                 directory_handle=quarantine_handle,
             )
@@ -1229,6 +1238,12 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             removed_from_job = False
             try:
                 job_identity, _ = self._identity(job_handle)
+                try:
+                    preflight_ok = self._preflight_orphan_job(entry, job_identity)
+                except (OSError, ValueError, TypeError, KeyError):
+                    preflight_ok = False
+                if not preflight_ok:
+                    continue
                 if lock_supported:
                     native_lock = self._acquire_workspace_lock(entry, nonblocking=True)
                     if native_lock is None:
@@ -1280,6 +1295,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                                 metadata=values,
                             )
                             self._release_workspace_tree(entry / f"attempt-{attempt_number}")
+                            self._release_workspace_tree(attempt)
                             removed += 1
                             removed_from_job = True
                         except (OSError, ValueError, TypeError, KeyError):
@@ -1319,6 +1335,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                             metadata=values,
                         )
                         self._release_workspace_tree(attempt)
+                        self._release_workspace_tree(attempt_quarantine)
                         removed += 1
                         removed_from_job = True
                     except (OSError, ValueError, TypeError, KeyError):
@@ -1342,6 +1359,68 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                     pass
         return removed
 
+    def _preflight_orphan_job(self, job_path: Path, job_identity: str) -> bool:
+        try:
+            children = tuple(job_path.iterdir())
+        except OSError:
+            return False
+        owned_child = False
+        for child in children:
+            if child.name == WORKSPACE_ACTIVE_LOCK:
+                self._assert_no_reparse_components(child)
+                if not child.is_file():
+                    return False
+                lock_handle = self._open(
+                    child,
+                    self._api.GENERIC_READ,
+                    self._api.OPEN_EXISTING,
+                )
+                try:
+                    self._assert_contained_handle(lock_handle)
+                finally:
+                    self._close(lock_handle)
+                continue
+            if not (
+                child.name.startswith("attempt-")
+                or child.name.startswith(ATTEMPT_QUARANTINE_PREFIX)
+            ):
+                return False
+            self._assert_no_reparse_components(child)
+            if not child.is_dir():
+                return False
+            child_handle = self._open(
+                child,
+                self._api.GENERIC_READ,
+                self._api.OPEN_EXISTING,
+                directory=True,
+            )
+            try:
+                self._assert_contained_handle(child_handle)
+                child_identity, _ = self._identity(child_handle)
+                try:
+                    values = self._read_manifest(child, directory_handle=child_handle)
+                except (OSError, ValueError, TypeError, KeyError):
+                    values = self._read_manifest(
+                        child,
+                        filename=QUARANTINE_METADATA,
+                        directory_handle=child_handle,
+                    )
+                if values.get("job_id") != job_path.name:
+                    return False
+                if values.get("job_identity") != job_identity:
+                    return False
+                if values.get("attempt_identity") != child_identity:
+                    return False
+                if child.name.startswith("attempt-"):
+                    if values.get("attempt") != int(child.name.removeprefix("attempt-")):
+                        return False
+                elif type(values.get("attempt")) is not int or values["attempt"] < 1:
+                    return False
+            finally:
+                self._close(child_handle)
+            owned_child = True
+        return owned_child
+
     def _ensure_owned_root(self, root_existed: bool) -> None:
         marker = self.root / WORKSPACE_ROOT_MARKER
         if marker.exists() or marker.is_symlink():
@@ -1355,7 +1434,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
 
     def _recover_root_quarantines(self) -> None:
         for entry in tuple(self.root.iterdir()):
-            if not entry.name.startswith(".voiceink-quarantine-"):
+            if not entry.name.startswith(ROOT_QUARANTINE_PREFIX):
                 continue
             lock = None
             handle = None
@@ -1382,6 +1461,8 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                     continue
                 for child in children:
                     self._assert_no_reparse_components(child)
+                    if not child.is_file():
+                        raise OSError("root quarantine contains a non-file service entry")
                 if hasattr(getattr(self._api, "dll", None), "LockFileEx"):
                     lock = self._acquire_workspace_lock(entry)
             except (OSError, ValueError, TypeError, KeyError):

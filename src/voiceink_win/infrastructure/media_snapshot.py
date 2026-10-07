@@ -45,7 +45,18 @@ WORKSPACE_LIMIT = 768 * 1024**2
 WORKSPACE_ROOT_MARKER = ".voiceink-owned-root"
 WORKSPACE_ACTIVE_LOCK = ".voiceink.active.lock"
 ATTEMPT_QUARANTINE_PREFIX = ".voiceink-attempt-quarantine-"
+ROOT_QUARANTINE_PREFIX = ".voiceink-quarantine-"
 QUARANTINE_METADATA = ".voiceink-quarantine.json"
+
+
+def _validate_private_directory(path: Path, description: str) -> None:
+    info = os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise OSError(f"{description} must be a non-symlink directory")
+    if info.st_uid != os.getuid():
+        raise OSError(f"{description} owner is not the current user")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise OSError(f"{description} must not be group- or world-accessible")
 
 
 def _prepare_workspace_root(root: Path) -> Path:
@@ -54,19 +65,18 @@ def _prepare_workspace_root(root: Path) -> Path:
     LocalMediaSnapshotStore._reject_symlink_components(requested_root)
     requested_root.mkdir(parents=True, exist_ok=True)
     LocalMediaSnapshotStore._reject_symlink_components(requested_root)
+    if not root_existed:
+        requested_root.chmod(0o700)
+    _validate_private_directory(requested_root, "workspace root")
     marker = requested_root / WORKSPACE_ROOT_MARKER
     if marker.exists() or marker.is_symlink():
-        if marker.is_symlink() or not marker.is_dir():
-            raise OSError("workspace root ownership marker is invalid")
-    elif not root_existed:
-        marker.mkdir(mode=0o700)
+        _validate_private_directory(marker, "workspace ownership marker")
     return requested_root.resolve(strict=True)
 
 
 def _validate_workspace_root(root: Path) -> None:
-    marker = root / WORKSPACE_ROOT_MARKER
-    if marker.is_symlink() or not marker.is_dir():
-        raise OSError("workspace root ownership marker is invalid")
+    _validate_private_directory(root, "workspace root")
+    _validate_private_directory(root / WORKSPACE_ROOT_MARKER, "workspace ownership marker")
 
 
 def _check_bool(result, function, arguments):
@@ -393,6 +403,7 @@ class LocalMediaSnapshotStore:
             if not self._contains_only_owned_workspaces():
                 raise OSError("workspace root ownership cannot be established safely")
             marker.mkdir(mode=0o700)
+            _validate_private_directory(marker, "workspace ownership marker")
         resolved_import_roots = []
         for item in import_roots:
             import_root = Path(item).absolute()
@@ -404,6 +415,9 @@ class LocalMediaSnapshotStore:
         self.max_snapshot_bytes = max_snapshot_bytes
         self._clock: MonotonicClock = clock or SystemMonotonicClock()
         self._usage_lock = Lock()
+        self._workspace_reserved: dict[Path, int] = {}
+        self._snapshot_reserved: dict[Path, int] = {}
+        self._recover_root_quarantines()
         self._workspace_reserved, self._snapshot_reserved = self._scan_workspace_usage()
 
     def validate_source(self, path: Path, *, max_bytes: int = SOURCE_LIMIT) -> SourceMedia:
@@ -884,6 +898,13 @@ class LocalMediaSnapshotStore:
                     continue
                 removed_from_job = False
                 try:
+                    if not self._read_only_orphan_candidate(
+                        entry.name,
+                        self.root / entry.name,
+                        job_mtime=info.st_mtime,
+                        max_age_seconds=max_age_seconds,
+                    ):
+                        continue
                     for attempt in tuple(os.scandir(job_fd)):
                         if not attempt.is_dir(follow_symlinks=False):
                             continue
@@ -913,6 +934,7 @@ class LocalMediaSnapshotStore:
                             )
                         if time.time() - attempt_mtime <= max_age_seconds:
                             continue
+                        quarantine_path = attempt_path
                         if attempt.name.startswith(ATTEMPT_QUARANTINE_PREFIX):
                             self._remove_quarantine_directory_locked(
                                 job_fd,
@@ -929,6 +951,7 @@ class LocalMediaSnapshotStore:
                                     attempt_fd,
                                     attempt_identity,
                                 )
+                                quarantine_path = self.root / entry.name / quarantine_name
                             finally:
                                 os.close(attempt_fd)
                             self._remove_quarantine_directory_locked(
@@ -937,6 +960,7 @@ class LocalMediaSnapshotStore:
                                 expected_identity=attempt_identity,
                             )
                         self._release_workspace_tree(original_attempt_path)
+                        self._release_workspace_tree(quarantine_path)
                         removed += 1
                         removed_from_job = True
                     if removed_from_job:
@@ -952,6 +976,70 @@ class LocalMediaSnapshotStore:
         finally:
             os.close(root_fd)
         return removed
+
+    def _recover_root_quarantines(self) -> None:
+        root_fd = self._open_dir(self.root)
+        try:
+            with os.scandir(root_fd) as entries:
+                root_entries = tuple(entries)
+            for entry in root_entries:
+                if not entry.name.startswith(ROOT_QUARANTINE_PREFIX):
+                    continue
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                quarantine_fd = -1
+                locked = False
+                try:
+                    quarantine_fd = self._open_child_dir(root_fd, entry.name)
+                    identity = _identity(os.fstat(quarantine_fd))
+                    values = self._read_manifest(
+                        self.root / entry.name,
+                        filename=QUARANTINE_METADATA,
+                    )
+                    if (
+                        values.get("kind", "job") != "job"
+                        or not isinstance(values.get("job_id"), str)
+                        or not values["job_id"]
+                        or Path(values["job_id"]).name != values["job_id"]
+                        or values["job_id"] in {".", ".."}
+                        or values.get("job_identity") != identity
+                    ):
+                        continue
+                    children = tuple(os.scandir(quarantine_fd))
+                    allowed = {".voiceink.lock", WORKSPACE_ACTIVE_LOCK, QUARANTINE_METADATA}
+                    if any(child.name not in allowed for child in children):
+                        continue
+                    for child in children:
+                        child_info = os.stat(
+                            child.name,
+                            dir_fd=quarantine_fd,
+                            follow_symlinks=False,
+                        )
+                        if (
+                            not stat.S_ISREG(child_info.st_mode)
+                            or child_info.st_nlink != 1
+                            or child_info.st_uid != os.getuid()
+                            or stat.S_IMODE(child_info.st_mode) & 0o077
+                        ):
+                            raise OSError("root quarantine contains an untrusted service file")
+                    self._lock_directory(quarantine_fd)
+                    locked = True
+                    self._remove_quarantine_directory_locked(
+                        root_fd,
+                        entry.name,
+                        expected_identity=identity,
+                    )
+                    self._release_workspace_tree(self.root / entry.name)
+                    self._release_workspace_tree(self.root / values["job_id"])
+                except (OSError, ValueError, TypeError, KeyError):
+                    continue
+                finally:
+                    if locked:
+                        self._unlock_directory(quarantine_fd)
+                    if quarantine_fd >= 0:
+                        os.close(quarantine_fd)
+        finally:
+            os.close(root_fd)
 
     def _read_only_orphan_candidate(
         self,
@@ -993,7 +1081,9 @@ class LocalMediaSnapshotStore:
                 )
             else:
                 return False
-            if ownership is not None and time.time() - ownership[1] > max_age_seconds:
+            if ownership is None:
+                return False
+            if time.time() - ownership[1] > max_age_seconds:
                 owned_orphan = True
         return owned_orphan
 
@@ -1197,6 +1287,10 @@ class LocalMediaSnapshotStore:
         usage: dict[Path, int] = {}
         snapshots: dict[Path, int] = {}
         for job_entry in os.scandir(self.root):
+            if job_entry.name == WORKSPACE_ROOT_MARKER or job_entry.name.startswith(
+                ROOT_QUARANTINE_PREFIX
+            ):
+                continue
             if not job_entry.is_dir(follow_symlinks=False):
                 continue
             job_path = Path(job_entry.path)
@@ -1487,7 +1581,7 @@ class LocalMediaSnapshotStore:
         if expected_identity and current_identity != expected_identity:
             raise OSError("job workspace identity changed before quarantine")
         expected_identity = current_identity
-        quarantine_name = f".voiceink-quarantine-{uuid.uuid4().hex}"
+        quarantine_name = f"{ROOT_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
         os.rename(
             job_name,
             quarantine_name,
@@ -1498,11 +1592,21 @@ class LocalMediaSnapshotStore:
         try:
             if _identity(os.fstat(quarantine_fd)) != expected_identity:
                 raise OSError("job workspace identity changed during quarantine")
+            self._write_root_quarantine_metadata(
+                quarantine_fd,
+                job_id=job_name,
+                job_identity=expected_identity,
+            )
+            os.fsync(root_fd)
         finally:
             os.close(quarantine_fd)
-        for entry in os.scandir(job_fd):
-            os.unlink(entry.name, dir_fd=job_fd)
-        os.rmdir(quarantine_name, dir_fd=root_fd)
+        self._remove_quarantine_directory_locked(
+            root_fd,
+            quarantine_name,
+            expected_identity=expected_identity,
+        )
+        self._release_workspace_tree(self.root / quarantine_name)
+        self._release_workspace_tree(self.root / job_name)
         return True
 
     def _quarantine_attempt_locked(
@@ -1567,6 +1671,35 @@ class LocalMediaSnapshotStore:
         )
         try:
             os.write(metadata_fd, data)
+            os.fsync(metadata_fd)
+        finally:
+            os.close(metadata_fd)
+        os.fsync(directory_fd)
+
+    @staticmethod
+    def _write_root_quarantine_metadata(
+        directory_fd: int,
+        *,
+        job_id: str,
+        job_identity: str,
+    ) -> None:
+        data = json.dumps(
+            {
+                "kind": "job",
+                "job_id": job_id,
+                "job_identity": job_identity,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        metadata_fd = os.open(
+            QUARANTINE_METADATA,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        try:
+            _write_all(metadata_fd, data)
             os.fsync(metadata_fd)
         finally:
             os.close(metadata_fd)

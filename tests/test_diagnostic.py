@@ -5,7 +5,7 @@ import json
 from argparse import Namespace
 from pathlib import Path
 
-from voiceink_win.diagnostic import DiagnosticLogger, run_diagnostic
+from voiceink_win.diagnostic import DiagnosticLogger, _load_manifest, run_diagnostic
 from voiceink_win.infrastructure import FakeMediaNormalizer, FakeSnapshotStore
 
 
@@ -14,7 +14,7 @@ def _arguments(source: Path, ffmpeg: Path, manifest: Path, logs: Path) -> Namesp
         input=source,
         ffmpeg=str(ffmpeg),
         ffmpeg_manifest=manifest,
-        ffmpeg_sha256=None,
+        ffmpeg_sha256=hashlib.sha256(b"ffmpeg").hexdigest(),
         logs_dir=logs,
     )
 
@@ -55,6 +55,17 @@ def test_diagnostic_does_not_publish_success_when_cleanup_fails(tmp_path: Path) 
     assert "diagnostic.cleanup_failed" in content
     assert '"workspace.cleanup"' in content
     assert '"workspace.verify"' in content
+
+
+def test_external_ffmpeg_manifest_requires_explicit_checksum(tmp_path: Path) -> None:
+    _, ffmpeg, manifest = _diagnostic_fixture(tmp_path)
+
+    try:
+        _load_manifest(manifest, ffmpeg, None)
+    except ValueError as error:
+        assert "--ffmpeg-sha256" in str(error)
+    else:
+        raise AssertionError("external manifest was accepted as a trust anchor")
 
 
 def test_diagnostic_publishes_success_only_after_confirmed_cleanup(tmp_path: Path) -> None:
