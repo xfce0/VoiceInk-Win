@@ -38,6 +38,7 @@ from .media_snapshot import (
     ATTEMPT_QUARANTINE_PREFIX,
     QUARANTINE_METADATA,
     SOURCE_LIMIT,
+    WORKSPACE_ACTIVE_LOCK,
     WORKSPACE_LIMIT,
     WORKSPACE_ROOT_MARKER,
     LocalMediaSnapshotStore,
@@ -451,18 +452,6 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         self.root = requested_root
         self._assert_directory(self.root)
         self._root_canonical = self._canonical(self.root)
-        self._ensure_owned_root(root_existed)
-        root_handle = self._open(
-            self.root,
-            self._api.GENERIC_READ,
-            self._api.OPEN_EXISTING,
-            directory=True,
-            share=self._api.FILE_SHARE_READ,
-        )
-        try:
-            self._root_identity, _ = self._identity(root_handle)
-        finally:
-            self._close(root_handle)
         self.import_roots = tuple(self._canonical(Path(item).absolute()) for item in import_roots)
         self.max_workspace_bytes = max_workspace_bytes
         self.max_snapshot_bytes = max_snapshot_bytes
@@ -481,6 +470,19 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         self._lease_recovery_wakeup = Event()
         self._lease_reaper: Thread | None = None
         self._lease_shutdown_deadline: float | None = None
+        self._recover_root_quarantines()
+        self._ensure_owned_root(root_existed)
+        root_handle = self._open(
+            self.root,
+            self._api.GENERIC_READ,
+            self._api.OPEN_EXISTING,
+            directory=True,
+            share=self._api.FILE_SHARE_READ,
+        )
+        try:
+            self._root_identity, _ = self._identity(root_handle)
+        finally:
+            self._close(root_handle)
         self._workspace_reserved, self._snapshot_reserved = self._scan_workspace_usage()
         self.sweep_orphans(max_age_seconds=24 * 60 * 60)
 
@@ -1005,11 +1007,33 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         quarantine = self.root / f".voiceink-quarantine-{uuid.uuid4().hex}"
         job_path.rename(quarantine)
         quarantine_handle = self._open(
-            quarantine, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+            quarantine,
+            self._api.GENERIC_READ | self._api.GENERIC_WRITE,
+            self._api.OPEN_EXISTING,
+            directory=True,
         )
         try:
             if expected_identity and self._identity(quarantine_handle)[0] != expected_identity:
                 raise OSError("job workspace identity changed during quarantine")
+            self._write_manifest(
+                quarantine,
+                {"job_id": job_path.name, "job_identity": expected_identity},
+                filename=QUARANTINE_METADATA,
+                directory_handle=quarantine_handle,
+            )
+            parent_handle = self._open(
+                quarantine.parent,
+                self._api.GENERIC_READ | self._api.GENERIC_WRITE,
+                self._api.OPEN_EXISTING,
+                directory=True,
+            )
+            try:
+                if hasattr(
+                    self._api.dll, "FlushFileBuffers"
+                ) and not self._api.dll.FlushFileBuffers(parent_handle):
+                    raise OSError(ctypes.get_last_error(), "FlushFileBuffers failed")
+            finally:
+                self._close(parent_handle)
         finally:
             self._close(quarantine_handle)
         return quarantine
@@ -1313,6 +1337,7 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
                 try:
                     self._remove_workspace_lock_file(quarantine_path)
                     self._remove_directory(quarantine_path, expected_identity=job_identity)
+                    self._release_workspace_tree(quarantine_path)
                 except OSError:
                     pass
         return removed
@@ -1327,6 +1352,50 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             if not self._contains_only_owned_workspaces():
                 raise OSError("workspace root ownership cannot be established safely")
         self._mkdir(marker)
+
+    def _recover_root_quarantines(self) -> None:
+        for entry in tuple(self.root.iterdir()):
+            if not entry.name.startswith(".voiceink-quarantine-"):
+                continue
+            lock = None
+            handle = None
+            try:
+                self._assert_no_reparse_components(entry)
+                handle = self._open(
+                    entry, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
+                )
+                identity, _ = self._identity(handle)
+                values = self._read_manifest(
+                    entry, filename=QUARANTINE_METADATA, directory_handle=handle
+                )
+                if (
+                    not isinstance(values.get("job_id"), str)
+                    or not values["job_id"]
+                    or values.get("job_identity") != identity
+                ):
+                    continue
+                children = tuple(entry.iterdir())
+                if any(
+                    child.name not in {WORKSPACE_ACTIVE_LOCK, QUARANTINE_METADATA}
+                    for child in children
+                ):
+                    continue
+                for child in children:
+                    self._assert_no_reparse_components(child)
+                if hasattr(getattr(self._api, "dll", None), "LockFileEx"):
+                    lock = self._acquire_workspace_lock(entry)
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+            finally:
+                if lock is not None:
+                    self._release_workspace_lock(lock)
+                if handle is not None:
+                    self._close(handle)
+            try:
+                self._remove_workspace_lock_file(entry)
+                self._remove_directory(entry, expected_identity=identity)
+            except OSError:
+                continue
 
     def _assert_owned_root_marker(self) -> None:
         marker = self.root / WORKSPACE_ROOT_MARKER
@@ -2364,6 +2433,8 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         usage: dict[Path, int] = {}
         snapshots: dict[Path, int] = {}
         for job in self.root.iterdir():
+            if job.name == WORKSPACE_ROOT_MARKER or job.name.startswith(".voiceink-"):
+                continue
             job_handle = self._open(
                 job, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
             )
@@ -2372,6 +2443,8 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
             finally:
                 self._close(job_handle)
             for attempt in job.iterdir():
+                if not attempt.name.startswith("attempt-"):
+                    continue
                 attempt_handle = self._open(
                     attempt, self._api.GENERIC_READ, self._api.OPEN_EXISTING, directory=True
                 )

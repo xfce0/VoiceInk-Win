@@ -2188,6 +2188,87 @@ def test_windows_quarantine_recovery_rewrites_metadata_after_transient_failure(
     assert not quarantine.exists()
 
 
+def test_windows_usage_scan_reopens_persisted_workspace_with_service_lock(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    attempt = root / "job" / "attempt-1"
+    attempt.mkdir(parents=True)
+    source_snapshot = attempt / "source.snapshot"
+    source_snapshot.write_bytes(b"snapshot")
+    manifest = attempt / "manifest.json"
+    manifest.write_bytes(b"manifest")
+    (root / "job" / media_snapshot.WORKSPACE_ACTIVE_LOCK).write_bytes(b"")
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(
+        GENERIC_READ=1,
+        OPEN_EXISTING=3,
+        FILE_ATTRIBUTE_DIRECTORY=0x10,
+        FILE_ATTRIBUTE_REPARSE_POINT=0x400,
+        dll=SimpleNamespace(
+            GetFileInformationByHandle=lambda handle, info: (
+                setattr(
+                    ctypes.cast(
+                        info,
+                        ctypes.POINTER(windows_snapshot._WindowsFileInformation),
+                    ).contents,
+                    "attributes",
+                    0x10 if Path(handle).is_dir() else 0,
+                )
+                or True
+            )
+        ),
+    )
+    store._open = lambda path, *args, **kwargs: path
+    store._close = lambda handle: None
+    store._assert_contained_handle = lambda handle: None
+    store._identity = lambda handle: (str(Path(handle)), Path(handle).stat().st_size)
+
+    first_usage, first_snapshots = store._scan_workspace_usage()
+    second_usage, second_snapshots = store._scan_workspace_usage()
+
+    assert first_usage == second_usage
+    assert first_snapshots == second_snapshots
+    assert first_snapshots[attempt] == source_snapshot.stat().st_size
+    assert first_usage[attempt] == manifest.stat().st_size
+
+
+def test_windows_root_quarantine_recovery_skips_unvalidated_dot_entries(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir()
+    valid = root / ".voiceink-quarantine-recovery"
+    valid.mkdir()
+    (valid / media_snapshot.WORKSPACE_ACTIVE_LOCK).write_bytes(b"")
+    (valid / media_snapshot.QUARANTINE_METADATA).write_text("metadata", encoding="ascii")
+    unknown = root / ".voiceink-quarantine-unknown"
+    unknown.mkdir()
+    (unknown / "sentinel").write_text("keep", encoding="ascii")
+    unrelated = root / ".voiceink-unrelated"
+    unrelated.write_text("keep", encoding="ascii")
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(GENERIC_READ=1, OPEN_EXISTING=3, dll=None)
+    store._assert_no_reparse_components = lambda path: None
+    store._open = lambda path, *args, **kwargs: path
+    store._close = lambda handle: None
+    store._identity = lambda handle: ("job-identity", 0)
+    store._read_manifest = lambda path, **kwargs: {
+        "job_id": "persisted-job",
+        "job_identity": "job-identity",
+    }
+    store._remove_workspace_lock_file = lambda path: (
+        path / media_snapshot.WORKSPACE_ACTIVE_LOCK
+    ).unlink()
+    store._remove_directory = lambda path, **kwargs: shutil.rmtree(path)
+
+    store._recover_root_quarantines()
+
+    assert not valid.exists()
+    assert unknown.exists()
+    assert unrelated.exists()
+
+
 @POSIX_ONLY
 def test_existing_valid_workspace_root_is_marked_during_upgrade(tmp_path: Path) -> None:
     store = LocalMediaSnapshotStore(tmp_path / "legacy")
