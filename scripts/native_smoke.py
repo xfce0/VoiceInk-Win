@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,33 @@ NATIVE_SMOKE_READINESS_TIMEOUT = 60.0
 
 class NativeSmokeDiagnosticsError(RuntimeError):
     """The smoke diagnostics stream could not be written reliably."""
+
+
+_SENSITIVE_DETAIL = re.compile(
+    r"(?i)(?<![A-Za-z0-9])"
+    r"(authorization|api[-_ ]?key|access[-_ ]?token|client[-_ ]?secret|"
+    r"private[-_ ]?key|token|nonce|password|secret)"
+    r"(?![A-Za-z0-9])\s*[:=]\s*['\"]?(?:bearer\s+)?[^\s,;}'\"]+"
+)
+
+
+def _safe_failure_detail(error: BaseException) -> str:
+    """Keep bounded, redacted exception context in the smoke artifact."""
+    from voiceink_win.infrastructure import sanitize_report_value
+
+    details: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(details) < 3:
+        seen.add(id(current))
+        message = getattr(current, "message", None) or str(current)
+        message = str(sanitize_report_value(message))
+        message = _SENSITIVE_DETAIL.sub(r"\1=<redacted>", message)
+        message = " ".join(message.split())[:256]
+        if message:
+            details.append(f"{type(current).__name__}: {message}")
+        current = getattr(current, "cause", None) or current.__cause__
+    return " <- ".join(details)[:1024]
 
 
 def _required(name: str) -> str:
@@ -213,6 +241,7 @@ def main() -> int:
         from voiceink_win.infrastructure import safe_failure
 
         report["failure"] = safe_failure(error)
+        report["failure_detail"] = _safe_failure_detail(error)
         _write_report_best_effort(report_path, report)
         if isinstance(error, NativeSmokeDiagnosticsError) or _cleanup_failed(report):
             return 4
@@ -230,6 +259,7 @@ def main() -> int:
 
 def _run(report_path: Path, report: dict[str, object]) -> int:
     if os.name != "nt":
+        report["failure_stage"] = "platform_precondition"
         error = RuntimeError("native smoke must run on Windows; Mac runs are not evidence")
         from voiceink_win.infrastructure import safe_failure
 
@@ -248,6 +278,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         safe_failure,
     )
 
+    report["failure_stage"] = "native_smoke_lock"
     native_lock = _load_native_smoke_lock()
     pins = native_lock["artifacts"]
     assert isinstance(pins, dict)
@@ -266,6 +297,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     )
     ffmpeg_path = Path(_required("VOICEINK_FFMPEG_PATH")).resolve(strict=True)
     ffmpeg_sha256 = _pinned_required("VOICEINK_FFMPEG_SHA256", ffmpeg_pin["executable_sha256"])
+    report["failure_stage"] = "runtime_configuration"
     runtime_configuration = _load_runtime_configuration()
     if runtime_configuration.model_id != model_pin["model_id"]:
         raise RuntimeError("runtime manifest model ID does not match the tracked native smoke lock")
@@ -287,6 +319,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         license=_pinned_required("VOICEINK_FFMPEG_LICENSE", ffmpeg_pin["license"]),
         allowed_path=ffmpeg_path,
     )
+    report["failure_stage"] = "ffmpeg_verification"
     artifact = VerifiedFfmpegArtifact.verify(ffmpeg_path, manifest)
     if _hash(ffmpeg_path).lower() != ffmpeg_sha256.lower():
         raise RuntimeError("FFmpeg checksum changed between verification and smoke setup")
@@ -305,10 +338,12 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         license=runtime_configuration.model_artifact.license,
         allowed_path=runtime_configuration.model_artifact.allowed_path,
     )
+    report["failure_stage"] = "runtime_artifact_verification"
     RuntimeArtifactVerifier().verify_manifest(
         runtime_path, executable_manifest, label="runtime executable"
     )
     RuntimeArtifactVerifier().verify_manifest(model_path, model_manifest, label="runtime model")
+    report["failure_stage"] = "application_build"
     application, events = _build_native_smoke_application(
         runtime_configuration,
         executable_manifest,
@@ -321,9 +356,11 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     snapshot = None
     runtime_started = False
     try:
+        report["failure_stage"] = "application_start"
         capabilities = application.capabilities()
         application.start()
         runtime_started = True
+        report["failure_stage"] = "runtime_ready"
         _emit_event(
             events,
             "sidecar.ready",
@@ -335,9 +372,11 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             root = Path(temporary) / "workspace"
             store = WindowsMediaSnapshotStore(root, import_roots=(fixture.parent,))
             temporary_directory.store = store
+            report["failure_stage"] = "snapshot_security"
             report["snapshot_security"] = _run_snapshot_security_probes(
                 Path(temporary) / "snapshot-security", report
             )
+            report["failure_stage"] = "snapshot_pipeline"
             workspace = store.create_workspace(JobId("native-smoke"), 1)
             temporary_directory.workspace = workspace
             source = store.validate_source(fixture, max_bytes=2 * 1024**3)
@@ -348,9 +387,11 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             process_tree_mode = getattr(normalizer.runner, "process_tree_mode", None)
             if process_tree_mode != "windows-job-object-adapter":
                 raise RuntimeError("native smoke requires the Windows Job Object process runner")
+            report["failure_stage"] = "normalization"
             normalized = normalizer.normalize(
                 snapshot, workspace, _NeverCancelled(), monotonic() + 60
             )
+            report["failure_stage"] = "asr_cold"
             result, cold_timing = _transcribe_with_timing(
                 asr, normalized.audio, "native-smoke-cold"
             )
@@ -364,6 +405,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                 transcript_length=len(result.text),
                 **cold_timing,
             )
+            report["failure_stage"] = "asr_warm"
             warm_result, warm_timing = _transcribe_with_timing(
                 asr, normalized.audio, "native-smoke-warm"
             )
@@ -377,6 +419,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                 transcript_length=len(warm_result.text),
                 **warm_timing,
             )
+            report["failure_stage"] = "health_check"
             health = application.health()
             if health.status.value != "ready":
                 raise RuntimeError(f"configured ASR health is {health.status.value}")
@@ -429,6 +472,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
             temporary_directory.workspace = None
             cancel_after = float(_required("VOICEINK_NATIVE_SMOKE_CANCEL_AFTER_SECONDS"))
             cancellation_report = {}
+            report["failure_stage"] = "cancellation_process_tree"
             try:
                 _run_process_tree_probe(cancel_after)
                 cancellation_report["ffmpeg_process_tree"] = "passed"
@@ -439,6 +483,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                 }
                 report["cancellation"] = cancellation_report
                 raise
+            report["failure_stage"] = "cancellation_snapshot_normalization"
             try:
                 _run_cancellation_probe(store, source, normalizer, cancel_after, report)
                 cancellation_report["snapshot_normalization"] = "passed"
@@ -449,6 +494,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
                 }
                 report["cancellation"] = cancellation_report
                 raise
+            report["failure_stage"] = "cancellation_asr"
             try:
                 _run_asr_cancellation_probe(
                     asr,
