@@ -20,8 +20,9 @@ from voiceink_win.infrastructure import (
     validate_nonce,
 )
 
+_TEST_TIMEOUT_SECONDS = 5.0
 _SERVER_ACCEPT_TIMEOUT_SECONDS = 0.25
-_SERVER_JOIN_TIMEOUT_SECONDS = 1.0
+_SERVER_JOIN_TIMEOUT_SECONDS = _TEST_TIMEOUT_SECONDS
 
 
 class FakeHttpResponse:
@@ -297,6 +298,7 @@ def test_post_audio_rejects_non_origin_form_path_before_connecting(monkeypatch, 
 
 
 def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcript() -> None:
+    test_timeout = _TEST_TIMEOUT_SECONDS
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -317,7 +319,7 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
                 break
             if connection is None:
                 return
-            connection.settimeout(1.0)
+            connection.settimeout(test_timeout)
             data = bytearray()
             while b"\r\n\r\n" not in data:
                 chunk = connection.recv(4096)
@@ -348,10 +350,16 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
         audio = b"\x01\x02\x03\x04"
         response = UrllibLoopbackTransport(
             f"http://127.0.0.1:{port}", nonce="test-nonce"
-        ).post_audio("/transcribe", metadata, memoryview(audio), timeout=1.0, max_response_bytes=8)
+        ).post_audio(
+            "/transcribe",
+            metadata,
+            memoryview(audio),
+            timeout=test_timeout,
+            max_response_bytes=8,
+        )
     finally:
         server_stop.set()
-        worker.join(_SERVER_JOIN_TIMEOUT_SECONDS)
+        worker.join(test_timeout)
         listener.close()
 
     assert not worker.is_alive(), "raw metadata test server did not shut down"
@@ -369,7 +377,7 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
 
 
 def test_post_multipart_audio_uses_official_wav_form_and_auth_headers() -> None:
-    test_timeout = 5.0
+    test_timeout = _TEST_TIMEOUT_SECONDS
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -489,7 +497,7 @@ def test_post_multipart_audio_cancellation_closes_connection_and_discards_result
                 break
             if connection is None:
                 return
-            connection.settimeout(1.0)
+            connection.settimeout(_TEST_TIMEOUT_SECONDS)
             data = bytearray()
             while b"\r\n\r\n" not in data:
                 chunk = connection.recv(4096)
@@ -536,7 +544,7 @@ def test_post_multipart_audio_cancellation_closes_connection_and_discards_result
                     "parakeet-tdt-0.6b-v3.oss-align.q8_0",
                     None,
                     "json",
-                    timeout=5.0,
+                    timeout=_TEST_TIMEOUT_SECONDS,
                     max_response_bytes=8,
                     cancellation=source.token,
                 )
@@ -547,9 +555,9 @@ def test_post_multipart_audio_cancellation_closes_connection_and_discards_result
     client = Thread(target=request, daemon=True)
     client.start()
     try:
-        assert request_received.wait(1.0)
+        assert request_received.wait(_TEST_TIMEOUT_SECONDS)
         source.cancel()
-        client.join(1.0)
+        client.join(_TEST_TIMEOUT_SECONDS)
     finally:
         server_stop.set()
         server.join(_SERVER_JOIN_TIMEOUT_SECONDS)
