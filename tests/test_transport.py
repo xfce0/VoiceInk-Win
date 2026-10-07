@@ -346,16 +346,19 @@ def test_post_audio_uses_compact_raw_metadata_and_never_embeds_audio_or_transcri
 
 
 def test_post_multipart_audio_uses_official_wav_form_and_auth_headers() -> None:
+    test_timeout = 5.0
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
+    listener.settimeout(test_timeout)
     port = listener.getsockname()[1]
     received: list[bytes] = []
+    worker_errors: list[Exception] = []
 
     def serve() -> None:
-        connection, _ = listener.accept()
         try:
-            connection.settimeout(1.0)
+            connection, _ = listener.accept()
+            connection.settimeout(test_timeout)
             data = bytearray()
             while b"\r\n\r\n" not in data:
                 data.extend(connection.recv(4096))
@@ -371,8 +374,11 @@ def test_post_multipart_audio_uses_official_wav_form_and_auth_headers() -> None:
                 data.extend(connection.recv(4096))
             received.append(bytes(data))
             connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        except Exception as error:
+            worker_errors.append(error)
         finally:
-            connection.close()
+            if "connection" in locals():
+                connection.close()
 
     worker = Thread(target=serve, daemon=True)
     worker.start()
@@ -387,13 +393,15 @@ def test_post_multipart_audio_uses_official_wav_form_and_auth_headers() -> None:
             "parakeet-tdt-0.6b-v3.oss-align.q8_0",
             "en",
             "verbose_json",
-            timeout=1.0,
+            timeout=test_timeout,
             max_response_bytes=8,
         )
     finally:
-        worker.join(1.0)
         listener.close()
+        worker.join(test_timeout)
 
+    assert not worker.is_alive(), "multipart test server did not shut down"
+    assert not worker_errors, f"multipart test server failed: {worker_errors[0]!r}"
     assert response.body == b"ok"
     wire = received[0]
     headers, body = wire.split(b"\r\n\r\n", 1)
