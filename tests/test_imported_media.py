@@ -2074,11 +2074,118 @@ def test_windows_sweep_fail_closed_keeps_reparse_like_job_untouched(tmp_path: Pa
 
     store = object.__new__(WindowsMediaSnapshotStore)
     store.root = root
+    store._api = SimpleNamespace(
+        dll=SimpleNamespace(
+            LockFileEx=lambda *args: True,
+            UnlockFileEx=lambda *args: True,
+        ),
+        GENERIC_READ=1,
+        GENERIC_WRITE=2,
+        DELETE=4,
+        OPEN_ALWAYS=4,
+        OPEN_EXISTING=3,
+        SHARE=7,
+        LOCKFILE_EXCLUSIVE_LOCK=2,
+        LOCKFILE_FAIL_IMMEDIATELY=1,
+    )
     store._assert_owned_root_marker = lambda: None
+    store._assert_no_reparse_components = lambda path: (
+        (_ for _ in ()).throw(OSError("reparse point")) if path.is_symlink() else None
+    )
 
     assert store.sweep_orphans(max_age_seconds=1) == 0
     assert (external / "sentinel").exists()
     assert job.is_symlink()
+
+
+def test_windows_sweep_removes_valid_stale_workspace_using_job_age(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    (root / media_snapshot.WORKSPACE_ROOT_MARKER).mkdir(parents=True)
+    attempt = root / "job" / "attempt-1"
+    attempt.mkdir(parents=True)
+    os.utime(attempt, None)
+    os.utime(attempt.parent, (1, 1))
+
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store.root = root
+    store._api = SimpleNamespace(
+        dll=SimpleNamespace(
+            LockFileEx=lambda *args: True,
+            UnlockFileEx=lambda *args: True,
+        ),
+        GENERIC_READ=1,
+        GENERIC_WRITE=2,
+        DELETE=4,
+        OPEN_ALWAYS=4,
+        OPEN_EXISTING=3,
+        SHARE=7,
+        LOCKFILE_EXCLUSIVE_LOCK=2,
+        LOCKFILE_FAIL_IMMEDIATELY=1,
+    )
+    store._assert_owned_root_marker = lambda: None
+    store._assert_no_reparse_components = lambda path: None
+    store._open = lambda path, *args, **kwargs: path
+    store._identity = lambda handle: ("job" if Path(handle) == attempt.parent else "attempt", 0)
+    store._handle_mtime = lambda handle: 1.0
+    store._close = lambda handle: None
+    store._remove_tree = lambda path, **kwargs: shutil.rmtree(path)
+    store._quarantine_attempt = lambda path, expected_identity, metadata: path
+    store._release_workspace_tree = lambda path: None
+    store._read_manifest = lambda path, **kwargs: {
+        "job_id": "job",
+        "attempt": 1,
+        "job_identity": "job",
+        "attempt_identity": "attempt",
+    }
+    store._quarantine_empty_job = lambda path, expected_identity: None
+
+    assert store.sweep_orphans(max_age_seconds=1) == 1
+    assert not attempt.exists()
+
+
+def test_windows_quarantine_recovery_rewrites_metadata_after_transient_failure(
+    tmp_path: Path,
+) -> None:
+    quarantine = tmp_path / "job" / ".voiceink-attempt-quarantine-retry"
+    quarantine.mkdir(parents=True)
+    store = object.__new__(WindowsMediaSnapshotStore)
+    store._api = SimpleNamespace(GENERIC_READ=1, GENERIC_WRITE=2, OPEN_EXISTING=3)
+    store._open = lambda path, *args, **kwargs: path
+    store._identity = lambda handle: ("attempt", 0)
+    store._close = lambda handle: None
+    writes: list[dict[str, object]] = []
+    store._write_manifest = lambda path, values, **kwargs: writes.append(values)
+    failed = True
+
+    def remove_once(path, **kwargs):
+        nonlocal failed
+        if failed:
+            failed = False
+            raise OSError("transient deletion failure")
+        shutil.rmtree(path)
+
+    store._remove_tree = remove_once
+    metadata = {
+        "job_id": "job",
+        "attempt": 1,
+        "job_identity": "job",
+        "attempt_identity": "attempt",
+    }
+
+    with pytest.raises(OSError, match="transient deletion failure"):
+        store._remove_quarantine_tree(
+            quarantine,
+            expected_identity="attempt",
+            metadata=metadata,
+        )
+
+    assert writes == [metadata]
+    store._remove_quarantine_tree(
+        quarantine,
+        expected_identity="attempt",
+        metadata=metadata,
+    )
+    assert not quarantine.exists()
 
 
 @POSIX_ONLY
@@ -2147,6 +2254,45 @@ def test_cleanup_fails_closed_when_attempt_directory_is_replaced(tmp_path: Path)
 
 
 @POSIX_ONLY
+def test_cleanup_reclaims_owned_attempt_quarantine_after_transient_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = LocalMediaSnapshotStore(tmp_path / "private")
+    workspace = store.create_workspace(JobId("quarantine-retry"), 1)
+    (workspace.path / "payload").write_text("payload", encoding="ascii")
+    original_rmdir = media_snapshot.os.rmdir
+    failed = False
+
+    def fail_once(name, **kwargs):
+        nonlocal failed
+        if (
+            isinstance(name, str)
+            and name.startswith(".voiceink-attempt-quarantine-")
+            and not failed
+        ):
+            failed = True
+            raise OSError("transient deletion failure")
+        return original_rmdir(name, **kwargs)
+
+    monkeypatch.setattr(media_snapshot.os, "rmdir", fail_once)
+
+    with pytest.raises(OSError, match="transient deletion failure"):
+        store.cleanup(workspace)
+
+    quarantines = tuple(workspace.path.parent.glob(".voiceink-attempt-quarantine-*"))
+    assert len(quarantines) == 1
+    assert not (quarantines[0] / "manifest.json").exists()
+    assert (quarantines[0] / media_snapshot.QUARANTINE_METADATA).exists()
+    unrelated = workspace.path.parent / ".unrelated"
+    unrelated.mkdir()
+
+    store.cleanup(workspace)
+
+    assert not quarantines[0].exists()
+    assert unrelated.exists()
+
+
+@POSIX_ONLY
 def test_workspace_creation_exposes_partial_workspace_before_manifest(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2204,11 +2350,13 @@ def test_windows_sweep_keeps_old_unmanifested_workspace_safely(tmp_path: Path) -
     store._api = SimpleNamespace(GENERIC_READ=1, DELETE=2, OPEN_EXISTING=3)
     store._open = lambda *args, **kwargs: 1
     store._identity = lambda handle: ("job" if handle == 1 else "attempt", 0)
+    store._handle_mtime = lambda handle: 1.0
     store._assert_contained_handle = lambda handle: None
     store._close = lambda handle: None
     store._remove_tree = lambda path, **kwargs: shutil.rmtree(path)
     store._remove_directory = lambda path, **kwargs: path.rmdir()
     store._release_workspace_tree = lambda path: None
+    store._read_manifest = lambda path, **kwargs: (_ for _ in ()).throw(FileNotFoundError())
 
     assert store.sweep_orphans(max_age_seconds=1) == 0
     assert root.joinpath("job").exists()

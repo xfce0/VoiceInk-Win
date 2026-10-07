@@ -44,6 +44,8 @@ SOURCE_LIMIT = 2 * 1024**3
 WORKSPACE_LIMIT = 768 * 1024**2
 WORKSPACE_ROOT_MARKER = ".voiceink-owned-root"
 WORKSPACE_ACTIVE_LOCK = ".voiceink.active.lock"
+ATTEMPT_QUARANTINE_PREFIX = ".voiceink-attempt-quarantine-"
+QUARANTINE_METADATA = ".voiceink-quarantine.json"
 
 
 def _prepare_workspace_root(root: Path) -> Path:
@@ -787,6 +789,7 @@ class LocalMediaSnapshotStore:
                 pass
 
     def _cleanup_contents(self, workspace: JobWorkspace, *, deadline: float | None = None) -> None:
+        self._check_cleanup_deadline(deadline)
         if self.windows_adapter is not None:
             self.windows_adapter.cleanup_workspace(workspace.path)
             return
@@ -798,6 +801,7 @@ class LocalMediaSnapshotStore:
         root_fd = self._open_dir(self.root)
         job_fd = -1
         attempt_fd = -1
+        attempt_quarantine: str | None = None
         try:
             job_fd = self._open_child_dir(root_fd, workspace.job_id.value)
             if workspace.job_identity and _identity(os.fstat(job_fd)) != workspace.job_identity:
@@ -805,32 +809,38 @@ class LocalMediaSnapshotStore:
             try:
                 attempt_fd = self._open_child_dir(job_fd, f"attempt-{workspace.attempt.value}")
             except FileNotFoundError:
-                if workspace.attempt_identity:
-                    raise
-                self._remove_empty_job_files_locked(
-                    root_fd, workspace.job_id.value, job_fd, workspace.job_identity
+                attempt_quarantine = self._find_owned_attempt_quarantine(
+                    job_fd, workspace.attempt_identity
                 )
-                return
+                if attempt_quarantine is not None:
+                    attempt_fd = self._open_child_dir(job_fd, attempt_quarantine)
+                elif workspace.attempt_identity:
+                    raise
+                else:
+                    self._remove_empty_job_files_locked(
+                        root_fd, workspace.job_id.value, job_fd, workspace.job_identity
+                    )
+                    return
             if (
                 workspace.attempt_identity
                 and _identity(os.fstat(attempt_fd)) != workspace.attempt_identity
             ):
                 raise OSError("attempt workspace identity changed")
-            attempt_quarantine = self._quarantine_attempt_locked(
-                job_fd,
-                f"attempt-{workspace.attempt.value}",
-                attempt_fd,
-                workspace.attempt_identity,
-            )
+            if attempt_quarantine is None:
+                attempt_quarantine = self._quarantine_attempt_locked(
+                    job_fd,
+                    workspace.job_id.value,
+                    f"attempt-{workspace.attempt.value}",
+                    attempt_fd,
+                    workspace.attempt_identity,
+                )
             os.close(attempt_fd)
             attempt_fd = -1
-            quarantine_fd = self._open_child_dir(job_fd, attempt_quarantine)
-            try:
-                for child in os.scandir(quarantine_fd):
-                    self._remove_entry(quarantine_fd, child.name, deadline=deadline)
-            finally:
-                os.close(quarantine_fd)
-            os.rmdir(attempt_quarantine, dir_fd=job_fd)
+            self._remove_quarantine_directory_locked(
+                job_fd,
+                attempt_quarantine,
+                expected_identity=workspace.attempt_identity,
+            )
             self._remove_empty_job_files_locked(
                 root_fd, workspace.job_id.value, job_fd, workspace.job_identity
             )
@@ -871,23 +881,55 @@ class LocalMediaSnapshotStore:
                         if not attempt.is_dir(follow_symlinks=False):
                             continue
                         attempt_path = self.root / entry.name / attempt.name
-                        ownership = self._owned_workspace(
-                            entry.name,
-                            attempt.name,
-                            attempt_path,
-                            job_mtime=info.st_mtime,
+                        original_attempt_path = attempt_path
+                        ownership = (
+                            self._owned_workspace(
+                                entry.name,
+                                attempt.name,
+                                attempt_path,
+                                job_mtime=info.st_mtime,
+                            )
+                            if attempt.name.startswith("attempt-")
+                            else self._owned_attempt_quarantine(
+                                entry.name,
+                                attempt.name,
+                                attempt_path,
+                                job_mtime=info.st_mtime,
+                            )
                         )
                         if ownership is None:
                             continue
-                        attempt_identity, attempt_mtime = ownership
+                        attempt_identity, attempt_mtime = ownership[:2]
+                        if not attempt.name.startswith("attempt-"):
+                            original_attempt_path = (
+                                self.root / entry.name / f"attempt-{ownership[2]}"
+                            )
                         if time.time() - attempt_mtime <= max_age_seconds:
                             continue
-                        self._remove_entry_locked(
-                            job_fd,
-                            attempt.name,
-                            expected_identity=attempt_identity,
-                        )
-                        self._release_workspace_tree(attempt_path)
+                        if attempt.name.startswith(ATTEMPT_QUARANTINE_PREFIX):
+                            self._remove_quarantine_directory_locked(
+                                job_fd,
+                                attempt.name,
+                                expected_identity=attempt_identity,
+                            )
+                        else:
+                            attempt_fd = self._open_child_dir(job_fd, attempt.name)
+                            try:
+                                quarantine_name = self._quarantine_attempt_locked(
+                                    job_fd,
+                                    entry.name,
+                                    attempt.name,
+                                    attempt_fd,
+                                    attempt_identity,
+                                )
+                            finally:
+                                os.close(attempt_fd)
+                            self._remove_quarantine_directory_locked(
+                                job_fd,
+                                quarantine_name,
+                                expected_identity=attempt_identity,
+                            )
+                        self._release_workspace_tree(original_attempt_path)
                         removed += 1
                         removed_from_job = True
                     if removed_from_job:
@@ -932,7 +974,57 @@ class LocalMediaSnapshotStore:
             and bool(values["attempt_identity"])
         ):
             return None
-        return self._manifest_workspace_identity(values, path, job_mtime=job_mtime)
+        identity = self._manifest_workspace_identity(values, path, job_mtime=job_mtime)
+        if identity is None:
+            return None
+        return identity
+
+    def _owned_attempt_quarantine(
+        self,
+        job_name: str,
+        quarantine_name: str,
+        path: Path,
+        *,
+        job_mtime: float,
+    ) -> tuple[str, float, int] | None:
+        if not quarantine_name.startswith(ATTEMPT_QUARANTINE_PREFIX):
+            return None
+        try:
+            values = self._read_manifest(path)
+        except (OSError, ValueError, TypeError, KeyError):
+            try:
+                values = self._read_manifest(path, filename=QUARANTINE_METADATA)
+            except (OSError, ValueError, TypeError, KeyError):
+                return None
+        if (
+            values.get("job_id") != job_name
+            or type(values.get("attempt")) is not int
+            or not isinstance(values.get("attempt_identity"), str)
+            or not values["attempt_identity"]
+        ):
+            return None
+        identity = self._manifest_workspace_identity(values, path, job_mtime=job_mtime)
+        if identity is None:
+            return None
+        return identity[0], identity[1], int(values["attempt"])
+
+    def _find_owned_attempt_quarantine(self, job_fd: int, expected_identity: str) -> str | None:
+        matches: list[str] = []
+        for entry in os.scandir(job_fd):
+            if not entry.name.startswith(ATTEMPT_QUARANTINE_PREFIX):
+                continue
+            try:
+                quarantine_fd = self._open_child_dir(job_fd, entry.name)
+            except OSError:
+                continue
+            try:
+                if expected_identity and _identity(os.fstat(quarantine_fd)) == expected_identity:
+                    matches.append(entry.name)
+            finally:
+                os.close(quarantine_fd)
+        if len(matches) > 1:
+            raise OSError("multiple owned attempt quarantines found")
+        return matches[0] if matches else None
 
     @staticmethod
     def _manifest_workspace_identity(
@@ -1015,12 +1107,14 @@ class LocalMediaSnapshotStore:
                 self._reserve_workspace(workspace, -delta)
             raise
 
-    def _read_manifest(self, workspace: Path) -> dict[str, object]:
+    def _read_manifest(
+        self, workspace: Path, *, filename: str = "manifest.json"
+    ) -> dict[str, object]:
         workspace_fd = self._open_workspace_fd_from_path(workspace)
         manifest_fd = -1
         try:
             manifest_fd = os.open(
-                "manifest.json",
+                filename,
                 os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
                 dir_fd=workspace_fd,
             )
@@ -1265,7 +1359,11 @@ class LocalMediaSnapshotStore:
             try:
                 if not self._same_identity(info, os.fstat(child_fd)):
                     raise OSError("workspace directory changed during cleanup")
-                for child in os.scandir(child_fd):
+                children = sorted(
+                    os.scandir(child_fd),
+                    key=lambda child: child.name == QUARANTINE_METADATA,
+                )
+                for child in children:
                     self._remove_entry_locked(child_fd, child.name, deadline=deadline)
             finally:
                 os.close(child_fd)
@@ -1355,7 +1453,12 @@ class LocalMediaSnapshotStore:
         return True
 
     def _quarantine_attempt_locked(
-        self, job_fd: int, attempt_name: str, attempt_fd: int, expected_identity: str
+        self,
+        job_fd: int,
+        job_name: str,
+        attempt_name: str,
+        attempt_fd: int,
+        expected_identity: str,
     ) -> str:
         current_identity = _identity(os.fstat(attempt_fd))
         if expected_identity and current_identity != expected_identity:
@@ -1366,15 +1469,117 @@ class LocalMediaSnapshotStore:
             != expected_identity
         ):
             raise OSError("attempt path changed before quarantine")
-        quarantine_name = f".voiceink-attempt-quarantine-{uuid.uuid4().hex}"
+        quarantine_name = f"{ATTEMPT_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
         os.rename(attempt_name, quarantine_name, src_dir_fd=job_fd, dst_dir_fd=job_fd)
         quarantine_fd = self._open_child_dir(job_fd, quarantine_name)
         try:
             if _identity(os.fstat(quarantine_fd)) != expected_identity:
                 raise OSError("attempt workspace identity changed during quarantine")
+            self._write_quarantine_metadata(
+                quarantine_fd,
+                attempt=int(attempt_name.removeprefix("attempt-")),
+                job_name=job_name,
+                job_identity=_identity(os.fstat(job_fd)),
+                attempt_identity=expected_identity,
+            )
+            os.fsync(job_fd)
         finally:
             os.close(quarantine_fd)
         return quarantine_name
+
+    @staticmethod
+    def _write_quarantine_metadata(
+        directory_fd: int,
+        *,
+        attempt: int,
+        job_name: str,
+        job_identity: str,
+        attempt_identity: str,
+    ) -> None:
+        data = json.dumps(
+            {
+                "attempt": attempt,
+                "job_id": job_name,
+                "job_identity": job_identity,
+                "attempt_identity": attempt_identity,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        metadata_fd = os.open(
+            QUARANTINE_METADATA,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        try:
+            os.write(metadata_fd, data)
+            os.fsync(metadata_fd)
+        finally:
+            os.close(metadata_fd)
+        os.fsync(directory_fd)
+
+    def _remove_quarantine_directory_locked(
+        self, parent_fd: int, name: str, *, expected_identity: str | None = None
+    ) -> None:
+        quarantine_fd = self._open_child_dir(parent_fd, name)
+        metadata: bytes | None = None
+        try:
+            quarantine_identity = _identity(os.fstat(quarantine_fd))
+            if expected_identity and quarantine_identity != expected_identity:
+                raise OSError("quarantine identity changed before cleanup")
+            try:
+                metadata_fd = os.open(
+                    QUARANTINE_METADATA,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=quarantine_fd,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                try:
+                    metadata = os.read(metadata_fd, 64 * 1024)
+                finally:
+                    os.close(metadata_fd)
+            children = sorted(
+                os.scandir(quarantine_fd),
+                key=lambda child: child.name == QUARANTINE_METADATA,
+            )
+            for child in children:
+                if child.name == QUARANTINE_METADATA:
+                    continue
+                self._remove_entry_locked(quarantine_fd, child.name)
+            if (
+                _identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False))
+                != quarantine_identity
+            ):
+                raise OSError("quarantine path changed before metadata removal")
+            if metadata is not None:
+                os.unlink(QUARANTINE_METADATA, dir_fd=quarantine_fd)
+            try:
+                if (
+                    _identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False))
+                    != quarantine_identity
+                ):
+                    raise OSError("quarantine path changed before directory removal")
+                os.rmdir(name, dir_fd=parent_fd)
+            except OSError:
+                if metadata is not None:
+                    metadata_fd = os.open(
+                        QUARANTINE_METADATA,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                        0o600,
+                        dir_fd=quarantine_fd,
+                    )
+                    try:
+                        os.write(metadata_fd, metadata)
+                        os.fsync(metadata_fd)
+                    finally:
+                        os.close(metadata_fd)
+                    os.fsync(quarantine_fd)
+                raise
+        finally:
+            os.close(quarantine_fd)
 
     @contextmanager
     def _workspace_lock(self, workspace: Path):
