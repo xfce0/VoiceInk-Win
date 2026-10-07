@@ -170,10 +170,7 @@ class BackendApplication:
                     self._proxy.stop_accepting()
                 except BaseException as cleanup_error:
                     cleanup_errors.append(cleanup_error)
-                try:
-                    self._close_owned_application_service()
-                except BaseException as cleanup_error:
-                    cleanup_errors.append(cleanup_error)
+                cleanup_errors.extend(self._close_owned_application_services())
                 try:
                     self._proxy.close()
                 except BaseException as cleanup_error:
@@ -217,11 +214,18 @@ class BackendApplication:
             raise RuntimeUnavailableError("imported media is not configured")
         return self._imported_media
 
-    def _close_owned_application_service(self) -> None:
+    def _close_owned_application_services(self) -> list[BaseException]:
+        errors: list[BaseException] = []
         if self._imported_media is not None:
-            self._imported_media.close()
-        else:
+            try:
+                self._imported_media.close(close_asr=False)
+            except BaseException as error:
+                errors.append(error)
+        try:
             self._asr.close()
+        except BaseException as error:
+            errors.append(error)
+        return errors
 
     def close(self) -> None:
         with self._lifecycle_lock:
@@ -241,9 +245,7 @@ class BackendApplication:
             self._proxy.stop_accepting()
         except BaseException as error:
             failure = error
-        try:
-            self._close_owned_application_service()
-        except BaseException as error:
+        for error in self._close_owned_application_services():
             if failure is None:
                 failure = error
         try:
@@ -336,10 +338,10 @@ def build_application_from_configuration(
         cleanup_errors: list[BaseException] = []
         if imported_service is not None:
             try:
-                imported_service.close()
+                imported_service.close(close_asr=False)
             except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
-        elif asr is not None:
+        if asr is not None:
             try:
                 asr.close()
             except BaseException as cleanup_error:

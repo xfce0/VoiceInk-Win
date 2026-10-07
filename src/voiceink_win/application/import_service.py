@@ -293,7 +293,10 @@ class ImportedMediaTranscriptionService:
             self._interrupt_active_stage(record)
             self._await_stage_owner(record, now)
 
-    def close(self, timeout: float = 5.0) -> None:
+    def close(self, timeout: float = 5.0, *, close_asr: bool | None = None) -> None:
+        if close_asr is not None and not isinstance(close_asr, bool):
+            raise ValueError("close_asr must be boolean or None")
+        should_close_asr = close_asr is not False
         with self._lock:
             if self._state is _ServiceState.CLOSED:
                 return
@@ -411,16 +414,16 @@ class ImportedMediaTranscriptionService:
                 or any(thread.is_alive() for thread in retry_threads)
                 or any(thread.is_alive() for thread in stage_owner_threads)
             )
-            if threads_stopped:
+            if threads_stopped and should_close_asr:
                 try:
                     self._asr.close(deadline=close_deadline)
                 except BaseException as error:
                     if shutdown_error is None:
                         shutdown_error = error
-                if shutdown_error is None:
-                    with self._lock:
-                        self._state = _ServiceState.CLOSED
-                        self._shutdown_deadline = None
+            if threads_stopped and shutdown_error is None:
+                with self._lock:
+                    self._state = _ServiceState.CLOSED
+                    self._shutdown_deadline = None
         if shutdown_error is not None:
             raise shutdown_error
 

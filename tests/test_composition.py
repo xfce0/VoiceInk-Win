@@ -178,15 +178,18 @@ class _LifecycleFake:
 class _AsrLifecycleFake:
     def __init__(self, events: list[str]) -> None:
         self._events = events
+        self.close_calls = 0
 
     def close(self) -> None:
+        self.close_calls += 1
         self._events.append("asr.close")
 
 
 def test_application_stops_ingress_before_draining_asr() -> None:
     events: list[str] = []
+    asr = _AsrLifecycleFake(events)
     application = BackendApplication(
-        _AsrLifecycleFake(events),  # type: ignore[arg-type]
+        asr,  # type: ignore[arg-type]
         _LifecycleFake(events, "runtime"),  # type: ignore[arg-type]
         _LifecycleFake(events, "proxy"),  # type: ignore[arg-type]
     )
@@ -194,6 +197,7 @@ def test_application_stops_ingress_before_draining_asr() -> None:
     application.close()
 
     assert events == ["proxy.stop_accepting", "asr.close", "proxy.close"]
+    assert asr.close_calls == 1
 
 
 def test_application_rolls_back_workers_when_runtime_start_fails() -> None:
@@ -277,15 +281,17 @@ class _ImportedServiceFake:
         assert job_id == self.job_id
         return True
 
-    def close(self) -> None:
+    def close(self, *, close_asr: bool = True) -> None:
+        del close_asr
         self._events.append("imports.close")
 
 
 def test_imported_media_facade_exposes_only_typed_job_operations() -> None:
     events: list[str] = []
     imports = _ImportedServiceFake(events)
+    asr = _AsrLifecycleFake(events)
     application = BackendApplication(
-        _AsrLifecycleFake(events),  # type: ignore[arg-type]
+        asr,  # type: ignore[arg-type]
         _LifecycleFake(events, "runtime"),  # type: ignore[arg-type]
         _LifecycleFake(events, "proxy"),  # type: ignore[arg-type]
         imports,  # type: ignore[arg-type]
@@ -298,7 +304,86 @@ def test_imported_media_facade_exposes_only_typed_job_operations() -> None:
 
     application.close()
 
-    assert events == ["proxy.stop_accepting", "imports.close", "proxy.close"]
+    assert events == ["proxy.stop_accepting", "imports.close", "asr.close", "proxy.close"]
+    assert asr.close_calls == 1
+
+
+def test_application_rolls_back_imported_service_and_asr_on_startup_failure() -> None:
+    events: list[str] = []
+    imports = _ImportedServiceFake(events)
+    asr = _AsrLifecycleFake(events)
+    application = BackendApplication(
+        asr,  # type: ignore[arg-type]
+        _LifecycleFake(events, "runtime", start_error=RuntimeError("startup failed")),  # type: ignore[arg-type]
+        _LifecycleFake(events, "proxy"),  # type: ignore[arg-type]
+        imports,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="startup failed"):
+        application.start()
+
+    assert events == [
+        "proxy.start",
+        "runtime.start",
+        "proxy.stop_accepting",
+        "imports.close",
+        "asr.close",
+        "proxy.close",
+    ]
+    assert asr.close_calls == 1
+
+
+def test_composition_rollback_closes_imported_service_and_asr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_manifest, artifact_lock, lock_sha256 = _runtime_files(tmp_path)
+    events: list[str] = []
+    asr = _AsrLifecycleFake(events)
+    imports = _ImportedServiceFake(events)
+
+    class FakeProxy:
+        endpoint = "http://127.0.0.1:45678"
+
+        def __init__(self, target_endpoint, *, listen_endpoint=None) -> None:
+            del target_endpoint, listen_endpoint
+
+        def close(self) -> None:
+            events.append("proxy.close")
+
+    class FakeRuntime:
+        def __init__(self, *args) -> None:
+            del args
+
+    def fail_application(*args) -> None:
+        del args
+        raise RuntimeError("application construction failed")
+
+    monkeypatch.setattr(composition, "LoopbackProxy", FakeProxy)
+    monkeypatch.setattr(composition, "NeMoSidecarRuntime", FakeRuntime)
+    monkeypatch.setattr(composition, "AsrApplicationService", lambda runtime: asr)
+    monkeypatch.setattr(
+        composition,
+        "_build_imported_media_service",
+        lambda configuration, shared_asr: imports,
+    )
+    monkeypatch.setattr(composition, "BackendApplication", fail_application)
+
+    imported_configuration = ImportedMediaConfiguration(
+        tmp_path / "ffmpeg",
+        tmp_path / "ffmpeg.json",
+        tmp_path / "work",
+        (tmp_path,),
+    )
+    with pytest.raises(RuntimeError, match="application construction failed"):
+        build_application(
+            runtime_manifest,
+            artifact_lock,
+            lock_sha256,
+            imported_media=imported_configuration,
+        )
+
+    assert events == ["imports.close", "asr.close", "proxy.close"]
+    assert asr.close_calls == 1
 
 
 def test_composition_wires_one_asr_service_into_imported_media(
@@ -380,7 +465,8 @@ def test_composition_wires_one_asr_service_into_imported_media(
             captured["asr"] = asr
             captured["store"] = store
 
-        def close(self) -> None:
+        def close(self, *, close_asr: bool = True) -> None:
+            captured["imports_close_asr"] = close_asr
             captured["imports_close"] = True
 
     store = object()
@@ -403,4 +489,6 @@ def test_composition_wires_one_asr_service_into_imported_media(
     assert captured["asr"] is captured["asr_service"]
     assert captured["normalizer_artifact"] is not None
     assert captured["store"] is store
+    assert captured["imports_close_asr"] is False
     assert captured["imports_close"] is True
+    assert captured["asr_close"] == {}

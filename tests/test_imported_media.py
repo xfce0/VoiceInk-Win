@@ -165,6 +165,27 @@ def test_import_service_passes_absolute_close_deadline_to_asr(tmp_path: Path) ->
     assert asr.deadline == 57.0
 
 
+def test_import_service_can_leave_shared_asr_close_to_composition(tmp_path: Path) -> None:
+    class RecordingAsr:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self, *, deadline=None) -> None:
+            del deadline
+            self.close_calls += 1
+
+    asr = RecordingAsr()
+    application = ImportedMediaTranscriptionService(
+        FakeMediaNormalizer(),
+        asr,
+        FakeSnapshotStore(tmp_path / "work"),
+    )
+
+    application.close(close_asr=False)
+
+    assert asr.close_calls == 0
+
+
 def test_close_keeps_store_worker_owned_until_it_finishes(tmp_path: Path) -> None:
     close_started = Event()
     release_close = Event()
