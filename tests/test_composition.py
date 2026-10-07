@@ -29,6 +29,7 @@ from voiceink_win.domain import (
     Success,
     TranscriptResult,
 )
+from voiceink_win.infrastructure import FfmpegArtifactManifest
 
 
 def _runtime_files(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -158,10 +159,12 @@ class _LifecycleFake:
         label: str,
         *,
         start_error: Exception | None = None,
+        close_error: Exception | None = None,
     ) -> None:
         self._events = events
         self._label = label
         self._start_error = start_error
+        self._close_error = close_error
 
     def start(self) -> None:
         self._events.append(f"{self._label}.start")
@@ -173,6 +176,8 @@ class _LifecycleFake:
 
     def close(self) -> None:
         self._events.append(f"{self._label}.close")
+        if self._close_error is not None:
+            raise self._close_error
 
 
 class _AsrLifecycleFake:
@@ -223,13 +228,26 @@ def test_application_rolls_back_workers_when_runtime_start_fails() -> None:
 def test_imported_media_configuration_is_disabled_or_rejected_explicitly() -> None:
     assert ImportedMediaConfiguration.from_environment({}) is None
 
-    with pytest.raises(ConfigurationError, match="VOICEINK_IMPORT_ROOTS"):
+    with pytest.raises(ConfigurationError, match="trusted FFmpeg artifact metadata"):
         ImportedMediaConfiguration.from_environment(
             {
                 "VOICEINK_FFMPEG_PATH": "/opt/ffmpeg",
-                "VOICEINK_FFMPEG_MANIFEST": "/opt/ffmpeg.json",
                 "VOICEINK_IMPORT_WORKSPACE_ROOT": "/tmp/work",
             }
+        )
+
+    with pytest.raises(ConfigurationError, match="metadata path does not match"):
+        ImportedMediaConfiguration(
+            Path("/opt/ffmpeg"),
+            FfmpegArtifactManifest(
+                "ffmpeg-test",
+                "https://example.invalid/ffmpeg",
+                "0" * 64,
+                "GPL-3.0-or-later",
+                Path("/opt/other-ffmpeg"),
+            ),
+            Path("/tmp/work"),
+            (Path("/tmp/imports"),),
         )
 
 
@@ -255,6 +273,7 @@ class _ImportedServiceFake:
         self._events = events
         self.submitted: tuple[str, object] | None = None
         self.job_id = JobId("import-job")
+        self.close_errors: list[BaseException] = []
         self.result = Success(
             "succeeded",
             self.job_id,
@@ -284,6 +303,63 @@ class _ImportedServiceFake:
     def close(self, *, close_asr: bool = True) -> None:
         del close_asr
         self._events.append("imports.close")
+        if self.close_errors:
+            raise self.close_errors.pop(0)
+
+
+def test_application_retries_import_close_before_closing_shared_asr() -> None:
+    events: list[str] = []
+    imports = _ImportedServiceFake(events)
+    imports.close_errors.append(RuntimeError("import shutdown failed"))
+    asr = _AsrLifecycleFake(events)
+    application = BackendApplication(
+        asr,  # type: ignore[arg-type]
+        _LifecycleFake(events, "runtime"),  # type: ignore[arg-type]
+        _LifecycleFake(events, "proxy"),  # type: ignore[arg-type]
+        imports,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="import shutdown failed"):
+        application.close()
+
+    assert asr.close_calls == 0
+    assert events == ["proxy.stop_accepting", "imports.close", "proxy.close"]
+
+    application.close()
+
+    assert asr.close_calls == 1
+    assert events == [
+        "proxy.stop_accepting",
+        "imports.close",
+        "proxy.close",
+        "proxy.stop_accepting",
+        "imports.close",
+        "asr.close",
+    ]
+
+
+def test_application_does_not_retry_successful_asr_close_after_proxy_failure() -> None:
+    events: list[str] = []
+    asr = _AsrLifecycleFake(events)
+    application = BackendApplication(
+        asr,  # type: ignore[arg-type]
+        _LifecycleFake(events, "runtime"),  # type: ignore[arg-type]
+        _LifecycleFake(events, "proxy", close_error=RuntimeError("proxy close failed")),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="proxy close failed"):
+        application.close()
+    with pytest.raises(RuntimeError, match="proxy close failed"):
+        application.close()
+
+    assert asr.close_calls == 1
+    assert events == [
+        "proxy.stop_accepting",
+        "asr.close",
+        "proxy.close",
+        "proxy.stop_accepting",
+        "proxy.close",
+    ]
 
 
 def test_imported_media_facade_exposes_only_typed_job_operations() -> None:
@@ -370,7 +446,13 @@ def test_composition_rollback_closes_imported_service_and_asr(
 
     imported_configuration = ImportedMediaConfiguration(
         tmp_path / "ffmpeg",
-        tmp_path / "ffmpeg.json",
+        FfmpegArtifactManifest(
+            "ffmpeg-test",
+            "https://example.invalid/ffmpeg",
+            hashlib.sha256(b"ffmpeg").hexdigest(),
+            "GPL-3.0-or-later",
+            tmp_path / "ffmpeg",
+        ),
         tmp_path / "work",
         (tmp_path,),
     )
@@ -392,23 +474,18 @@ def test_composition_wires_one_asr_service_into_imported_media(
     runtime_manifest, artifact_lock, lock_sha256 = _runtime_files(tmp_path)
     ffmpeg = tmp_path / "ffmpeg"
     ffmpeg.write_bytes(b"ffmpeg")
-    ffmpeg_manifest = tmp_path / "ffmpeg.json"
-    ffmpeg_manifest.write_text(
-        json.dumps(
-            {
-                "version": "ffmpeg-test",
-                "provenance_url": "https://example.invalid/ffmpeg",
-                "sha256": hashlib.sha256(b"ffmpeg").hexdigest(),
-                "license": "GPL-3.0-or-later",
-            }
-        ),
-        encoding="ascii",
+    ffmpeg_artifact = FfmpegArtifactManifest(
+        "ffmpeg-test",
+        "https://example.invalid/ffmpeg",
+        hashlib.sha256(b"ffmpeg").hexdigest(),
+        "GPL-3.0-or-later",
+        ffmpeg,
     )
     import_root = tmp_path / "inputs"
     import_root.mkdir()
     configuration = ImportedMediaConfiguration(
         ffmpeg,
-        ffmpeg_manifest,
+        ffmpeg_artifact,
         tmp_path / "work",
         (import_root,),
     )
@@ -488,6 +565,7 @@ def test_composition_wires_one_asr_service_into_imported_media(
 
     assert captured["asr"] is captured["asr_service"]
     assert captured["normalizer_artifact"] is not None
+    assert captured["artifact"][1] is ffmpeg_artifact  # type: ignore[index]
     assert captured["store"] is store
     assert captured["imports_close_asr"] is False
     assert captured["imports_close"] is True

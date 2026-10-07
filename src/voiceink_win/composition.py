@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import socket
 from dataclasses import dataclass, field
@@ -84,20 +83,23 @@ class ImportedMediaConfiguration:
     """Explicit production configuration for the imported-media pipeline."""
 
     ffmpeg_path: Path
-    ffmpeg_manifest: Path
+    ffmpeg_artifact: FfmpegArtifactManifest
     workspace_root: Path
     import_roots: tuple[Path, ...]
 
     def __post_init__(self) -> None:
-        paths = (self.ffmpeg_path, self.ffmpeg_manifest, self.workspace_root)
+        paths = (self.ffmpeg_path, self.workspace_root)
         if not all(Path(path).is_absolute() for path in paths):
             raise ConfigurationError("imported-media paths must be absolute")
         if not self.import_roots or not all(Path(path).is_absolute() for path in self.import_roots):
             raise ConfigurationError("imported-media import roots must be absolute and non-empty")
+        if not isinstance(self.ffmpeg_artifact, FfmpegArtifactManifest):
+            raise ConfigurationError("imported-media FFmpeg artifact metadata is not trusted")
         object.__setattr__(self, "ffmpeg_path", Path(self.ffmpeg_path))
-        object.__setattr__(self, "ffmpeg_manifest", Path(self.ffmpeg_manifest))
         object.__setattr__(self, "workspace_root", Path(self.workspace_root))
         object.__setattr__(self, "import_roots", tuple(Path(path) for path in self.import_roots))
+        if Path(self.ffmpeg_artifact.allowed_path) != self.ffmpeg_path:
+            raise ConfigurationError("FFmpeg artifact metadata path does not match executable")
 
     @classmethod
     def from_environment(
@@ -106,21 +108,13 @@ class ImportedMediaConfiguration:
         values = environ if environ is not None else os.environ
         names = (
             "VOICEINK_FFMPEG_PATH",
-            "VOICEINK_FFMPEG_MANIFEST",
             "VOICEINK_IMPORT_WORKSPACE_ROOT",
             "VOICEINK_IMPORT_ROOTS",
         )
         if not any(values.get(name, "").strip() for name in names):
             return None
-        missing = [name for name in names if not values.get(name, "").strip()]
-        if missing:
-            raise ConfigurationError("imported-media configuration requires: " + ", ".join(missing))
-        roots = tuple(Path(value) for value in values["VOICEINK_IMPORT_ROOTS"].split(os.pathsep))
-        return cls(
-            ffmpeg_path=Path(values["VOICEINK_FFMPEG_PATH"]),
-            ffmpeg_manifest=Path(values["VOICEINK_FFMPEG_MANIFEST"]),
-            workspace_root=Path(values["VOICEINK_IMPORT_WORKSPACE_ROOT"]),
-            import_roots=roots,
+        raise ConfigurationError(
+            "imported-media environment wiring requires trusted FFmpeg artifact metadata"
         )
 
 
@@ -150,6 +144,9 @@ class BackendApplication:
     _closed: bool = False
     _closing: bool = False
     _failed: bool = False
+    _imported_media_closed: bool = False
+    _asr_closed: bool = False
+    _proxy_closed: bool = False
     _close_done: Event = field(default_factory=Event, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -171,10 +168,13 @@ class BackendApplication:
                 except BaseException as cleanup_error:
                     cleanup_errors.append(cleanup_error)
                 cleanup_errors.extend(self._close_owned_application_services())
-                try:
-                    self._proxy.close()
-                except BaseException as cleanup_error:
-                    cleanup_errors.append(cleanup_error)
+                if not self._proxy_closed:
+                    try:
+                        self._proxy.close()
+                    except BaseException as cleanup_error:
+                        cleanup_errors.append(cleanup_error)
+                    else:
+                        self._proxy_closed = True
                 self._closed = not cleanup_errors
                 self._failed = bool(cleanup_errors)
                 if cleanup_errors:
@@ -216,15 +216,20 @@ class BackendApplication:
 
     def _close_owned_application_services(self) -> list[BaseException]:
         errors: list[BaseException] = []
-        if self._imported_media is not None:
+        if self._imported_media is not None and not self._imported_media_closed:
             try:
                 self._imported_media.close(close_asr=False)
             except BaseException as error:
                 errors.append(error)
-        try:
-            self._asr.close()
-        except BaseException as error:
-            errors.append(error)
+                return errors
+            self._imported_media_closed = True
+        if not self._asr_closed:
+            try:
+                self._asr.close()
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self._asr_closed = True
         return errors
 
     def close(self) -> None:
@@ -248,11 +253,14 @@ class BackendApplication:
         for error in self._close_owned_application_services():
             if failure is None:
                 failure = error
-        try:
-            self._proxy.close()
-        except BaseException as error:
-            if failure is None:
-                failure = error
+        if not self._proxy_closed:
+            try:
+                self._proxy.close()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+            else:
+                self._proxy_closed = True
         if failure is not None:
             with self._lifecycle_lock:
                 self._closing = False
@@ -362,26 +370,9 @@ def _build_imported_media_service(
     asr: AsrApplicationService,
 ) -> ImportedMediaTranscriptionService:
     try:
-        manifest_data = json.loads(configuration.ffmpeg_manifest.read_text(encoding="utf-8"))
-        if not isinstance(manifest_data, dict):
-            raise TypeError("FFmpeg artifact manifest must be a JSON object")
-        values = {
-            name: manifest_data.get(name)
-            for name in ("version", "provenance_url", "sha256", "license")
-        }
-        if not all(isinstance(value, str) for value in values.values()):
-            raise TypeError("FFmpeg artifact manifest fields must be strings")
-        manifest = FfmpegArtifactManifest(
-            version=values["version"],
-            provenance_url=values["provenance_url"],
-            sha256=values["sha256"],
-            license=values["license"],
-            allowed_path=configuration.ffmpeg_path,
+        artifact = VerifiedFfmpegArtifact.verify(
+            configuration.ffmpeg_path, configuration.ffmpeg_artifact
         )
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise ConfigurationError("FFmpeg artifact manifest is invalid", cause=error) from error
-    try:
-        artifact = VerifiedFfmpegArtifact.verify(configuration.ffmpeg_path, manifest)
         normalizer = SubprocessMediaNormalizer(executable=artifact)
         store = create_media_snapshot_store(
             configuration.workspace_root,
