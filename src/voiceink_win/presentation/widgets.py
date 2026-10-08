@@ -10,10 +10,11 @@ from PySide6.QtWidgets import QWidget
 class WaveformWidget(QWidget):
     """A restrained 15-bar waveform matching the compact macOS recorder panel."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, color: str = "#f5f5f5") -> None:
         super().__init__(parent)
         self._active = False
         self._frame = 0
+        self._color = QColor(color)
         self._timer = QTimer(self)
         self._timer.setInterval(90)
         self._timer.timeout.connect(self._advance)
@@ -32,6 +33,13 @@ class WaveformWidget(QWidget):
             self._timer.stop()
         self.update()
 
+    def set_color(self, color: str) -> None:
+        next_color = QColor(color)
+        if not next_color.isValid():
+            raise ValueError(f"Invalid waveform color: {color}")
+        self._color = next_color
+        self.update()
+
     def _advance(self) -> None:
         self._frame += 1
         self.update()
@@ -40,7 +48,7 @@ class WaveformWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#f5f5f5"))
+        painter.setBrush(self._color)
 
         bar_count = 15
         bar_width = 3

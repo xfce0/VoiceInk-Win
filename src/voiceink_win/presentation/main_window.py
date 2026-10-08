@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -20,165 +21,21 @@ from PySide6.QtWidgets import (
 from voiceink_win.application import ShellController
 from voiceink_win.domain import ShellSnapshot, ShellState
 
+from .icon_registry import SIDEBAR_ITEMS
+from .qt_icons import sidebar_icon
+from .theme import ThemeMode, ThemeTokens, stylesheet_for, theme_for
 from .widgets import WaveformWidget
-
-SHELL_STYLE = """
-QMainWindow, QWidget#root, QScrollArea {
-    background: #f4f4f6;
-    color: #202024;
-}
-QFrame#sidebar {
-    background: #e9e9ee;
-    border-right: 1px solid #d5d5dc;
-}
-QLabel#brand {
-    color: #202024;
-    font-size: 20px;
-    font-weight: 700;
-}
-QLabel#brandCaption, QLabel#muted, QLabel#heroSubtext, QLabel#metadata {
-    color: #6d6d77;
-}
-QPushButton#navButton {
-    border: 1px solid transparent;
-    border-radius: 10px;
-    color: #3c3c44;
-    text-align: left;
-    padding: 0 12px;
-    font-size: 13px;
-    font-weight: 500;
-}
-QPushButton#navButton:hover {
-    background: #dedee5;
-}
-QPushButton#navButton:checked {
-    background: #c85a1b;
-    color: white;
-    font-weight: 700;
-}
-QPushButton#navButton:disabled {
-    color: #9797a1;
-}
-QFrame#card {
-    background: #ffffff;
-    border: 1px solid #dfdfe5;
-    border-radius: 16px;
-}
-QFrame#heroCard {
-    background: #f1bd84;
-    border: 1px solid #e4aa70;
-    border-radius: 16px;
-}
-QLabel#heroHeadline {
-    color: #211a15;
-    font-family: "Arial Rounded MT Bold", "Segoe UI";
-    font-size: 23px;
-    font-weight: 700;
-}
-QLabel#heroAccent {
-    color: #b94e12;
-    font-family: "Arial Rounded MT Bold", "Segoe UI";
-    font-size: 30px;
-    font-weight: 900;
-}
-QPushButton#primaryButton {
-    background: #bf4d10;
-    border: none;
-    border-radius: 10px;
-    color: white;
-    font-size: 13px;
-    font-weight: 700;
-    padding: 10px 18px;
-}
-QPushButton#primaryButton:hover {
-    background: #a9430c;
-}
-QPushButton#secondaryButton {
-    background: #fff7ef;
-    border: 1px solid #dc9c64;
-    border-radius: 10px;
-    color: #594331;
-    font-size: 13px;
-    font-weight: 600;
-    padding: 10px 18px;
-}
-QLabel#sectionTitle {
-    color: #202024;
-    font-size: 18px;
-    font-weight: 700;
-}
-QLabel#statePill {
-    background: #e8e8ed;
-    border-radius: 10px;
-    color: #666672;
-    padding: 5px 10px;
-    font-size: 11px;
-    font-weight: 700;
-}
-QLabel#statePill[role="recording"] {
-    background: #f9dfdf;
-    color: #b52e32;
-}
-QLabel#statePill[role="processing"] {
-    background: #eee6fc;
-    color: #7044aa;
-}
-QLabel#statePill[role="error"] {
-    background: #f9dfdf;
-    color: #b52e32;
-}
-QFrame#transcriptCard {
-    background: #ffffff;
-    border: 1px solid #dfdfe5;
-    border-radius: 12px;
-}
-QFrame#emptyCard {
-    background: #eeeeF2;
-    border: 1px dashed #cfcfd8;
-    border-radius: 12px;
-}
-QLabel#transcriptText {
-    color: #2b2b31;
-    font-size: 13px;
-}
-QFrame#recorder {
-    background: #111113;
-    border: 1px solid #343439;
-    border-radius: 14px;
-}
-QLabel#recorderStatus, QLabel#recorderHint {
-    color: #f3f3f4;
-}
-QLabel#recorderHint {
-    color: #94949e;
-    font-size: 11px;
-}
-QPushButton#recordButton, QPushButton#closeButton {
-    background: #36363b;
-    border: 1px solid #4b4b52;
-    border-radius: 17px;
-    color: #f5f5f5;
-    font-size: 12px;
-    font-weight: 700;
-    padding: 8px 13px;
-}
-QPushButton#recordButton:hover, QPushButton#closeButton:hover {
-    background: #4b4b52;
-}
-QPushButton#recordButton[recording="true"] {
-    background: #c7373b;
-    border-color: #e16063;
-}
-QPushButton#recordButton:disabled {
-    color: #85858e;
-}
-"""
 
 
 class FloatingRecorderWindow(QFrame):
     """Cross-platform floating panel; OS tray/activation policies stay outside this class."""
 
-    def __init__(self, controller: ShellController, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        controller: ShellController,
+        parent: QWidget | None = None,
+        theme: ThemeTokens | None = None,
+    ) -> None:
         super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self._controller = controller
         self._unsubscribe = controller.subscribe(self._render)
@@ -187,10 +44,10 @@ class FloatingRecorderWindow(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self._timer: QTimer | None = None
         self._disposed = False
-        self._build_ui()
+        self._build_ui(theme or theme_for(ThemeMode.LIGHT))
         self._render(controller.snapshot)
 
-    def _build_ui(self) -> None:
+    def _build_ui(self, theme: ThemeTokens) -> None:
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 12, 12, 12)
         row.setSpacing(10)
@@ -207,15 +64,21 @@ class FloatingRecorderWindow(QFrame):
         self._status.setObjectName("recorderStatus")
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         center.addWidget(self._status)
-        self._waveform = WaveformWidget(self)
+        self._waveform = WaveformWidget(self, color=theme.waveform)
         center.addWidget(self._waveform)
         row.addLayout(center, 1)
 
         self._close_button = QPushButton("X", self)
         self._close_button.setObjectName("closeButton")
         self._close_button.setFixedSize(28, 28)
+        self._close_button.setToolTip("Close recorder")
+        self._close_button.setAccessibleName("Close recorder")
+        self._close_button.setAccessibleDescription("Close the floating recorder")
         self._close_button.clicked.connect(self.dismiss)
         row.addWidget(self._close_button, 0, Qt.AlignmentFlag.AlignTop)
+
+    def apply_theme(self, theme: ThemeTokens) -> None:
+        self._waveform.set_color(theme.waveform)
 
     def _toggle_recording(self) -> None:
         state = self._controller.snapshot.state
@@ -284,15 +147,16 @@ class FloatingRecorderWindow(QFrame):
 class MainWindow(QMainWindow):
     """Main VoiceInk shell with a dashboard-first information hierarchy."""
 
-    def __init__(self, controller: ShellController) -> None:
+    def __init__(self, controller: ShellController, theme: ThemeTokens | None = None) -> None:
         super().__init__()
+        self._theme = theme or theme_for(ThemeMode.LIGHT)
         self._controller = controller
         self._unsubscribe = controller.subscribe(self._render)
-        self._recorder = FloatingRecorderWindow(controller, self)
+        self._recorder = FloatingRecorderWindow(controller, self, self._theme)
         self.setWindowTitle("VoiceInk")
         self.setMinimumSize(860, 600)
         self.resize(950, 750)
-        self.setStyleSheet(SHELL_STYLE)
+        self.setStyleSheet(stylesheet_for(self._theme))
         self._build_ui()
         self._render(controller.snapshot)
 
@@ -309,57 +173,57 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame(self)
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(68)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(14, 18, 14, 14)
-        layout.setSpacing(3)
+        layout.setContentsMargins(12, 18, 12, 14)
+        layout.setSpacing(4)
 
-        brand = QLabel("VoiceInk", sidebar)
-        brand.setObjectName("brand")
-        layout.addWidget(brand)
-        caption = QLabel("Local voice to text", sidebar)
-        caption.setObjectName("brandCaption")
-        layout.addWidget(caption)
-        layout.addSpacing(18)
-
-        primary = [
-            "Dashboard",
-            "Modes",
-            "Transcribe",
-            "History",
-            "Dictionary",
-            "AI Models",
-            "Audio",
-        ]
-        secondary = ["Settings", "VoiceInk Pro"]
-        for index, label in enumerate(primary + secondary):
-            button = QPushButton(label, sidebar)
+        for index, item in enumerate(SIDEBAR_ITEMS):
+            item_container = QWidget(sidebar)
+            item_container.setObjectName("navItem")
+            item_container.setFixedSize(44, 44)
+            item_container.setToolTip(item.label)
+            item_container.setAccessibleName(item.label)
+            item_container.setAccessibleDescription(f"{item.label} navigation destination")
+            item_layout = QHBoxLayout(item_container)
+            item_layout.setContentsMargins(0, 0, 0, 0)
+            button = QPushButton(item_container)
             button.setObjectName("navButton")
             button.setCheckable(True)
-            button.setFixedHeight(38)
-            button.setEnabled(label == "Dashboard")
-            if label == "Dashboard":
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            button.setIcon(sidebar_icon(item))
+            button.setIconSize(QSize(28, 28))
+            button.setToolTip(item.label)
+            button.setAccessibleName(item.label)
+            button.setAccessibleDescription(f"{item.label} navigation destination")
+            button.setStatusTip(item.label)
+            button.setEnabled(item.enabled)
+            if item.label == "Dashboard":
                 button.setChecked(True)
-            layout.addWidget(button)
-            if index == len(primary) - 1:
+            item_layout.addWidget(button)
+            layout.addWidget(item_container)
+            if index == 6:
                 layout.addStretch(1)
-
-        footer = QLabel("Offline-first\nASR runtime: demo adapter", sidebar)
-        footer.setObjectName("brandCaption")
-        footer.setWordWrap(True)
-        layout.addWidget(footer)
         return sidebar
+
+    def apply_theme(self, theme: ThemeTokens) -> None:
+        self._theme = theme
+        self.setStyleSheet(stylesheet_for(theme))
+        self._recorder.apply_theme(theme)
 
     def _build_dashboard(self) -> QScrollArea:
         scroll = QScrollArea(self)
+        scroll.setObjectName("dashboardScroll")
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidgetResizable(True)
         content = QWidget(scroll)
+        content.setObjectName("dashboardContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(24, 28, 24, 28)
         content_layout.setSpacing(22)
 
         greeting = QLabel(self._greeting(), content)
+        greeting.setObjectName("pageGreeting")
         greeting.setFont(QFont("Arial Rounded MT Bold", 28, QFont.Weight.Bold))
         content_layout.addWidget(greeting)
         subtext = QLabel("Record a thought, then let VoiceInk turn it into clear text.", content)
@@ -389,7 +253,7 @@ class MainWindow(QMainWindow):
         self._hero_headline.setWordWrap(True)
         layout.addWidget(self._hero_headline)
         self._hero_detail = QLabel("Your first milestone appears after one session.", hero)
-        self._hero_detail.setObjectName("heroSubtext")
+        self._hero_detail.setObjectName("heroDetail")
         self._hero_detail.setWordWrap(True)
         layout.addWidget(self._hero_detail)
         actions = QHBoxLayout()

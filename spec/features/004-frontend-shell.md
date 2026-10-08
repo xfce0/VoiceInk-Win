@@ -23,8 +23,10 @@ Windows-specific APIs.
 
 ## Product Intent
 
-- The main window keeps the macOS reference's 220 px navigation rail, quiet
-  system surfaces, warm orange progress card, and compact transcript rows.
+- The main window keeps the macOS reference's quiet system surfaces, warm orange
+  progress card, and compact transcript rows. Its navigation is a 68 px
+  icon-only rail with repository-owned Lucide-style tiles; original destination
+  names remain available through tooltips and accessibility labels.
 - Recording is represented by a black, compact floating panel with a record
   button, waveform, and processing indicator.
 - Idle, recording, processing, transcript-ready, empty, and error states are
@@ -66,6 +68,13 @@ Presentation -> Application -> Domain <- Infrastructure
   concrete ASR infrastructure.
 - The shell must keep user-visible failure state explicit and avoid logging or
   displaying raw audio data.
+- The shell follows the operating system light/dark color scheme at launch and
+  applies semantic tokens to the window, rail, viewport, cards, controls, and
+  waveform. If Qt reports an unknown scheme, the effective window palette is
+  used as a fallback.
+- Sidebar destinations use repository-owned SVG-backed QIcons, retain their
+  original names through tooltips/accessibility labels, and remain disabled
+  until their destination behavior exists.
 
 ## Error and Cancellation Behavior
 
@@ -89,6 +98,8 @@ become empty successful transcripts.
 - Unit tests cover initial state, valid transitions, empty results, typed
   runtime failures, invalid actions, and listener removal.
 - Existing repository tests remain the regression suite for backend contracts.
+- Non-GUI tests cover light/dark token selection, stylesheet surface coverage,
+  system-scheme fallback parsing, and sidebar registry invariants.
 - The Windows packaging workflow validates the frozen x64 PE and launches the
   shell through its real entrypoint with Qt's offscreen platform plugin.
 - Interactive GUI validation remains a Windows user acceptance step.
