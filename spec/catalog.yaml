@@ -63,3 +63,19 @@ documents:
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed
+  - path: spec/features/006-desktop-pages-transcribe.md
+    kind: feature
+    status: proposed
+    source_rfc: rfcs/desktop-pages-transcribe.md
+    implementation_allowed: false
+    blocked_by:
+      - desktop_composition_lifecycle
+      - history_schema_and_retention
+      - windows_file_picker_policy
+      - parakeet_runtime_approval
+  - path: rfcs/desktop-pages-transcribe.md
+    kind: rfc
+    status: proposed
+    feature_spec: spec/features/006-desktop-pages-transcribe.md
+    implementation_allowed: false
+    microphone_scope: deferred_to_later_rfc
