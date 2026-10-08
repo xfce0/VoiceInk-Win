@@ -20,6 +20,9 @@ def main(*, smoke: bool = False) -> int:
 
     application = QApplication(sys.argv)
     application.setApplicationName("VoiceInk")
+    from .theme import detect_system_theme, theme_for
+
+    theme = theme_for(detect_system_theme(application))
     application.setStyle("Fusion")
     for family in ("Segoe UI", "SF Pro Text", "Arial"):
         if QFontDatabase.hasFamily(family):
@@ -29,7 +32,12 @@ def main(*, smoke: bool = False) -> int:
     from .main_window import MainWindow
 
     controller = ShellController(FakeShellBackend())
-    window = MainWindow(controller)
+    window = MainWindow(controller, theme=theme)
+    color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
+    if color_scheme_changed is not None:
+        color_scheme_changed.connect(
+            lambda *_: window.apply_theme(theme_for(detect_system_theme(application)))
+        )
     window.show()
     if smoke:
         QTimer.singleShot(100, application.quit)
