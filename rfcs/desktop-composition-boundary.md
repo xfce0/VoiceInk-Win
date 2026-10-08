@@ -25,7 +25,7 @@ The smallest safe correction is:
    external resources;
 3. make the entrypoint own that composition for the event-loop lifetime; and
 4. keep `FakeShellBackend` out of production composition while retaining it for
-   focused tests and an explicitly named developer demo.
+   focused tests; an optional developer demo remains outside this RFC.
 
 The boundary must be useful without pretending that recording exists. It must
 not create a microphone, timer, process, sidecar, model, network endpoint, or
@@ -153,21 +153,22 @@ composition seam in this RFC.
 
 ### Production and demo fake policy
 
-`FakeShellBackend` has two permitted uses:
+`FakeShellBackend` has one permitted use in this RFC:
 
-1. focused controller/application tests; and
-2. a separately named developer demo harness whose output is explicitly marked
-   as a demo.
+1. focused controller/application tests.
 
 It has no permitted use in `build_desktop_composition()`, the installed
-user-facing shell, or any production fallback path. Production code must not
-import it transitively. An environment variable, CLI switch, missing-runtime
-handler, or broad exception handler must not select it.
+user-facing shell, any production module, or any production fallback path. The
+implementation must keep the fixture outside the production infrastructure
+package and must not export it from the infrastructure barrel. An environment
+variable, CLI switch, missing-runtime handler, or broad exception handler must
+not select it.
 
-The demo harness must inject the fake directly and must not call the production
-builder with an override. Naming and packaging of that harness are deferred to
-the demo/artifact RFC; this RFC does not turn the current production entrypoint
-into a demo.
+If a later development-only demo is desired, a separately named harness may
+import the test fixture directly from development support and must be clearly
+marked as a demo. It must not call the production builder with an override, be
+an installed user-facing entrypoint, or be used as production evidence. This
+RFC does not require that harness.
 
 ### Unavailable presentation contract
 
@@ -211,17 +212,19 @@ The `try` begins immediately after `build_desktop_composition()` succeeds.
 Therefore:
 
 - a composition-build exception has no composition to close and propagates;
-- a window-construction, `show()`, or event-loop exception calls `close()` and
-  re-raises the original exception unchanged;
+- a window-construction, `show()`, or event-loop exception calls the
+  composition's `close()` and re-raises the original exception unchanged;
 - a normal Qt return preserves its integer exit code after `close()` runs;
 - the no-resource `close()` has no failure result and does not translate an
   exit code, aggregate exceptions, or log raw exception text; and
 - there is no exception handler that substitutes a fake backend.
 
-The window's existing presentation cleanup remains a presentation concern. A
-future shutdown-reliability RFC may define how window and composition cleanup
-failures are combined once the composition owns real resources. That policy is
-intentionally not part of this API.
+This guarantee covers the composition only. The window's existing presentation
+cleanup remains a presentation concern; this RFC does not promise transactional
+window disposal or define what happens if a future window cleanup operation
+fails. A future shutdown-reliability RFC may define how window and composition
+cleanup failures are combined once the composition owns real resources. That
+policy is intentionally not part of this API.
 
 ### Resource prohibition
 
@@ -266,7 +269,8 @@ implementation change; this RFC adds no tests or production code.
   action, inactive waveform, no active timer, empty snapshot fields, and
   absence of synthetic transcript/success copy.
 - Assert that the production entrypoint contains no fake construction and that
-  a demo fake can only be reached from a separately named test/demo harness.
+  any optional demo fake is only reached from a separately named,
+  development-only harness.
 
 ### Explicitly excluded tests
 

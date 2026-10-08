@@ -68,13 +68,14 @@ Replace `RUN_ID` with the workflow run ID, or download the artifact ZIP from
 the Actions page and extract it with `Expand-Archive`. The artifact includes
 the same command in its `README.txt`.
 
-The desktop composition RFC narrows the user-facing shell to a no-resource
-unavailable state: microphone capture and real ASR are not included, and
-production startup must not construct a fake backend or show synthetic text.
-A deterministic fake backend is reserved for focused tests and a separately
-named developer demo; it is not a production fallback. Global hotkeys, system
-tray, history persistence, and imported-media actions are also not wired into
-the desktop shell.
+The current shell artifact still reflects the earlier deterministic fake-backed
+demo until the draft desktop composition RFC is approved and implemented. The
+target user-facing shell is a no-resource unavailable state: microphone capture
+and real ASR are not included, and production startup must not construct a fake
+backend or show synthetic text. The fake is reserved for focused tests and a
+separately named, development-only demo if one is provided; it is never a
+production fallback. Global hotkeys, system tray, history persistence, and
+imported-media actions are also not wired into the desktop shell.
 
 ## Windows Diagnostic Build
 

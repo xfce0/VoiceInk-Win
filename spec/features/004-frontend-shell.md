@@ -11,7 +11,8 @@ ports the macOS VoiceInk visual hierarchy into a Windows-friendly desktop shell
 without copying SwiftUI or AppKit implementation details. The slice includes a
 dashboard, a small floating recorder panel, and an application-owned state
 controller. Production startup is a no-resource unavailable shell; injected
-backends are test/demo seams only.
+backends are test seams, while any optional demo is a separate development-only
+path.
 
 It excludes microphone capture, global hotkeys, imported-media selection,
 history persistence, real ASR runtime wiring, system tray integration, and
@@ -23,8 +24,8 @@ Windows-specific APIs.
   with an explanation that microphone capture and ASR are not included.
 - A user opens the recorder explanation panel and sees a disabled recording
   action, inactive waveform, and no synthetic transcript.
-- Developers can run a separately named fake-backed demo or focused tests; that
-  path is not the production composition.
+- Focused tests may use an injected fake backend; a separately named,
+  development-only demo is optional and is not the production composition.
 
 ## Product Intent
 
@@ -51,8 +52,10 @@ Presentation -> Application -> Domain <- Infrastructure
 - Domain owns `ShellState` and immutable `ShellSnapshot` values.
 - Application owns `ShellController` and the `ShellTranscriptionBackend`
   protocol. The controller never imports Qt, subprocess, HTTP, or Windows APIs.
-- `FakeShellBackend` is test-only and may be used by a separately named
-  developer demo; production composition must not import or construct it.
+- `FakeShellBackend` is a test fixture and is not exported by the production
+  infrastructure package. An optional separately named development-only demo
+  may use that fixture directly; production composition must not import,
+  construct, package, or select it.
 - The desktop composition owns the controller and exposes only the no-resource
   lifecycle API defined by `rfcs/desktop-composition-boundary.md`.
 - Presentation owns the optional PySide6 window and maps snapshots to widgets.
