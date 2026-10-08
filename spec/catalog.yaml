@@ -31,3 +31,6 @@ documents:
   - path: rfcs/parakeet-runtime-integration.md
     kind: rfc
     status: proposed
+  - path: rfcs/native-windows-runtime-startup.md
+    kind: rfc
+    status: proposed
