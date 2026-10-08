@@ -67,7 +67,7 @@ def _print_json(payload: dict[str, object]) -> None:
 
 
 def _exit_code(error: BaseException) -> int:
-    if isinstance(error, (ConfigurationError, MissingModelError)):
+    if isinstance(error, ConfigurationError | MissingModelError):
         return 2
     return 3
 

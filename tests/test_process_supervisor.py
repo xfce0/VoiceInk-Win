@@ -183,9 +183,7 @@ def test_supervisor_rechecks_artifact_identity_immediately_before_popen(tmp_path
         SubprocessSupervisor(config, verifier=ChangingVerifier()).start()
 
 
-def test_windows_supervisor_revalidates_locked_artifacts_before_popen(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_windows_supervisor_uses_canonical_launch_order(tmp_path: Path, monkeypatch) -> None:
     executable = tmp_path / "sidecar"
     model = tmp_path / "model.gguf"
     executable_hash = write_artifact(executable, b"executable")
@@ -254,7 +252,7 @@ def test_windows_supervisor_revalidates_locked_artifacts_before_popen(
     supervisor.start()
     supervisor.terminate(time.monotonic() + 1.0)
 
-    assert events.index("revalidate") < events.index("popen")
+    assert events.index("popen") < events.index("assign") < events.index("revalidate")
 
 
 def test_artifact_lock_retains_failed_handle_for_retry() -> None:

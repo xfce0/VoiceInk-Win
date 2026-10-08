@@ -39,6 +39,7 @@ from .sidecar_protocol import (
     map_error_response,
     map_nemo_error_response,
 )
+from .startup_diagnostics import StartupDiagnostics
 from .transport import TransportResponse
 
 
@@ -148,6 +149,7 @@ class NeMoSidecarRuntime:
         self._transport = transport
         self._supervisor = supervisor
         self._clock = clock or _SystemClock()
+        self._diagnostics = getattr(supervisor, "diagnostics", None) or StartupDiagnostics()
         set_transport_clock = getattr(transport, "set_clock", None)
         if set_transport_clock is not None:
             set_transport_clock(self._clock)
@@ -155,6 +157,10 @@ class NeMoSidecarRuntime:
         self._closed = False
         self._cleanup_pending = False
         self._last_failure: str | None = None
+
+    @property
+    def diagnostics(self) -> StartupDiagnostics:
+        return self._diagnostics
 
     def capabilities(self) -> AsrCapabilities:
         return AsrCapabilities(
@@ -190,18 +196,30 @@ class NeMoSidecarRuntime:
             raise RuntimeUnavailableError("sidecar is closed")
         if self._started:
             return
+        if self._cleanup_pending:
+            raise RuntimeRecoveryPendingError("sidecar cleanup is still pending")
         startup_error: AsrError | None = None
+        startup_phase = "process_create_suspended"
+        operation = "create_process"
         try:
             self._supervisor.start()
             self._sync_transport_credentials()
+            startup_phase = "readiness_probe"
+            operation = "probe_readiness"
             readiness_deadline = self._clock.monotonic() + self._config.readiness_timeout
             ready = self._supervisor.wait_ready(readiness_deadline)
             if not ready:
                 raise RuntimeUnavailableError("sidecar did not become ready")
+            self._diagnostics.record("readiness_probe", "probe_readiness", "ready")
             if not self._supervisor.is_running():
                 raise ProcessCrashedError("sidecar exited during readiness")
             if self._config.require_model_attestation:
+                startup_phase = "attestation_passthrough"
+                operation = "observe_attestation"
                 self._attest_configured_model(readiness_deadline)
+                self._diagnostics.record(
+                    "attestation_passthrough", "observe_attestation", "observed"
+                )
         except AsrError as error:
             startup_error = error
         except TimeoutError as error:
@@ -212,17 +230,27 @@ class NeMoSidecarRuntime:
             startup_error = ExecutionError("sidecar readiness failed", cause=error)
         finally:
             if startup_error is not None:
+                if self._diagnostics.primary_failure is None:
+                    self._diagnostics.record_failure(startup_phase, operation, startup_error)
                 self._started = False
                 self._last_failure = "sidecar startup failed"
                 self._cleanup_pending = True
                 cleanup_deadline = self._clock.monotonic() + self._config.shutdown_timeout
                 cleanup_error = self._kill_after_start_failure(cleanup_deadline)
                 if cleanup_error is not None:
-                    self._last_failure = "sidecar startup cleanup failed"
-                    raise ExecutionError(
-                        "sidecar startup cleanup failed", cause=cleanup_error
-                    ) from startup_error
-                self._cleanup_pending = False
+                    try:
+                        cleanup_pending = not self._supervisor_cleanup_complete()
+                    except BaseException as error:
+                        cleanup_pending = True
+                        self._diagnostics.record_cleanup_failure("get_process_state", error)
+                    self._diagnostics.set_cleanup_outcome(
+                        "pending" if cleanup_pending else "failed"
+                    )
+                    self._record_cleanup_failure(cleanup_error)
+                    self._cleanup_pending = cleanup_pending
+                else:
+                    self._diagnostics.set_cleanup_outcome("complete")
+                    self._cleanup_pending = False
         if startup_error is not None:
             raise startup_error
         self._last_failure = None
@@ -359,6 +387,7 @@ class NeMoSidecarRuntime:
                 self._supervisor.terminate(deadline)
             except Exception as error:
                 failures.append(error)
+                self._diagnostics.record_cleanup_failure("terminate_process", error)
             try:
                 running = self._supervisor.is_running()
             except Exception as error:
@@ -369,6 +398,7 @@ class NeMoSidecarRuntime:
                     self._kill_supervisor(deadline)
                 except Exception as error:
                     failures.append(error)
+                    self._diagnostics.record_cleanup_failure("terminate_process", error)
             try:
                 cleanup_complete = not self._supervisor.is_running()
             except Exception as error:
@@ -383,13 +413,16 @@ class NeMoSidecarRuntime:
                     cleanup_complete = False
             if cleanup_complete:
                 self._cleanup_pending = False
+                self._diagnostics.set_cleanup_outcome("failed" if failures else "complete")
             else:
                 self._cleanup_pending = True
                 failures.append(RuntimeRecoveryPendingError("sidecar cleanup is still pending"))
+                self._diagnostics.set_cleanup_outcome("pending")
         try:
             self._transport.close()
         except Exception as error:
             failures.append(error)
+            self._diagnostics.record_cleanup_failure("close_resource", error)
         self._closed = cleanup_complete and not failures
         if failures:
             pending = next(
@@ -410,16 +443,19 @@ class NeMoSidecarRuntime:
             self._supervisor.terminate(deadline)
         except BaseException as error:
             failures.append(error)
+            self._diagnostics.record_cleanup_failure("terminate_process", error)
         try:
             running = self._supervisor.is_running()
         except BaseException as error:
             failures.append(error)
+            self._diagnostics.record_cleanup_failure("get_process_state", error)
             running = True
         if running:
             try:
                 self._kill_supervisor(deadline)
             except BaseException as error:
                 failures.append(error)
+                self._diagnostics.record_cleanup_failure("terminate_process", error)
 
         while self._clock.monotonic() < deadline:
             try:
@@ -437,14 +473,21 @@ class NeMoSidecarRuntime:
             cleanup_complete = self._supervisor_cleanup_complete()
         except BaseException as error:
             failures.append(error)
+            self._diagnostics.record_cleanup_failure("get_process_state", error)
             running = True
             cleanup_complete = False
         if self._clock.monotonic() >= deadline:
-            return AsrTimeoutError("sidecar cleanup exceeded the request deadline")
+            error = AsrTimeoutError("sidecar cleanup exceeded the request deadline")
+            self._diagnostics.record_cleanup_failure("wait_for_exit", error)
+            return error
         if running:
-            failures.append(RuntimeError("sidecar process remained alive after startup cleanup"))
+            error = RuntimeError("sidecar process remained alive after startup cleanup")
+            failures.append(error)
+            self._diagnostics.record_cleanup_failure("wait_for_exit", error)
         if not cleanup_complete:
-            failures.append(RuntimeError("sidecar resource cleanup is still pending"))
+            error = RuntimeError("sidecar resource cleanup is still pending")
+            failures.append(error)
+            self._diagnostics.record_cleanup_failure("close_resource", error)
         if failures:
             return ExceptionGroup("sidecar startup cleanup failed", failures)
         return None
@@ -555,6 +598,14 @@ class NeMoSidecarRuntime:
             time.sleep(seconds)
         else:
             sleep(seconds)
+
+    def _record_cleanup_failure(self, error: BaseException) -> None:
+        errors = error.exceptions if isinstance(error, BaseExceptionGroup) else (error,)
+        for nested in errors:
+            if isinstance(nested, BaseExceptionGroup):
+                self._record_cleanup_failure(nested)
+            else:
+                self._diagnostics.record_cleanup_failure("close_resource", nested)
 
     def _wait_for_supervisor_cleanup(self, deadline: float) -> bool:
         while self._clock.monotonic() < deadline:

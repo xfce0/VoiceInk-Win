@@ -587,7 +587,7 @@ def test_sidecar_timeout_closes_and_restarts_before_a_retry_attempt() -> None:
     assert runtime.transcribe(request()).text == "hello"
 
 
-def test_sidecar_startup_cleanup_failure_is_typed_and_health_is_sanitized() -> None:
+def test_sidecar_startup_failure_remains_primary_when_cleanup_fails() -> None:
     class FailingKillSupervisor(FakeSupervisor):
         def __init__(self) -> None:
             super().__init__(ready=False, stubborn=True)
@@ -602,12 +602,15 @@ def test_sidecar_startup_cleanup_failure_is_typed_and_health_is_sanitized() -> N
         config(), FakeTransport(TransportResponse(200, result_body())), supervisor
     )
 
-    with pytest.raises(ExecutionError):
+    with pytest.raises(RuntimeUnavailableError, match="did not become ready"):
         runtime.start()
 
     health = runtime.health()
-    assert health.message == "sidecar startup cleanup failed"
+    assert health.message == "sidecar startup failed"
     assert "secret" not in health.message
+    diagnostics = runtime.diagnostics.as_dict()
+    assert diagnostics["primary_failure"]["error_code"] == "runtime_unavailable"
+    assert diagnostics["cleanup_outcome"] == "failed"
 
 
 def test_sidecar_startup_preserves_readiness_error_when_terminate_stops_process() -> None:

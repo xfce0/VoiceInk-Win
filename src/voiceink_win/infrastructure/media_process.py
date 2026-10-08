@@ -583,7 +583,7 @@ class WindowsJobObjectProcessRunner:
             except BaseException as error:
                 if termination_error is None:
                     termination_error = error
-                if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+                if isinstance(error, TimeoutError | subprocess.TimeoutExpired):
                     self._start_process_reaper(process, generation, pending_job=job)
         except BaseException as error:
             if termination_error is None:

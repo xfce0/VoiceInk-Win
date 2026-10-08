@@ -223,6 +223,14 @@ class BackendApplication:
     def health(self) -> RuntimeHealth:
         return self._asr.health()
 
+    @property
+    def diagnostics(self) -> dict[str, object]:
+        diagnostics = getattr(self._runtime, "diagnostics", None)
+        if diagnostics is None:
+            return {}
+        as_dict = getattr(diagnostics, "as_dict", None)
+        return as_dict() if as_dict is not None else {}
+
     def capabilities(self) -> AsrCapabilities:
         return self._asr.capabilities()
 
