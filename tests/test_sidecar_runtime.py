@@ -25,6 +25,7 @@ from voiceink_win.infrastructure import (
     FakeClock,
     NeMoSidecarRuntime,
     SidecarConfig,
+    StartupDiagnostics,
     TransportResponse,
 )
 
@@ -107,7 +108,9 @@ class FakeSupervisor:
         self.terminated = False
         self.killed = False
         self.start_count = 0
+        self.nonce = None
         self.api_key = "test-api-key"
+        self.diagnostics = StartupDiagnostics()
 
     def start(self) -> None:
         self.started = True

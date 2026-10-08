@@ -77,7 +77,7 @@ def _supervisor_for_process(process: _Process) -> SubprocessSupervisor:
     supervisor._process_reaper_done = process_module.Event()
     supervisor._process_reaper_done.set()
     supervisor._termination_lock = Lock()
-    supervisor._termination_requested_process = None
+    supervisor._process_state = process_module._ProcessLifecycleState.RUNNING
     supervisor._clock = process_module._SystemClock()
     supervisor._diagnostics = StartupDiagnostics()
     return supervisor
@@ -164,6 +164,61 @@ def test_t03_running_owned_process_gets_one_termination_and_is_reaped(monkeypatc
     assert process.poll() == 0
 
 
+def test_termination_failure_keeps_live_process_recoverable_for_later_cleanup(monkeypatch) -> None:
+    _force_posix(monkeypatch)
+
+    class WindowsOsProxy:
+        name = "nt"
+
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+    class FailingTerminateProcess:
+        pid = 4322
+
+        def __init__(self) -> None:
+            self.running = True
+            self.terminate_calls = 0
+            self.kill_calls = 0
+            self.released = Event()
+
+        def poll(self) -> int | None:
+            return None if self.running else 0
+
+        def terminate(self) -> None:
+            self.terminate_calls += 1
+            raise OSError(5, "terminate failed")
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+            self.running = False
+            self.released.set()
+
+        def wait(self, timeout: float | None = None) -> int:
+            if timeout is None:
+                self.released.wait(1.0)
+            self.running = False
+            return 0
+
+    monkeypatch.setattr(process_module, "os", WindowsOsProxy())
+    process = FailingTerminateProcess()
+    supervisor = _supervisor_for_process(process)
+
+    with pytest.raises(OSError):
+        supervisor.terminate(time.monotonic() + 1.0)
+
+    assert process.terminate_calls == 1
+    assert process.running
+    assert supervisor._process_state is process_module._ProcessLifecycleState.TERMINATION_FAILED
+
+    supervisor.terminate(time.monotonic() + 1.0)
+
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
+    assert supervisor._process_state is process_module._ProcessLifecycleState.REAPED
+    assert supervisor._process_reaper_done.wait(1.0)
+
+
 def test_t04_repeated_concurrent_cleanup_cannot_issue_a_second_termination(monkeypatch) -> None:
     _force_posix(monkeypatch)
     process = _Process()
@@ -196,11 +251,13 @@ def test_t04_repeated_concurrent_cleanup_cannot_issue_a_second_termination(monke
 def test_t05_cleanup_failure_does_not_replace_primary_failure() -> None:
     class Supervisor:
         api_key = "test-key"
+        nonce = None
 
         def __init__(self) -> None:
             self.running = True
             self.terminate_calls = 0
             self.kill_calls = 0
+            self.diagnostics = StartupDiagnostics()
 
         def start(self) -> None:
             self.running = True
@@ -266,9 +323,11 @@ def test_t06_diagnostics_are_bounded_and_redacted() -> None:
 
 def test_t07_launch_order_observability_places_readiness_and_attestation_after_resume() -> None:
     diagnostics = StartupDiagnostics()
+    diagnostics.record("configuration", "validate_endpoint", "stale")
 
     class Supervisor:
         api_key = "test-key"
+        nonce = None
 
         @property
         def diagnostics(self) -> StartupDiagnostics:
@@ -311,6 +370,7 @@ def test_t07_launch_order_observability_places_readiness_and_attestation_after_r
     )
     runtime.start()
 
+    assert all(record["error_code"] != "stale" for record in diagnostics.as_dict()["records"])
     operations = [record["operation"] for record in diagnostics.as_dict()["records"]]
     assert operations.index("revalidate_artifact") < operations.index("resume_process")
     assert operations.index("resume_process") < operations.index("probe_readiness")
@@ -322,20 +382,25 @@ def test_t08_numeric_win32_code_is_retained_without_windows_message() -> None:
         winerror = 87
 
     diagnostics = StartupDiagnostics()
-    diagnostics.record_failure("resume", "resume_process", Win32Failure("raw Windows message"))
+    cause = Win32Failure("raw Windows message")
+    wrapped = ConfigurationError("safe configuration error", cause=cause)
+    diagnostics.record_failure("resume", "resume_process", wrapped)
 
     payload = diagnostics.as_dict()
     assert payload["primary_failure"]["win32_error_code"] == 87
     assert "raw Windows message" not in json.dumps(payload)
+    assert wrapped.cause is cause
 
 
 def test_t09_pending_recovery_rejects_second_start_before_process_creation() -> None:
     class Supervisor:
         api_key = "test-key"
+        nonce = None
 
         def __init__(self) -> None:
             self.start_calls = 0
             self.running = False
+            self.diagnostics = StartupDiagnostics()
 
         def start(self) -> None:
             self.start_calls += 1

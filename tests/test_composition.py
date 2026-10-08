@@ -116,16 +116,34 @@ def test_build_application_wires_runtime_and_application_service(tmp_path: Path)
 
 
 class _FakeApplication:
-    def __init__(self, status: HealthStatus, close_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        status: HealthStatus,
+        close_error: Exception | None = None,
+        start_error: Exception | None = None,
+    ) -> None:
         self._status = status
         self._close_error = close_error
+        self._start_error = start_error
+        self.diagnostics = {
+            "primary_failure": {
+                "startup_phase": "resume",
+                "operation": "resume_process",
+                "error_code": "configuration",
+                "error_type": "ConfigurationError",
+            },
+            "cleanup_outcome": "complete",
+            "records": [],
+            "cleanup_failures": [],
+        }
 
     @property
     def endpoint(self) -> str:
         return "http://127.0.0.1:45678"
 
     def start(self) -> None:
-        return None
+        if self._start_error is not None:
+            raise self._start_error
 
     def health(self) -> RuntimeHealth:
         return RuntimeHealth(self._status, "fake health", "cpu")
@@ -154,6 +172,22 @@ def test_cli_reports_cleanup_failure_as_nonzero(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(cli, "_build_from_args", lambda _args: application)
 
     assert cli.main(["--once"]) == 4
+
+
+def test_cli_reports_bounded_runtime_diagnostics_on_start_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    application = _FakeApplication(
+        HealthStatus.FAILED,
+        start_error=RuntimeUnavailableError("sidecar did not become ready"),
+    )
+    monkeypatch.setattr(cli, "_build_from_args", lambda _args: application)
+
+    assert cli.main(["--once"]) == 3
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["diagnostics"]["primary_failure"]["operation"] == "resume_process"
+    assert "records" in output["diagnostics"]
 
 
 class _LifecycleFake:

@@ -24,6 +24,12 @@ from voiceink_win.infrastructure import (
 
 
 class FakeProbe:
+    def set_nonce(self, nonce: str) -> None:
+        del nonce
+
+    def set_api_key(self, api_key: str) -> None:
+        del api_key
+
     def ready(self, timeout: float) -> bool:
         return timeout > 0
 
@@ -193,6 +199,7 @@ def test_windows_supervisor_uses_canonical_launch_order(tmp_path: Path, monkeypa
     class Verifier:
         def verify_manifest(self, path, artifact_manifest, *, label):
             del path, artifact_manifest, label
+            events.append("verify")
 
         def identity(self, path):
             del path
@@ -244,7 +251,11 @@ def test_windows_supervisor_uses_canonical_launch_order(tmp_path: Path, monkeypa
             return getattr(os, name)
 
     monkeypatch.setattr(process_module, "os", WindowsOsProxy())
-    monkeypatch.setattr(process_module, "_open_artifact_read_lock", lambda path: Lock())
+    monkeypatch.setattr(
+        process_module,
+        "_open_artifact_read_lock",
+        lambda path: (events.append("lease"), Lock())[1],
+    )
     monkeypatch.setattr(media_process_module, "WindowsJobObject", Job)
     monkeypatch.setattr(media_process_module, "_resume_suspended_process", lambda pid: None)
 
@@ -253,6 +264,12 @@ def test_windows_supervisor_uses_canonical_launch_order(tmp_path: Path, monkeypa
     supervisor.terminate(time.monotonic() + 1.0)
 
     assert events.index("popen") < events.index("assign") < events.index("revalidate")
+    assert max(index for index, event in enumerate(events) if event == "verify") < min(
+        index for index, event in enumerate(events) if event == "lease"
+    )
+    assert max(index for index, event in enumerate(events) if event == "lease") < events.index(
+        "popen"
+    )
 
 
 def test_artifact_lock_retains_failed_handle_for_retry() -> None:
@@ -324,6 +341,8 @@ def test_supervisor_starts_only_one_reaper_for_a_process_generation() -> None:
 
     supervisor = object.__new__(SubprocessSupervisor)
     supervisor._process = process = StubbornProcess()
+    supervisor._process_state = process_module._ProcessLifecycleState.TERMINATION_FAILED
+    supervisor._termination_lock = process_module.Lock()
     supervisor._process_reaper_generation = None
     supervisor._process_reaper_generation_number = 0
     supervisor._process_reaper_lock = process_module.Lock()
@@ -376,6 +395,8 @@ def test_supervisor_reaper_closes_job_attached_before_it_can_finish() -> None:
 
     supervisor = object.__new__(SubprocessSupervisor)
     supervisor._process = process = ExitedProcess()
+    supervisor._process_state = process_module._ProcessLifecycleState.TERMINATION_FAILED
+    supervisor._termination_lock = process_module.Lock()
     supervisor._process_reaper_generation = None
     supervisor._process_reaper_generation_number = 0
     supervisor._process_reaper_lock = process_module.Lock()

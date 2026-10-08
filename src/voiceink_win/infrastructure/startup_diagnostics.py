@@ -77,13 +77,22 @@ def _code(value: object, fallback: str) -> str:
 
 
 def _win32_error_code(error: BaseException) -> int | None:
-    value = getattr(error, "win32_error_code", None)
-    if value is None:
-        value = getattr(error, "winerror", None)
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    if 0 <= value <= 0xFFFFFFFF:
-        return value
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        value = getattr(current, "win32_error_code", None)
+        if value is None:
+            value = getattr(current, "winerror", None)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 0xFFFFFFFF:
+            return value
+        for attribute in ("cause", "__cause__", "__context__"):
+            cause = getattr(current, attribute, None)
+            if isinstance(cause, BaseException):
+                pending.append(cause)
     return None
 
 

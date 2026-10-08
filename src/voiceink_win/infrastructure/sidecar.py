@@ -71,6 +71,10 @@ class SidecarTransport(Protocol):
 
 
 class ProcessSupervisor(Protocol):
+    diagnostics: StartupDiagnostics
+    nonce: str | None
+    api_key: str | None
+
     def start(self) -> None: ...
 
     def wait_ready(self, deadline: float) -> bool: ...
@@ -149,7 +153,7 @@ class NeMoSidecarRuntime:
         self._transport = transport
         self._supervisor = supervisor
         self._clock = clock or _SystemClock()
-        self._diagnostics = getattr(supervisor, "diagnostics", None) or StartupDiagnostics()
+        self._diagnostics = supervisor.diagnostics
         set_transport_clock = getattr(transport, "set_clock", None)
         if set_transport_clock is not None:
             set_transport_clock(self._clock)
@@ -198,6 +202,7 @@ class NeMoSidecarRuntime:
             return
         if self._cleanup_pending:
             raise RuntimeRecoveryPendingError("sidecar cleanup is still pending")
+        self._diagnostics.reset()
         startup_error: AsrError | None = None
         startup_phase = "process_create_suspended"
         operation = "create_process"
@@ -573,11 +578,11 @@ class NeMoSidecarRuntime:
             raise ExecutionError("sidecar crash recovery failed", cause=error) from error
 
     def _sync_transport_credentials(self) -> None:
-        nonce = getattr(self._supervisor, "nonce", None) or generate_nonce()
+        nonce = self._supervisor.nonce or generate_nonce()
         set_transport_nonce = getattr(self._transport, "set_nonce", None)
         if set_transport_nonce is not None:
             set_transport_nonce(nonce)
-        api_key = getattr(self._supervisor, "api_key", None)
+        api_key = self._supervisor.api_key
         set_transport_api_key = getattr(self._transport, "set_api_key", None)
         if api_key is not None and set_transport_api_key is not None:
             set_transport_api_key(api_key)
