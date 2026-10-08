@@ -27,10 +27,13 @@ documents:
     status: proposed
   - path: spec/features/004-frontend-shell.md
     kind: feature
-    status: implemented
+    status: proposed
   - path: rfcs/parakeet-runtime-integration.md
     kind: rfc
     status: proposed
+  - path: rfcs/desktop-composition-boundary.md
+    kind: rfc
+    status: draft
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed
