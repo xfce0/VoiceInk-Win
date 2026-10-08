@@ -65,7 +65,7 @@ check: spec-check format-check lint test build
 run:
 	$(VENV_PYTHON) -m voiceink_win
 
-## run-shell: Start the optional PySide6 desktop shell with its fake adapter
+## run-shell: Start the optional PySide6 desktop shell
 run-shell:
 	$(VENV_PYTHON) -m voiceink_win.presentation.app
 

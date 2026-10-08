@@ -2,9 +2,7 @@
 
 ## Status and Scope
 
-Status: proposed amendment to the implemented presentation baseline. The
-unavailable-shell composition described by
-`rfcs/desktop-composition-boundary.md` is not implemented yet.
+Status: implemented desktop presentation and no-resource composition boundary.
 
 This feature provides the first PySide6 presentation slice for VoiceInk-Win. It
 ports the macOS VoiceInk visual hierarchy into a Windows-friendly desktop shell

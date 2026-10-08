@@ -21,8 +21,22 @@ class ShellController:
     """Coordinate shell actions and expose immutable snapshots to presentation."""
 
     def __init__(self, backend: ShellTranscriptionBackend) -> None:
+        self._initialize(backend, ShellSnapshot())
+
+    @classmethod
+    def unavailable(cls) -> ShellController:
+        """Create a controller for a build without recording capability."""
+        controller = cls.__new__(cls)
+        controller._initialize(None, ShellSnapshot(state=ShellState.UNAVAILABLE))
+        return controller
+
+    def _initialize(
+        self,
+        backend: ShellTranscriptionBackend | None,
+        snapshot: ShellSnapshot,
+    ) -> None:
         self._backend = backend
-        self._snapshot = ShellSnapshot()
+        self._snapshot = snapshot
         self._listeners: list[ShellListener] = []
 
     @property
@@ -58,6 +72,8 @@ class ShellController:
     def complete_processing(self) -> bool:
         if self._snapshot.state is not ShellState.PROCESSING:
             return False
+        if self._backend is None:
+            return False
         try:
             result = self._backend.transcribe()
         except AsrError as error:
@@ -80,6 +96,8 @@ class ShellController:
         return True
 
     def reset(self) -> None:
+        if self._snapshot.state is ShellState.UNAVAILABLE:
+            return
         self._publish(ShellSnapshot())
 
     def _publish(self, snapshot: ShellSnapshot) -> None:

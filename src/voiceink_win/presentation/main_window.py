@@ -121,6 +121,7 @@ class FloatingRecorderWindow(QFrame):
 
     def _render(self, snapshot: ShellSnapshot) -> None:
         labels = {
+            ShellState.UNAVAILABLE: ("Unavailable", "Unavailable"),
             ShellState.IDLE: ("Ready", "Start recording"),
             ShellState.RECORDING: ("Listening", "Stop recording"),
             ShellState.PROCESSING: ("Transcribing", "Working..."),
@@ -133,7 +134,18 @@ class FloatingRecorderWindow(QFrame):
             status = snapshot.error or status
         self._status.setText(status)
         self._record_button.setText(action)
-        self._record_button.setEnabled(snapshot.state is not ShellState.PROCESSING)
+        unavailable = snapshot.state is ShellState.UNAVAILABLE
+        self._record_button.setEnabled(
+            snapshot.state is not ShellState.PROCESSING and not unavailable
+        )
+        if unavailable:
+            self._record_button.setAccessibleName("Recording unavailable")
+            self._record_button.setAccessibleDescription(
+                "Microphone capture is not connected in this build."
+            )
+        else:
+            self._record_button.setAccessibleName("Record")
+            self._record_button.setAccessibleDescription("Start or stop recording")
         self._record_button.setProperty("recording", snapshot.state is ShellState.RECORDING)
         self._record_button.style().unpolish(self._record_button)
         self._record_button.style().polish(self._record_button)
@@ -226,9 +238,12 @@ class MainWindow(QMainWindow):
         greeting.setObjectName("pageGreeting")
         greeting.setFont(QFont("Arial Rounded MT Bold", 28, QFont.Weight.Bold))
         content_layout.addWidget(greeting)
-        subtext = QLabel("Record a thought, then let VoiceInk turn it into clear text.", content)
-        subtext.setObjectName("heroSubtext")
-        content_layout.addWidget(subtext)
+        self._page_subtext = QLabel(
+            "Recording cannot start because microphone capture and ASR are not included.",
+            content,
+        )
+        self._page_subtext.setObjectName("heroSubtext")
+        content_layout.addWidget(self._page_subtext)
 
         self._hero = self._build_hero(content)
         content_layout.addWidget(self._hero)
@@ -248,11 +263,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(hero)
         layout.setContentsMargins(28, 18, 28, 18)
         layout.setSpacing(10)
-        self._hero_headline = QLabel("Start recording to build VoiceInk progress.", hero)
+        self._hero_headline = QLabel("Recording is unavailable in this build.", hero)
         self._hero_headline.setObjectName("heroHeadline")
         self._hero_headline.setWordWrap(True)
         layout.addWidget(self._hero_headline)
-        self._hero_detail = QLabel("Your first milestone appears after one session.", hero)
+        self._hero_detail = QLabel("Microphone capture and ASR are not included.", hero)
         self._hero_detail.setObjectName("heroDetail")
         self._hero_detail.setWordWrap(True)
         layout.addWidget(self._hero_detail)
@@ -287,7 +302,8 @@ class MainWindow(QMainWindow):
         self._transcript_metadata.setObjectName("metadata")
         body_layout.addWidget(self._transcript_metadata)
         self._transcript_text = QLabel(
-            "Your first transcript will appear here after you record.", self._transcript_body
+            "Transcripts are unavailable because recording and ASR are not included.",
+            self._transcript_body,
         )
         self._transcript_text.setObjectName("transcriptText")
         self._transcript_text.setWordWrap(True)
@@ -297,6 +313,7 @@ class MainWindow(QMainWindow):
 
     def _render(self, snapshot: ShellSnapshot) -> None:
         state_titles = {
+            ShellState.UNAVAILABLE: "Recording unavailable",
             ShellState.IDLE: "Ready for your voice",
             ShellState.RECORDING: "Recording in progress",
             ShellState.PROCESSING: "Transcribing locally",
@@ -309,13 +326,30 @@ class MainWindow(QMainWindow):
         self._state_pill.style().unpolish(self._state_pill)
         self._state_pill.style().polish(self._state_pill)
 
-        if snapshot.state is ShellState.TRANSCRIPT_READY:
+        if snapshot.state is ShellState.UNAVAILABLE:
+            self._page_subtext.setText(
+                "Recording cannot start because microphone capture and ASR are not included."
+            )
+            self._hero_headline.setText("Recording is unavailable in this build.")
+            self._hero_detail.setText("Microphone capture and ASR are not included.")
+            self._transcript_body.setObjectName("emptyCard")
+            self._transcript_metadata.setText("Capability unavailable")
+            self._transcript_text.setText(
+                "Transcripts are unavailable because recording and ASR are not included."
+            )
+        elif snapshot.state is ShellState.TRANSCRIPT_READY:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("You just turned a thought into text.")
             self._hero_detail.setText("Keep the momentum going with another local session.")
             self._transcript_body.setObjectName("transcriptCard")
             self._transcript_metadata.setText(datetime.now().strftime("Today, %H:%M"))
             self._transcript_text.setText(snapshot.transcript)
         elif snapshot.state is ShellState.EMPTY:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("No words came through this time.")
             self._hero_detail.setText("Try again a little closer to the microphone.")
             self._transcript_body.setObjectName("emptyCard")
@@ -324,6 +358,9 @@ class MainWindow(QMainWindow):
                 "VoiceInk did not detect speech. Start another session to try again."
             )
         elif snapshot.state is ShellState.ERROR:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("VoiceInk could not finish that session.")
             self._hero_detail.setText(
                 "The failure is visible here so it can be fixed before the next recording."
@@ -332,12 +369,21 @@ class MainWindow(QMainWindow):
             self._transcript_metadata.setText("Transcription error")
             self._transcript_text.setText(snapshot.error)
         elif snapshot.state is ShellState.RECORDING:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("Listening for your next thought.")
             self._hero_detail.setText("Stop when you are finished; transcription stays local.")
         elif snapshot.state is ShellState.PROCESSING:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("Turning audio into clear text.")
             self._hero_detail.setText("The local adapter is processing this session.")
         else:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("Start recording to build VoiceInk progress.")
             self._hero_detail.setText("Your first milestone appears after one session.")
             self._transcript_body.setObjectName("emptyCard")

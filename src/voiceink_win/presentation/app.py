@@ -3,9 +3,30 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
+from typing import Protocol
 
-from voiceink_win.application import ShellController
-from voiceink_win.infrastructure import FakeShellBackend
+from voiceink_win.desktop_composition import DesktopComposition, build_desktop_composition
+
+
+class _Window(Protocol):
+    def show(self) -> None: ...
+
+
+def _run_session(
+    composition: DesktopComposition,
+    create_window: Callable[[], _Window],
+    event_loop: Callable[[], int],
+    after_show: Callable[[_Window], None] | None = None,
+) -> int:
+    try:
+        window = create_window()
+        window.show()
+        if after_show is not None:
+            after_show(window)
+        return event_loop()
+    finally:
+        composition.close()
 
 
 def main(*, smoke: bool = False) -> int:
@@ -31,17 +52,22 @@ def main(*, smoke: bool = False) -> int:
 
     from .main_window import MainWindow
 
-    controller = ShellController(FakeShellBackend())
-    window = MainWindow(controller, theme=theme)
-    color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
-    if color_scheme_changed is not None:
-        color_scheme_changed.connect(
-            lambda *_: window.apply_theme(theme_for(detect_system_theme(application)))
-        )
-    window.show()
-    if smoke:
-        QTimer.singleShot(100, application.quit)
-    return application.exec()
+    composition = build_desktop_composition()
+
+    def create_window() -> MainWindow:
+        window = MainWindow(composition.controller, theme=theme)
+        color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
+        if color_scheme_changed is not None:
+            color_scheme_changed.connect(
+                lambda *_: window.apply_theme(theme_for(detect_system_theme(application)))
+            )
+        return window
+
+    def after_show(_window: _Window) -> None:
+        if smoke:
+            QTimer.singleShot(100, application.quit)
+
+    return _run_session(composition, create_window, application.exec, after_show)
 
 
 if __name__ == "__main__":
