@@ -375,7 +375,7 @@ def test_sidecar_rejects_audio_larger_than_request_limit() -> None:
         runtime.transcribe(request())
 
 
-def test_sidecar_reports_process_crash_and_kills_unready_process() -> None:
+def test_sidecar_reports_process_crash_and_preserves_stopped_unready_process() -> None:
     crashed_supervisor = FakeSupervisor()
     crashed = NeMoSidecarRuntime(
         config(), FakeTransport(TransportResponse(200, result_body())), crashed_supervisor
@@ -392,7 +392,8 @@ def test_sidecar_reports_process_crash_and_kills_unready_process() -> None:
     )
     with pytest.raises(RuntimeUnavailableError):
         unready.start()
-    assert unready_supervisor.killed
+    assert unready_supervisor.terminated
+    assert not unready_supervisor.killed
 
 
 def test_sidecar_restarts_after_crash_for_the_retry_attempt() -> None:
@@ -498,7 +499,7 @@ def test_sidecar_failed_restart_rolls_back_the_new_process_transactionally() -> 
 
     assert supervisor.start_count == 2
     assert supervisor.terminated
-    assert supervisor.killed
+    assert not supervisor.killed
     assert not supervisor.running
     assert not runtime._started
 
@@ -555,8 +556,7 @@ def test_sidecar_failed_restart_uses_request_deadline_and_injected_clock() -> No
     assert supervisor.start_count == 2
     assert supervisor.terminate_deadlines
     assert all(deadline == request_deadline for deadline in supervisor.terminate_deadlines)
-    assert supervisor.kill_deadlines
-    assert all(deadline == request_deadline for deadline in supervisor.kill_deadlines)
+    assert not supervisor.kill_deadlines
     assert clock.monotonic() >= request_deadline
     assert not runtime._started
 
@@ -588,8 +588,16 @@ def test_sidecar_timeout_closes_and_restarts_before_a_retry_attempt() -> None:
 
 
 def test_sidecar_startup_cleanup_failure_is_typed_and_health_is_sanitized() -> None:
-    supervisor = FakeSupervisor(ready=False)
-    supervisor.fail_kill = True
+    class FailingKillSupervisor(FakeSupervisor):
+        def __init__(self) -> None:
+            super().__init__(ready=False, stubborn=True)
+
+        def kill(self) -> None:
+            self.killed = True
+            self.running = False
+            raise OSError("secret executable path must not leak")
+
+    supervisor = FailingKillSupervisor()
     runtime = NeMoSidecarRuntime(
         config(), FakeTransport(TransportResponse(200, result_body())), supervisor
     )
@@ -600,6 +608,28 @@ def test_sidecar_startup_cleanup_failure_is_typed_and_health_is_sanitized() -> N
     health = runtime.health()
     assert health.message == "sidecar startup cleanup failed"
     assert "secret" not in health.message
+
+
+def test_sidecar_startup_preserves_readiness_error_when_terminate_stops_process() -> None:
+    class AlreadyStoppedSupervisor(FakeSupervisor):
+        def __init__(self) -> None:
+            super().__init__(ready=False)
+            self.kill_calls = 0
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+            raise OSError("kill must not run after termination")
+
+    supervisor = AlreadyStoppedSupervisor()
+    runtime = NeMoSidecarRuntime(
+        config(), FakeTransport(TransportResponse(200, result_body())), supervisor
+    )
+
+    with pytest.raises(RuntimeUnavailableError, match="did not become ready"):
+        runtime.start()
+
+    assert supervisor.kill_calls == 0
+    assert not supervisor.running
 
 
 def test_sidecar_rejects_non_loopback_endpoint() -> None:
