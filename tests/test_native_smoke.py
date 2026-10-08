@@ -10,6 +10,7 @@ import scripts.native_smoke as native_smoke
 from scripts.native_smoke import (
     _build_native_smoke_application,
     _cleanup_status,
+    _exception_types,
     _run_snapshot_security_probes_with_store,
     _safe_rtfx,
     _success_status,
@@ -33,6 +34,39 @@ def _artifact(path: Path, digest: str) -> RuntimeArtifactManifest:
         license="Apache-2.0",
         allowed_path=path,
     )
+
+
+def test_exception_types_reports_nested_failure_types_without_messages() -> None:
+    unsafe_type = type("Bad\nType", (RuntimeError,), {})
+    error = ExceptionGroup("startup", [unsafe_type("secret"), ValueError("private")])
+    cause = OSError("cause")
+    context = LookupError("context")
+    error.__cause__ = cause
+    error.__context__ = context
+
+    types = _exception_types(error)
+
+    assert types == ["ExceptionGroup", "OSError", "ExternalError", "ValueError"]
+    assert all("secret" not in item and "private" not in item for item in types)
+
+    context_only = ExceptionGroup("startup", [ValueError("private")])
+    context_only.__context__ = LookupError("context")
+    context_only.__suppress_context__ = False
+
+    assert _exception_types(context_only) == ["ExceptionGroup", "LookupError", "ValueError"]
+
+
+def test_exception_types_prioritizes_causes_and_bounds_wide_groups() -> None:
+    error = ExceptionGroup("startup", [ValueError(str(index)) for index in range(20)])
+    cause = OSError("cause")
+    context = LookupError("context")
+    error.__cause__ = cause
+    error.__context__ = context
+
+    types = _exception_types(error)
+
+    assert len(types) == 12
+    assert types[1] == "OSError"
 
 
 def test_native_smoke_selects_named_sidecar_executable() -> None:
