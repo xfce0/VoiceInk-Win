@@ -188,7 +188,8 @@ The contract is normative:
    of cleanup. `close()` is idempotent. No terminal result is published until
    cleanup completes and the owned audio/native references are released. A
    typed recovery failure is non-terminal while `recovery_owned`; it becomes a
-   terminal `CleanupWarning` only after approved recovery proves release.
+  terminal `Failed(CleanupWarning)` outcome, projected as shell `error`, only
+  after approved recovery proves release.
 5. Every operation receives an absolute monotonic deadline. No COM call,
    callback, device wait, or native cleanup may wait forever.
 6. `cancel()` may race with `start()` or `request_stop()`. No other concurrent
