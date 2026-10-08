@@ -103,6 +103,39 @@ def test_artifact_verifier_checks_executable_and_model_sha256(tmp_path: Path) ->
         verifier.verify(model, "0" * 64, label="model")
 
 
+def test_artifact_verifier_reads_runtime_artifacts_in_binary_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "sidecar.exe"
+    content = b"MZ\r\nexecutable\r\n"
+    expected_hash = write_artifact(artifact, content)
+    real_open = os.open
+    captured_flags: list[int] = []
+    binary_flag = 0x8000
+
+    def open_binary(path, flags):
+        captured_flags.append(flags)
+        if os.name == "nt":
+            return real_open(path, flags)
+        return real_open(path, flags & ~binary_flag)
+
+    monkeypatch.setattr(process_module.os, "O_BINARY", binary_flag, raising=False)
+    monkeypatch.setattr(process_module.os, "open", open_binary)
+
+    assert RuntimeArtifactVerifier().sha256(artifact) == expected_hash
+    assert len(captured_flags) == 1
+    assert captured_flags[0] & binary_flag
+
+
+@pytest.mark.skipif(os.name != "nt", reason="covers Windows CRT binary mode")
+def test_artifact_verifier_preserves_windows_binary_artifact_bytes(tmp_path: Path) -> None:
+    artifact = tmp_path / "sidecar.exe"
+    content = b"MZ\r\nexecutable\r\n"
+    expected_hash = write_artifact(artifact, content)
+
+    assert RuntimeArtifactVerifier().sha256(artifact) == expected_hash
+
+
 def test_artifact_verifier_distinguishes_missing_model(tmp_path: Path) -> None:
     with pytest.raises(MissingModelError):
         RuntimeArtifactVerifier().verify_model(tmp_path / "missing.gguf", "0" * 64)
