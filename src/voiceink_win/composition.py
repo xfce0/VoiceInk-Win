@@ -233,6 +233,10 @@ class BackendApplication:
     def transcribe(self, request: AsrRequest) -> TranscriptResult:
         return self._asr.transcribe(request)
 
+    @property
+    def imported_media_available(self) -> bool:
+        return self._imported_media is not None
+
     def submit(self, path: str, options: ImportOptions | None = None) -> JobId:
         """Submit an imported-media job through the configured application service."""
         return self._require_imported_media().submit(path, options)

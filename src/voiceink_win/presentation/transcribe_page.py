@@ -24,6 +24,7 @@ from voiceink_win.application import TranscribePageController
 from voiceink_win.domain import (
     SUPPORTED_MEDIA_EXTENSIONS,
     SUPPORTED_MEDIA_FORMATS,
+    OutputState,
     QueueState,
     TranscribePageSnapshot,
     TranscriptionQueueItemSnapshot,
@@ -144,6 +145,10 @@ class TranscribePage(QWidget):
         self._count_label = QLabel(self)
         self._count_label.setObjectName("muted")
         controls.addWidget(self._count_label)
+        self._output_label = QLabel(self)
+        self._output_label.setObjectName("muted")
+        self._output_label.setWordWrap(True)
+        controls.addWidget(self._output_label)
         root.addLayout(controls)
 
         self._error_label = QLabel(self)
@@ -177,7 +182,7 @@ class TranscribePage(QWidget):
     def _render(self, snapshot: TranscribePageSnapshot) -> None:
         self._add_button.setEnabled(snapshot.accepting_files)
         self._start_button.setEnabled(snapshot.can_start)
-        self._cancel_button.setEnabled(snapshot.is_processing)
+        self._cancel_button.setEnabled(snapshot.can_cancel_all)
         self._clear_button.setEnabled(
             bool(
                 snapshot.aggregate.succeeded
@@ -189,6 +194,11 @@ class TranscribePage(QWidget):
         self._count_label.setText(f"{snapshot.aggregate.total} files")
         self._error_label.setText(snapshot.page_error or "")
         self._error_label.setVisible(bool(snapshot.page_error))
+        self._output_label.setText(snapshot.output_status.message)
+        self._output_label.setVisible(snapshot.output_status.state is not OutputState.IDLE)
+        self._output_label.setProperty("failed", snapshot.output_status.state is OutputState.FAILED)
+        self._output_label.style().unpolish(self._output_label)
+        self._output_label.style().polish(self._output_label)
         self._rebuild_queue(snapshot.items)
 
     def _rebuild_queue(self, items: tuple[TranscriptionQueueItemSnapshot, ...]) -> None:

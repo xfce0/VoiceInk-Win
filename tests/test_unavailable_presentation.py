@@ -13,6 +13,7 @@ except ImportError:
         raise
     pytest.skip("PySide6 is required for presentation tests", allow_module_level=True)
 
+from voiceink_win.domain import ShellState
 from voiceink_win.presentation.main_window import MainWindow
 
 
@@ -84,6 +85,7 @@ def test_production_entrypoint_runs_real_composition_session(
         def __init__(self) -> None:
             self._composition = real_builder()
             self.controller = self._composition.controller
+            self.transcribe_controller = self._composition.transcribe_controller
 
         def close(self) -> None:
             events.append("close")
@@ -137,6 +139,7 @@ def test_production_entrypoint_closes_composition_on_event_loop_failure(
         def __init__(self) -> None:
             self._composition = real_builder()
             self.controller = self._composition.controller
+            self.transcribe_controller = self._composition.transcribe_controller
 
         def close(self) -> None:
             events.append("close")
@@ -173,3 +176,49 @@ def test_production_entrypoint_closes_composition_on_event_loop_failure(
 
     assert raised.value is error
     assert events == ["build", "construct", "show", "exec", "close"]
+
+
+def test_composition_wires_real_imported_media_adapter_when_runtime_is_configured(
+    application: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import voiceink_win.composition as composition_module
+    import voiceink_win.desktop_composition as desktop_composition
+
+    class Backend:
+        imported_media_available = True
+
+        def __init__(self) -> None:
+            self.started = False
+            self.closed = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    backend = Backend()
+    for name in (
+        "VOICEINK_RUNTIME_MANIFEST",
+        "VOICEINK_ARTIFACT_LOCK",
+        "VOICEINK_ARTIFACT_LOCK_SHA256",
+        "VOICEINK_FFMPEG_PATH",
+        "VOICEINK_IMPORT_WORKSPACE_ROOT",
+        "VOICEINK_IMPORT_ROOTS",
+        "VOICEINK_FFMPEG_VERSION",
+        "VOICEINK_FFMPEG_PROVENANCE_URL",
+        "VOICEINK_FFMPEG_SHA256",
+        "VOICEINK_FFMPEG_LICENSE",
+    ):
+        monkeypatch.setenv(name, "configured")
+    monkeypatch.setattr(composition_module, "build_application_from_environment", lambda: backend)
+
+    composed = desktop_composition.build_desktop_composition()
+    try:
+        assert backend.started
+        assert composed.controller.snapshot.state is ShellState.UNAVAILABLE
+        assert composed.transcribe_controller._imported_media is backend
+    finally:
+        composed.close()
+    assert backend.closed

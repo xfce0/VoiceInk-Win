@@ -60,6 +60,20 @@ class TranscriptVariant(StrEnum):
     ENHANCED = "enhanced"
 
 
+class OutputState(StrEnum):
+    IDLE = "idle"
+    COPYING = "copying"
+    EXPORTING = "exporting"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class OutputStatus:
+    state: OutputState = OutputState.IDLE
+    message: str = ""
+
+
 def _clean_text(value: str) -> str:
     return value.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -184,9 +198,11 @@ class TranscribePageSnapshot:
     selected_mode_id: str | None = None
     is_processing: bool = False
     can_start: bool = False
+    can_cancel_all: bool = False
     accepting_files: bool = True
     aggregate: QueueAggregate = QueueAggregate(0, 0, 0, 0, 0, 0, 0)
     page_error: str | None = None
+    output_status: OutputStatus = OutputStatus()
 
 
 def safe_basename(path: str | Path) -> str:

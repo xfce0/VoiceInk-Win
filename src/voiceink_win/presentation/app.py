@@ -75,7 +75,11 @@ def main(*, smoke: bool = False) -> int:
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
-        window = MainWindow(composition.controller, theme=theme)
+        window = MainWindow(
+            composition.controller,
+            theme=theme,
+            transcribe_controller=composition.transcribe_controller,
+        )
         if color_scheme_changed is not None:
             window.connect_theme_signal(
                 color_scheme_changed,

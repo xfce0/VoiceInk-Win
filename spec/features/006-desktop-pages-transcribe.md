@@ -4,6 +4,11 @@
 
 Status: proposed.
 
+Current implementation scope: this slice enables only the Transcribe route and
+its imported-media workflow. Modes, History, Dictionary, AI Models, and Audio
+remain specified future work; their sidebar descriptors stay disabled and this
+slice does not claim route-complete delivery.
+
 This feature is the next desktop presentation slice after the existing shell
 and microphone planning. It adds the Modes, Transcribe, History, Dictionary,
 AI Models, and Audio pages, and connects the Transcribe page to the existing

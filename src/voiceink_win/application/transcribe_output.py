@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -37,8 +39,8 @@ def serialize_markdown(
     content = (
         "# Transcription\n\n"
         f"**Source:** {source}\n"
-        f"**Date:** {_escape_markdown(document.created_at)}\n"
-        f"**Duration:** {document.duration_seconds:.3f}\n"
+        f"**Date:** {_format_timestamp(document.created_at)}\n"
+        f"**Duration:** {document.duration_seconds:.3f}s\n"
         f"**Variant:** {variant_label}\n\n"
         f"{text}"
     )
@@ -52,11 +54,18 @@ def _finalize(text: str) -> str:
 def _escape_markdown(text: str) -> str:
     escaped_lines: list[str] = []
     for line in _finalize(text).rstrip("\n").split("\n"):
-        escaped = line.replace("\\", "\\\\")
-        for character in "`*_{}[]()#+-.!>|<~":
-            escaped = escaped.replace(character, f"\\{character}")
-        escaped_lines.append(escaped)
+        escaped_lines.append(re.sub(r"([\\`*_{}\[\]()#+.!|<>~-])", r"\\\1", line))
     return "\n".join(escaped_lines)
+
+
+def _format_timestamp(value: str) -> str:
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("transcript timestamp is not ISO-8601") from error
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def atomic_write(target: Path, content: bytes) -> None:

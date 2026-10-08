@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread, current_thread
 
 from voiceink_win.application import (
     AsrApplicationService,
     ImportedMediaTranscriptionService,
     TranscribePageController,
 )
+from voiceink_win.application.transcribe_output import serialize_markdown
 from voiceink_win.domain import (
     Attempt,
     Cancelled,
@@ -17,10 +18,12 @@ from voiceink_win.domain import (
     ImportedTranscriptionResult,
     ImportObservation,
     JobId,
+    OutputState,
     ProcessingMetadata,
     ProgressSnapshot,
     Stage,
     Success,
+    TranscriptDocument,
     TranscriptResult,
     TranscriptVariant,
 )
@@ -58,9 +61,15 @@ class FakeImportedMedia:
         self.submissions: list[str] = []
         self.jobs: dict[JobId, FakeSubscription] = {}
         self.cancelled: list[JobId] = []
+        self.submit_started: Event | None = None
+        self.allow_submit: Event | None = None
 
     def submit(self, path: str, options=None) -> JobId:
         del options
+        if self.submit_started is not None:
+            self.submit_started.set()
+        if self.allow_submit is not None:
+            self.allow_submit.wait(2)
         job_id = JobId(f"job-{len(self.jobs) + 1}")
         self.submissions.append(path)
         self.jobs[job_id] = FakeSubscription(job_id)
@@ -128,16 +137,21 @@ class FakeImportedMedia:
 class FakeClipboard:
     def __init__(self) -> None:
         self.text = ""
+        self.thread_id: int | None = None
 
     def copy(self, text: str) -> None:
         self.text = text
+        self.thread_id = current_thread().ident
 
 
 class FakeFiles:
     def __init__(self) -> None:
         self.writes: list[tuple[Path, bytes]] = []
+        self.fail = False
 
     def write_atomic(self, target: Path, content: bytes) -> None:
+        if self.fail:
+            raise OSError("disk full")
         self.writes.append((target, content))
 
 
@@ -249,7 +263,9 @@ def test_controller_exports_and_copies_selected_variant(tmp_path: Path) -> None:
     wait_for(lambda: controller.snapshot.items[0].result is not None)
 
     assert controller.copy(controller.snapshot.items[0].item_id)
+    wait_for(lambda: controller.snapshot.output_status.state is OutputState.SUCCEEDED)
     assert clipboard.text == "# original\n[link]"
+    assert clipboard.thread_id != current_thread().ident
     assert (
         controller.select_variant(controller.snapshot.items[0].item_id, TranscriptVariant.ENHANCED)
         is True
@@ -261,7 +277,54 @@ def test_controller_exports_and_copies_selected_variant(tmp_path: Path) -> None:
     assert files.writes[0][1] == b"# original\n[link]\n"
     assert b"# Transcription\n" in files.writes[1][1]
     assert b"\\# original" in files.writes[1][1]
+    files.fail = True
+    assert controller.save_txt(controller.snapshot.items[0].item_id, tmp_path / "failed.txt")
+    wait_for(lambda: controller.snapshot.output_status.state is OutputState.FAILED)
     controller.close()
+
+
+def test_markdown_export_has_stable_utc_timestamp_and_escaped_content() -> None:
+    document = TranscriptDocument(
+        "meeting[1].wav",
+        "2024-01-02T03:04:05.123+03:00",
+        1.25,
+        "# title\n[link] *bold* - item\nC:\\tmp",
+    )
+
+    assert serialize_markdown(document).decode("utf-8") == (
+        "# Transcription\n\n"
+        "**Source:** meeting\\[1\\]\\.wav\n"
+        "**Date:** 2024-01-02 00:04:05 UTC\n"
+        "**Duration:** 1.250s\n"
+        "**Variant:** Original\n\n"
+        "\\# title\n"
+        "\\[link\\] \\*bold\\* \\- item\n"
+        "C:\\\\tmp\n"
+    )
+
+
+def test_close_cancels_late_admitted_job_and_waits_for_admission_worker(tmp_path: Path) -> None:
+    media = FakeImportedMedia()
+    media.submit_started = Event()
+    media.allow_submit = Event()
+    controller = TranscribePageController(media)
+    source = tmp_path / "late.wav"
+    source.write_bytes(b"content")
+    controller.add_paths([source])
+    assert controller.start_queue()
+    assert media.submit_started.wait(1)
+    assert controller.snapshot.can_cancel_all is False
+
+    close_thread = Thread(target=controller.close)
+    close_thread.start()
+    wait_for(lambda: controller._closed)
+    media.allow_submit.set()
+    close_thread.join(2)
+
+    assert not close_thread.is_alive()
+    assert len(media.cancelled) == 1
+    assert controller._admission_thread is None
+    assert not controller._watchers
 
 
 def test_controller_retry_restarts_admission_for_retryable_failure(tmp_path: Path) -> None:

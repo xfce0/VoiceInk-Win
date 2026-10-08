@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -20,6 +22,8 @@ from voiceink_win.domain import (
     ImportOptions,
     JobId,
     MediaFormat,
+    OutputState,
+    OutputStatus,
     ProgressSnapshot,
     QueueAggregate,
     QueueState,
@@ -36,6 +40,8 @@ from voiceink_win.domain import (
 )
 
 from .transcribe_output import ClipboardPort, TextFilePort, serialize_markdown, serialize_txt
+
+logger = logging.getLogger(__name__)
 
 
 class ObservationSubscription(Protocol):
@@ -78,6 +84,7 @@ class TranscribePageController:
         *,
         clipboard: ClipboardPort | None = None,
         text_files: TextFilePort | None = None,
+        unavailable_message: str = "Imported media transcription is unavailable in this build.",
     ) -> None:
         self._imported_media = imported_media
         self._clipboard = clipboard
@@ -88,13 +95,11 @@ class TranscribePageController:
         self._closed = False
         self._admission_thread: Thread | None = None
         self._watchers: set[Thread] = set()
+        self._cancel_threads: set[Thread] = set()
+        self._output_threads: set[Thread] = set()
         self._snapshot = TranscribePageSnapshot(
             accepting_files=imported_media is not None,
-            page_error=(
-                None
-                if imported_media is not None
-                else "Imported media transcription is unavailable in this build."
-            ),
+            page_error=(None if imported_media is not None else unavailable_message),
         )
 
     @property
@@ -171,12 +176,15 @@ class TranscribePageController:
             media = self._imported_media
         if media is None or job_id is None:
             return False
-        Thread(
+        thread = Thread(
             target=self._cancel_job,
             args=(item_id, job_id, media),
             name="transcribe-page-cancel",
             daemon=True,
-        ).start()
+        )
+        with self._lock:
+            self._cancel_threads.add(thread)
+        thread.start()
         return True
 
     def cancel_all(self) -> None:
@@ -190,12 +198,7 @@ class TranscribePageController:
         if media is None:
             return
         for item_id, job_id in ids:
-            Thread(
-                target=self._cancel_job,
-                args=(item_id, job_id, media),
-                name="transcribe-page-cancel",
-                daemon=True,
-            ).start()
+            self._start_cancel(item_id, job_id, media)
 
     def retry_item(self, item_id: str) -> bool:
         with self._lock:
@@ -212,12 +215,16 @@ class TranscribePageController:
             item.result = None
             item.failure = None
             self._publish_locked()
-        Thread(
-            target=self._admit_items,
-            args=((item_id,),),
-            name="transcribe-page-retry",
-            daemon=True,
-        ).start()
+        with self._lock:
+            if self._admission_active_locked():
+                return False
+            self._admission_thread = Thread(
+                target=self._admit_items,
+                args=((item_id,),),
+                name="transcribe-page-retry",
+                daemon=True,
+            )
+            self._admission_thread.start()
         return True
 
     def clear_terminal_items(self) -> None:
@@ -245,12 +252,27 @@ class TranscribePageController:
             document = item.result if item else None
             clipboard = self._clipboard
         if document is None or clipboard is None:
+            self._set_output_status(OutputState.FAILED, "Clipboard is unavailable.")
             return False
-        try:
-            clipboard.copy(document.text_for(variant or document.selected_variant))
-        except Exception:
-            self._set_page_error("Could not copy the transcript to the clipboard.")
-            return False
+        text = document.text_for(variant or document.selected_variant)
+        self._set_output_status(OutputState.COPYING, "Copying transcript...")
+
+        def copy_text() -> None:
+            try:
+                clipboard.copy(text)
+            except Exception:
+                logger.exception("clipboard worker failed", extra={"item_id": item_id})
+                self._set_output_status(OutputState.FAILED, "Could not copy the transcript.")
+            else:
+                self._set_output_status(OutputState.SUCCEEDED, "Transcript copied.")
+            finally:
+                with self._lock:
+                    self._output_threads.discard(current_thread())
+
+        thread = Thread(target=copy_text, name="transcribe-page-clipboard", daemon=True)
+        with self._lock:
+            self._output_threads.add(thread)
+        thread.start()
         return True
 
     def save_txt(
@@ -263,16 +285,56 @@ class TranscribePageController:
     ) -> bool:
         return self._save(item_id, target, variant, serialize_markdown)
 
-    def close(self) -> None:
+    def close(self, timeout: float = 5.0) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            admission = self._admission_thread
             subscriptions = tuple(item.subscription for item in self._items)
+            jobs = tuple(
+                (item.item_id, item.job_id)
+                for item in self._items
+                if item.job_id is not None and item.state in _ACTIVE
+            )
+            watchers = tuple(self._watchers)
+            cancellations = tuple(self._cancel_threads)
+            output_threads = tuple(self._output_threads)
+            media = self._imported_media
             self._listeners.clear()
         for subscription in subscriptions:
             if subscription is not None:
                 subscription.close()
+        if media is not None:
+            for _item_id, job_id in jobs:
+                self._cancel_admitted_job(media, job_id)
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        threads = tuple(
+            thread
+            for thread in (admission, *watchers, *cancellations, *output_threads)
+            if thread is not None
+        )
+        while threads and time.monotonic() < deadline:
+            for thread in threads:
+                if thread is not current_thread():
+                    thread.join(max(0.0, deadline - time.monotonic()))
+            with self._lock:
+                threads = tuple(
+                    thread
+                    for thread in (
+                        self._admission_thread,
+                        *self._watchers,
+                        *self._cancel_threads,
+                        *self._output_threads,
+                    )
+                    if thread is not None and thread is not current_thread() and thread.is_alive()
+                )
+        if threads:
+            logger.error(
+                "transcribe controller shutdown timed out",
+                extra={"alive_threads": [thread.name for thread in threads]},
+            )
 
     def _save(
         self, item_id: str, target: Path, variant: TranscriptVariant | None, serializer
@@ -282,80 +344,96 @@ class TranscribePageController:
             document = item.result if item else None
             text_files = self._text_files
         if document is None or text_files is None:
+            self._set_output_status(OutputState.FAILED, "File export is unavailable.")
             return False
         try:
             content = serializer(document, variant)
         except (OSError, ValueError):
-            self._set_page_error("Could not prepare the transcript export.")
+            logger.exception("transcript export serialization failed", extra={"item_id": item_id})
+            self._set_output_status(OutputState.FAILED, "Could not prepare the transcript export.")
             return False
+        self._set_output_status(OutputState.EXPORTING, "Exporting transcript...")
 
         def write() -> None:
             try:
                 text_files.write_atomic(Path(target), content)
-            except OSError:
-                self._set_page_error("Could not save the transcript export.")
+            except Exception:
+                logger.exception("transcript export worker failed", extra={"item_id": item_id})
+                self._set_output_status(OutputState.FAILED, "Could not save the transcript export.")
+            else:
+                self._set_output_status(OutputState.SUCCEEDED, f"Transcript exported to {target}.")
+            finally:
+                with self._lock:
+                    self._output_threads.discard(current_thread())
 
-        Thread(target=write, name="transcribe-page-export", daemon=True).start()
+        thread = Thread(target=write, name="transcribe-page-export", daemon=True)
+        with self._lock:
+            self._output_threads.add(thread)
+        thread.start()
         return True
 
     def _admit_items(self, item_ids: tuple[str, ...]) -> None:
-        for item_id in item_ids:
-            with self._lock:
-                item = self._item(item_id)
-                media = self._imported_media
-                if self._closed or item is None or item.state is not QueueState.PENDING:
+        try:
+            for item_id in item_ids:
+                with self._lock:
+                    item = self._item(item_id)
+                    media = self._imported_media
+                    if self._closed or item is None or item.state is not QueueState.PENDING:
+                        continue
+                    item.state = QueueState.VALIDATING
+                    self._publish_locked()
+                if media is None:
+                    self._reject(
+                        item_id, ErrorCode.RUNTIME_UNAVAILABLE, "Imported media is unavailable."
+                    )
                     continue
-                item.state = QueueState.VALIDATING
-                self._publish_locked()
-            if media is None:
-                self._reject(
-                    item_id, ErrorCode.RUNTIME_UNAVAILABLE, "Imported media is unavailable."
-                )
-                continue
-            job_id = None
-            try:
-                if not item.path.is_file():
-                    raise RejectedRequestError("source is not a regular file")
-                job_id = media.submit(str(item.path), ImportOptions())
-                subscription = media.observe(job_id)
-            except RejectedRequestError as error:
-                if job_id is not None:
-                    try:
-                        media.cancel(job_id)
-                    except Exception:
-                        pass
-                self._reject(item_id, error.code, _safe_rejection_message(error))
-                continue
-            except Exception:
-                if job_id is not None:
-                    try:
-                        media.cancel(job_id)
-                    except Exception:
-                        pass
-                self._reject(
-                    item_id, ErrorCode.RUNTIME_UNAVAILABLE, "Imported media is unavailable."
-                )
-                continue
-            with self._lock:
-                item = self._item(item_id)
-                if item is None or self._closed:
+                job_id = None
+                subscription = None
+                try:
+                    if not item.path.is_file():
+                        raise RejectedRequestError("source is not a regular file")
+                    job_id = media.submit(str(item.path), ImportOptions())
+                    subscription = media.observe(job_id)
+                except RejectedRequestError as error:
+                    self._cancel_admitted_job(media, job_id)
+                    self._reject(item_id, error.code, _safe_rejection_message(error))
+                    continue
+                except Exception:
+                    logger.exception(
+                        "transcribe admission worker failed", extra={"item_id": item_id}
+                    )
+                    self._cancel_admitted_job(media, job_id)
+                    self._reject(
+                        item_id, ErrorCode.RUNTIME_UNAVAILABLE, "Imported media is unavailable."
+                    )
+                    continue
+                with self._lock:
+                    item = self._item(item_id)
+                    closing = item is None or self._closed
+                    if not closing:
+                        item.job_id = job_id
+                        item.attempt = 1
+                        item.subscription = subscription
+                        item.state = QueueState.QUEUED
+                        item.progress = ProgressSnapshot(Stage.QUEUED)
+                        self._publish_locked()
+                if closing:
                     subscription.close()
+                    self._cancel_admitted_job(media, job_id)
                     continue
-                item.job_id = job_id
-                item.attempt = 1
-                item.subscription = subscription
-                item.state = QueueState.QUEUED
-                item.progress = ProgressSnapshot(Stage.QUEUED)
-                self._publish_locked()
-            watcher = Thread(
-                target=self._watch_item,
-                args=(item_id, subscription),
-                name="transcribe-page-observer",
-                daemon=True,
-            )
-            with self._lock:
-                self._watchers.add(watcher)
+                watcher = Thread(
+                    target=self._watch_item,
+                    args=(item_id, subscription),
+                    name="transcribe-page-observer",
+                    daemon=True,
+                )
+                with self._lock:
+                    self._watchers.add(watcher)
                 watcher.start()
+        finally:
+            with self._lock:
+                if self._admission_thread is current_thread():
+                    self._admission_thread = None
 
     def _watch_item(self, item_id: str, subscription: ObservationSubscription) -> None:
         try:
@@ -368,6 +446,9 @@ class TranscribePageController:
                 self._apply_observation(item_id, observation)
                 if observation.terminal is not None:
                     return
+        except Exception:
+            logger.exception("transcribe observer worker failed", extra={"item_id": item_id})
+            self._fail_observer(item_id)
         finally:
             with self._lock:
                 self._watchers.discard(current_thread())
@@ -425,7 +506,45 @@ class TranscribePageController:
         try:
             media.cancel(job_id)
         except Exception:
+            logger.exception("transcribe cancellation worker failed", extra={"item_id": item_id})
             self._set_page_error("Could not cancel the transcription job.")
+        finally:
+            with self._lock:
+                self._cancel_threads.discard(current_thread())
+
+    def _start_cancel(self, item_id: str, job_id: JobId, media: ImportedMediaPort) -> None:
+        thread = Thread(
+            target=self._cancel_job,
+            args=(item_id, job_id, media),
+            name="transcribe-page-cancel",
+            daemon=True,
+        )
+        with self._lock:
+            self._cancel_threads.add(thread)
+        thread.start()
+
+    @staticmethod
+    def _cancel_admitted_job(media: ImportedMediaPort, job_id: JobId | None) -> None:
+        if job_id is None:
+            return
+        try:
+            media.cancel(job_id)
+        except Exception:
+            logger.exception("late imported job cancellation failed", extra={"job_id": str(job_id)})
+
+    def _fail_observer(self, item_id: str) -> None:
+        with self._lock:
+            item = self._item(item_id)
+            if item is None or item.state in _TERMINAL:
+                return
+            item.state = QueueState.FAILED
+            item.failure = ImportFailure(
+                ErrorCode.RUNTIME_UNAVAILABLE,
+                "Transcription progress could not be observed.",
+                "observation",
+                True,
+            )
+            self._publish_locked()
 
     def _reject(self, item_id: str, code: ErrorCode, message: str) -> None:
         with self._lock:
@@ -440,6 +559,14 @@ class TranscribePageController:
     def _set_page_error(self, message: str) -> None:
         with self._lock:
             self._snapshot = replace(self._snapshot, page_error=message)
+            self._notify_locked()
+
+    def _set_output_status(self, state: OutputState, message: str) -> None:
+        with self._lock:
+            self._snapshot = replace(
+                self._snapshot,
+                output_status=OutputStatus(state, message),
+            )
             self._notify_locked()
 
     def _item(self, item_id: str) -> _Item | None:
@@ -457,6 +584,9 @@ class TranscribePageController:
     def _publish_locked(self) -> None:
         snapshots = tuple(_snapshot(item) for item in self._items)
         active = sum(item.state in _ACTIVE for item in self._items)
+        can_cancel_all = any(
+            item.state in _ACTIVE and item.job_id is not None for item in self._items
+        )
         pending = sum(item.state is QueueState.PENDING for item in self._items)
         aggregate = QueueAggregate(
             len(self._items),
@@ -472,9 +602,11 @@ class TranscribePageController:
             snapshots,
             is_processing=is_processing,
             can_start=pending > 0 and not is_processing,
+            can_cancel_all=can_cancel_all,
             accepting_files=self._imported_media is not None and not self._closed,
             aggregate=aggregate,
             page_error=self._snapshot.page_error,
+            output_status=self._snapshot.output_status,
         )
         self._notify_locked()
 
@@ -485,7 +617,7 @@ class TranscribePageController:
             try:
                 listener(snapshot)
             except Exception:
-                pass
+                logger.exception("transcribe snapshot listener failed")
 
 
 _ACTIVE = {
