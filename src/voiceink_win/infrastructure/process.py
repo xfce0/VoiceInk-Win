@@ -218,7 +218,8 @@ class RuntimeArtifactVerifier:
     @staticmethod
     def _open_regular(path: Path) -> int:
         try:
-            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+            descriptor = os.open(path, flags)
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 os.close(descriptor)
