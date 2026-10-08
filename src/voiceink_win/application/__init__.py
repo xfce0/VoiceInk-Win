@@ -5,6 +5,8 @@ from .cancellation import CancellationTokenSource, EventCancellationToken
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
 from .shell_controller import ShellController, ShellTranscriptionBackend
+from .transcribe_controller import ImportedMediaPort, TranscribePageController
+from .transcribe_output import LocalTextFilePort, serialize_markdown, serialize_txt
 
 __all__ = [
     "ApplicationAsrService",
@@ -19,4 +21,9 @@ __all__ = [
     "SystemClock",
     "ShellController",
     "ShellTranscriptionBackend",
+    "ImportedMediaPort",
+    "TranscribePageController",
+    "LocalTextFilePort",
+    "serialize_markdown",
+    "serialize_txt",
 ]

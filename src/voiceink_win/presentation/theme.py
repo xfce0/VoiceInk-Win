@@ -192,7 +192,7 @@ def stylesheet_for(theme: ThemeTokens) -> str:
     """Build the complete stylesheet from one semantic palette."""
 
     return f"""
-QMainWindow, QWidget#root, QWidget#dashboardContent {{
+QMainWindow, QWidget#root, QWidget#dashboardContent, QWidget#transcribePage {{
     background: {theme.window};
     color: {theme.text};
 }}
@@ -203,6 +203,59 @@ QFrame#sidebar {{
 QScrollArea#dashboardScroll, QScrollArea#dashboardScroll > QWidget#qt_scrollarea_viewport {{
     background: {theme.window};
     border: none;
+}}
+QScrollArea#transcribeQueueScroll,
+QScrollArea#transcribeQueueScroll > QWidget#qt_scrollarea_viewport {{
+    background: {theme.window};
+    border: none;
+}}
+QFrame#transcribeDropZone {{
+    background: {theme.empty_card};
+    border: 2px dashed {theme.empty_border};
+    border-radius: 14px;
+}}
+QFrame#transcribeDropZone:hover {{
+    border-color: {theme.accent};
+}}
+QFrame#transcribeItem {{
+    background: {theme.card};
+    border: 1px solid {theme.card_border};
+    border-radius: 12px;
+}}
+QLabel#pageError {{
+    background: {theme.error_bg};
+    color: {theme.error_text};
+    border-radius: 8px;
+    padding: 8px 10px;
+}}
+QTextEdit {{
+    background: {theme.empty_card};
+    color: {theme.text};
+    border: 1px solid {theme.card_border};
+    border-radius: 8px;
+    padding: 8px;
+}}
+QTabWidget::pane {{
+    border: none;
+}}
+QTabBar::tab {{
+    color: {theme.muted};
+    padding: 6px 10px;
+}}
+QTabBar::tab:selected {{
+    color: {theme.accent};
+    font-weight: 700;
+}}
+QProgressBar {{
+    background: {theme.empty_card};
+    border: 1px solid {theme.card_border};
+    border-radius: 4px;
+    min-height: 6px;
+    max-height: 6px;
+}}
+QProgressBar::chunk {{
+    background: {theme.accent};
+    border-radius: 4px;
 }}
 QScrollBar:vertical {{
     background: {theme.window};
