@@ -23,6 +23,7 @@ class ThemeTokens:
     nav_hover: str
     nav_selected: str
     nav_selected_border: str
+    nav_focus_border: str
     card: str
     card_border: str
     empty_card: str
@@ -64,10 +65,11 @@ LIGHT_THEME = ThemeTokens(
     border="#d5d5dc",
     text="#202024",
     muted="#6d6d77",
-    disabled="#9797a1",
+    disabled="#62626e",
     nav_hover="#dedee5",
     nav_selected="#f0a568",
     nav_selected_border="#d9823b",
+    nav_focus_border="#8c440e",
     card="#ffffff",
     card_border="#dfdfe5",
     empty_card="#eeeeF2",
@@ -109,10 +111,11 @@ DARK_THEME = ThemeTokens(
     border="#3a3b43",
     text="#f4f4f5",
     muted="#a2a3ad",
-    disabled="#696b76",
+    disabled="#aeb0ba",
     nav_hover="#30323a",
     nav_selected="#4a3024",
     nav_selected_border="#a65a2b",
+    nav_focus_border="#f4b27c",
     card="#2a2b30",
     card_border="#3a3b43",
     empty_card="#25262b",
@@ -231,18 +234,34 @@ QPushButton#navButton {{
     border: 1px solid transparent;
     border-radius: 10px;
     color: {theme.text};
-    padding: 6px;
+    padding: 6px 10px 6px 8px;
+    text-align: left;
 }}
 QPushButton#navButton:hover {{
     background: {theme.nav_hover};
+    color: {theme.text};
 }}
 QPushButton#navButton:checked {{
+    background: {theme.nav_selected};
+    border-color: {theme.nav_selected_border};
+    color: {theme.text};
+}}
+QPushButton#navButton:checked:hover {{
     background: {theme.nav_selected};
     border-color: {theme.nav_selected_border};
 }}
 QPushButton#navButton:disabled {{
     background: transparent;
     color: {theme.disabled};
+    border-color: transparent;
+}}
+QPushButton#navButton:disabled:hover {{
+    background: transparent;
+    color: {theme.disabled};
+    border-color: transparent;
+}}
+QPushButton#navButton:focus {{
+    border-color: {theme.nav_focus_border};
 }}
 QFrame#card, QFrame#transcriptCard {{
     background: {theme.card};

@@ -26,6 +26,10 @@ from .qt_icons import sidebar_icon
 from .theme import ThemeMode, ThemeTokens, stylesheet_for, theme_for
 from .widgets import WaveformWidget
 
+SIDEBAR_WIDTH = 208
+SIDEBAR_ITEM_HEIGHT = 44
+SIDEBAR_ICON_SIZE = 28
+
 
 class FloatingRecorderWindow(QFrame):
     """Cross-platform floating panel; OS tray/activation policies stay outside this class."""
@@ -121,6 +125,7 @@ class FloatingRecorderWindow(QFrame):
 
     def _render(self, snapshot: ShellSnapshot) -> None:
         labels = {
+            ShellState.UNAVAILABLE: ("Unavailable", "Unavailable"),
             ShellState.IDLE: ("Ready", "Start recording"),
             ShellState.RECORDING: ("Listening", "Stop recording"),
             ShellState.PROCESSING: ("Transcribing", "Working..."),
@@ -133,7 +138,18 @@ class FloatingRecorderWindow(QFrame):
             status = snapshot.error or status
         self._status.setText(status)
         self._record_button.setText(action)
-        self._record_button.setEnabled(snapshot.state is not ShellState.PROCESSING)
+        unavailable = snapshot.state is ShellState.UNAVAILABLE
+        self._record_button.setEnabled(
+            snapshot.state is not ShellState.PROCESSING and not unavailable
+        )
+        if unavailable:
+            self._record_button.setAccessibleName("Recording unavailable")
+            self._record_button.setAccessibleDescription(
+                "Microphone capture is not connected in this build."
+            )
+        else:
+            self._record_button.setAccessibleName("Record")
+            self._record_button.setAccessibleDescription("Start or stop recording")
         self._record_button.setProperty("recording", snapshot.state is ShellState.RECORDING)
         self._record_button.style().unpolish(self._record_button)
         self._record_button.style().polish(self._record_button)
@@ -152,6 +168,9 @@ class MainWindow(QMainWindow):
         self._theme = theme or theme_for(ThemeMode.LIGHT)
         self._controller = controller
         self._unsubscribe = controller.subscribe(self._render)
+        self._theme_signal = None
+        self._theme_callback = None
+        self._disposed = False
         self._recorder = FloatingRecorderWindow(controller, self, self._theme)
         self.setWindowTitle("VoiceInk")
         self.setMinimumSize(860, 600)
@@ -173,26 +192,27 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame(self)
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(68)
+        sidebar.setFixedWidth(SIDEBAR_WIDTH)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(12, 18, 12, 14)
-        layout.setSpacing(4)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(6)
 
         for index, item in enumerate(SIDEBAR_ITEMS):
             item_container = QWidget(sidebar)
             item_container.setObjectName("navItem")
-            item_container.setFixedSize(44, 44)
+            item_container.setMinimumHeight(SIDEBAR_ITEM_HEIGHT)
             item_container.setToolTip(item.label)
             item_container.setAccessibleName(item.label)
             item_container.setAccessibleDescription(f"{item.label} navigation destination")
             item_layout = QHBoxLayout(item_container)
             item_layout.setContentsMargins(0, 0, 0, 0)
-            button = QPushButton(item_container)
+            button = QPushButton(item.label, item_container)
             button.setObjectName("navButton")
             button.setCheckable(True)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            button.setIcon(sidebar_icon(item))
-            button.setIconSize(QSize(28, 28))
+            button.setIcon(sidebar_icon(item, SIDEBAR_ICON_SIZE))
+            button.setIconSize(QSize(SIDEBAR_ICON_SIZE, SIDEBAR_ICON_SIZE))
+            button.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             button.setToolTip(item.label)
             button.setAccessibleName(item.label)
             button.setAccessibleDescription(f"{item.label} navigation destination")
@@ -211,6 +231,25 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(stylesheet_for(theme))
         self._recorder.apply_theme(theme)
 
+    def connect_theme_signal(self, signal, callback) -> None:
+        """Subscribe to a Qt theme signal and retain both sides for cleanup."""
+        self._disconnect_theme_signal()
+        signal.connect(callback)
+        self._theme_signal = signal
+        self._theme_callback = callback
+
+    def _disconnect_theme_signal(self) -> None:
+        signal = self._theme_signal
+        callback = self._theme_callback
+        self._theme_signal = None
+        self._theme_callback = None
+        if signal is None or callback is None:
+            return
+        try:
+            signal.disconnect(callback)
+        except (RuntimeError, TypeError):
+            pass
+
     def _build_dashboard(self) -> QScrollArea:
         scroll = QScrollArea(self)
         scroll.setObjectName("dashboardScroll")
@@ -226,9 +265,12 @@ class MainWindow(QMainWindow):
         greeting.setObjectName("pageGreeting")
         greeting.setFont(QFont("Arial Rounded MT Bold", 28, QFont.Weight.Bold))
         content_layout.addWidget(greeting)
-        subtext = QLabel("Record a thought, then let VoiceInk turn it into clear text.", content)
-        subtext.setObjectName("heroSubtext")
-        content_layout.addWidget(subtext)
+        self._page_subtext = QLabel(
+            "Recording cannot start because microphone capture and ASR are not included.",
+            content,
+        )
+        self._page_subtext.setObjectName("heroSubtext")
+        content_layout.addWidget(self._page_subtext)
 
         self._hero = self._build_hero(content)
         content_layout.addWidget(self._hero)
@@ -248,11 +290,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(hero)
         layout.setContentsMargins(28, 18, 28, 18)
         layout.setSpacing(10)
-        self._hero_headline = QLabel("Start recording to build VoiceInk progress.", hero)
+        self._hero_headline = QLabel("Recording is unavailable in this build.", hero)
         self._hero_headline.setObjectName("heroHeadline")
         self._hero_headline.setWordWrap(True)
         layout.addWidget(self._hero_headline)
-        self._hero_detail = QLabel("Your first milestone appears after one session.", hero)
+        self._hero_detail = QLabel("Microphone capture and ASR are not included.", hero)
         self._hero_detail.setObjectName("heroDetail")
         self._hero_detail.setWordWrap(True)
         layout.addWidget(self._hero_detail)
@@ -287,7 +329,8 @@ class MainWindow(QMainWindow):
         self._transcript_metadata.setObjectName("metadata")
         body_layout.addWidget(self._transcript_metadata)
         self._transcript_text = QLabel(
-            "Your first transcript will appear here after you record.", self._transcript_body
+            "Transcripts are unavailable because recording and ASR are not included.",
+            self._transcript_body,
         )
         self._transcript_text.setObjectName("transcriptText")
         self._transcript_text.setWordWrap(True)
@@ -297,6 +340,7 @@ class MainWindow(QMainWindow):
 
     def _render(self, snapshot: ShellSnapshot) -> None:
         state_titles = {
+            ShellState.UNAVAILABLE: "Recording unavailable",
             ShellState.IDLE: "Ready for your voice",
             ShellState.RECORDING: "Recording in progress",
             ShellState.PROCESSING: "Transcribing locally",
@@ -309,13 +353,30 @@ class MainWindow(QMainWindow):
         self._state_pill.style().unpolish(self._state_pill)
         self._state_pill.style().polish(self._state_pill)
 
-        if snapshot.state is ShellState.TRANSCRIPT_READY:
+        if snapshot.state is ShellState.UNAVAILABLE:
+            self._page_subtext.setText(
+                "Recording cannot start because microphone capture and ASR are not included."
+            )
+            self._hero_headline.setText("Recording is unavailable in this build.")
+            self._hero_detail.setText("Microphone capture and ASR are not included.")
+            self._transcript_body.setObjectName("emptyCard")
+            self._transcript_metadata.setText("Capability unavailable")
+            self._transcript_text.setText(
+                "Transcripts are unavailable because recording and ASR are not included."
+            )
+        elif snapshot.state is ShellState.TRANSCRIPT_READY:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("You just turned a thought into text.")
             self._hero_detail.setText("Keep the momentum going with another local session.")
             self._transcript_body.setObjectName("transcriptCard")
             self._transcript_metadata.setText(datetime.now().strftime("Today, %H:%M"))
             self._transcript_text.setText(snapshot.transcript)
         elif snapshot.state is ShellState.EMPTY:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("No words came through this time.")
             self._hero_detail.setText("Try again a little closer to the microphone.")
             self._transcript_body.setObjectName("emptyCard")
@@ -324,6 +385,9 @@ class MainWindow(QMainWindow):
                 "VoiceInk did not detect speech. Start another session to try again."
             )
         elif snapshot.state is ShellState.ERROR:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("VoiceInk could not finish that session.")
             self._hero_detail.setText(
                 "The failure is visible here so it can be fixed before the next recording."
@@ -332,12 +396,29 @@ class MainWindow(QMainWindow):
             self._transcript_metadata.setText("Transcription error")
             self._transcript_text.setText(snapshot.error)
         elif snapshot.state is ShellState.RECORDING:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("Listening for your next thought.")
             self._hero_detail.setText("Stop when you are finished; transcription stays local.")
+            self._transcript_body.setObjectName("emptyCard")
+            self._transcript_metadata.setText("Recording in progress")
+            self._transcript_text.setText(
+                "Your transcript will appear here when recording is complete."
+            )
         elif snapshot.state is ShellState.PROCESSING:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("Turning audio into clear text.")
             self._hero_detail.setText("The local adapter is processing this session.")
+            self._transcript_body.setObjectName("emptyCard")
+            self._transcript_metadata.setText("Transcription in progress")
+            self._transcript_text.setText("VoiceInk is preparing your transcript.")
         else:
+            self._page_subtext.setText(
+                "Record a thought, then let VoiceInk turn it into clear text."
+            )
             self._hero_headline.setText("Start recording to build VoiceInk progress.")
             self._hero_detail.setText("Your first milestone appears after one session.")
             self._transcript_body.setObjectName("emptyCard")
@@ -360,6 +441,13 @@ class MainWindow(QMainWindow):
         return "Hi."
 
     def closeEvent(self, event) -> None:
+        self.dispose()
+        event.accept()
+
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
+        self._disconnect_theme_signal()
         self._recorder.dispose()
         self._unsubscribe()
-        event.accept()

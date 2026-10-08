@@ -3,9 +3,49 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
+from typing import Protocol
 
-from voiceink_win.application import ShellController
-from voiceink_win.infrastructure import FakeShellBackend
+from voiceink_win.desktop_composition import DesktopComposition, build_desktop_composition
+
+
+class _Window(Protocol):
+    def show(self) -> None: ...
+
+
+def _run_session(
+    composition: DesktopComposition,
+    create_window: Callable[[], _Window],
+    event_loop: Callable[[], int],
+    after_show: Callable[[_Window], None] | None = None,
+    cleanup_window: Callable[[_Window], None] | None = None,
+) -> int:
+    window: _Window | None = None
+    try:
+        window = create_window()
+        window.show()
+        if after_show is not None:
+            after_show(window)
+        result = event_loop()
+    except BaseException:
+        # Window cleanup must not replace the original session failure.
+        try:
+            if window is not None and cleanup_window is not None:
+                cleanup_window(window)
+        except BaseException:
+            pass
+        try:
+            composition.close()
+        except BaseException:
+            pass
+        raise
+    else:
+        try:
+            if window is not None and cleanup_window is not None:
+                cleanup_window(window)
+        finally:
+            composition.close()
+        return result
 
 
 def main(*, smoke: bool = False) -> int:
@@ -18,7 +58,7 @@ def main(*, smoke: bool = False) -> int:
             "PySide6 is optional. Install the GUI extra with `pip install -e '.[gui]'`."
         ) from error
 
-    application = QApplication(sys.argv)
+    application = QApplication.instance() or QApplication(sys.argv)
     application.setApplicationName("VoiceInk")
     from .theme import detect_system_theme, theme_for
 
@@ -31,17 +71,29 @@ def main(*, smoke: bool = False) -> int:
 
     from .main_window import MainWindow
 
-    controller = ShellController(FakeShellBackend())
-    window = MainWindow(controller, theme=theme)
+    composition = build_desktop_composition()
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
-    if color_scheme_changed is not None:
-        color_scheme_changed.connect(
-            lambda *_: window.apply_theme(theme_for(detect_system_theme(application)))
-        )
-    window.show()
-    if smoke:
-        QTimer.singleShot(100, application.quit)
-    return application.exec()
+
+    def create_window() -> MainWindow:
+        window = MainWindow(composition.controller, theme=theme)
+        if color_scheme_changed is not None:
+            window.connect_theme_signal(
+                color_scheme_changed,
+                lambda *_: window.apply_theme(theme_for(detect_system_theme(application))),
+            )
+        return window
+
+    def after_show(_window: _Window) -> None:
+        if smoke:
+            QTimer.singleShot(100, application.quit)
+
+    return _run_session(
+        composition,
+        create_window,
+        application.exec,
+        after_show,
+        cleanup_window=lambda window: window.dispose(),
+    )
 
 
 if __name__ == "__main__":

@@ -15,9 +15,7 @@ class WaveformWidget(QWidget):
         self._active = False
         self._frame = 0
         self._color = QColor(color)
-        self._timer = QTimer(self)
-        self._timer.setInterval(90)
-        self._timer.timeout.connect(self._advance)
+        self._timer: QTimer | None = None
         self.setMinimumSize(88, 32)
 
     def sizeHint(self) -> QSize:
@@ -28,8 +26,12 @@ class WaveformWidget(QWidget):
             return
         self._active = active
         if active:
+            if self._timer is None:
+                self._timer = QTimer(self)
+                self._timer.setInterval(90)
+                self._timer.timeout.connect(self._advance)
             self._timer.start()
-        else:
+        elif self._timer is not None:
             self._timer.stop()
         self.update()
 

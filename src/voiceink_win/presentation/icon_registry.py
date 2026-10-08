@@ -1,4 +1,4 @@
-"""Pure data registry for the compact navigation rail."""
+"""Pure data registry for the expanded navigation sidebar."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ class SidebarItem:
     label: str
     icon_name: str
     tile_color: str
+    icon_foreground: str
     enabled: bool
 
 
@@ -52,13 +53,13 @@ LUCIDE_PATHS = {
 
 
 SIDEBAR_ITEMS = (
-    SidebarItem("Dashboard", "dashboard", "#e8892e", True),
-    SidebarItem("Modes", "modes", "#6256c9", False),
-    SidebarItem("Transcribe", "transcribe", "#db594b", False),
-    SidebarItem("History", "history", "#df4f82", False),
-    SidebarItem("Dictionary", "dictionary", "#3478d4", False),
-    SidebarItem("AI Models", "models", "#986d4b", False),
-    SidebarItem("Audio", "audio", "#7d8089", False),
-    SidebarItem("Settings", "settings", "#7d8089", False),
-    SidebarItem("VoiceInk Pro", "license", "#4eaf6c", False),
+    SidebarItem("Dashboard", "dashboard", "#e8892e", "#24170f", True),
+    SidebarItem("Modes", "modes", "#6256c9", "#ffffff", False),
+    SidebarItem("Transcribe", "transcribe", "#db594b", "#ffffff", False),
+    SidebarItem("History", "history", "#df4f82", "#2a101d", False),
+    SidebarItem("Dictionary", "dictionary", "#3478d4", "#ffffff", False),
+    SidebarItem("AI Models", "models", "#986d4b", "#24150d", False),
+    SidebarItem("Audio", "audio", "#0f766e", "#ffffff", False),
+    SidebarItem("Settings", "settings", "#64748b", "#ffffff", False),
+    SidebarItem("VoiceInk Pro", "license", "#4eaf6c", "#12351f", False),
 )
