@@ -216,11 +216,16 @@ class TranscribePageController:
             item.failure = None
             self._publish_locked()
         with self._lock:
-            if self._admission_active_locked():
-                return False
+            current_admission = self._admission_thread
+            if current_admission is not None and current_admission.is_alive():
+                target = self._retry_after_admission
+                args = (item_id, current_admission)
+            else:
+                target = self._admit_items
+                args = ((item_id,),)
             self._admission_thread = Thread(
-                target=self._admit_items,
-                args=((item_id,),),
+                target=target,
+                args=args,
                 name="transcribe-page-retry",
                 daemon=True,
             )
@@ -434,6 +439,16 @@ class TranscribePageController:
             with self._lock:
                 if self._admission_thread is current_thread():
                     self._admission_thread = None
+
+    def _retry_after_admission(self, item_id: str, previous: Thread) -> None:
+        if previous is not current_thread():
+            previous.join()
+        with self._lock:
+            if self._closed or self._item(item_id) is None:
+                if self._admission_thread is current_thread():
+                    self._admission_thread = None
+                return
+        self._admit_items((item_id,))
 
     def _watch_item(self, item_id: str, subscription: ObservationSubscription) -> None:
         try:
