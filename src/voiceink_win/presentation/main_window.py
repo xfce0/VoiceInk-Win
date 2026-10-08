@@ -26,6 +26,10 @@ from .qt_icons import sidebar_icon
 from .theme import ThemeMode, ThemeTokens, stylesheet_for, theme_for
 from .widgets import WaveformWidget
 
+SIDEBAR_WIDTH = 208
+SIDEBAR_ITEM_HEIGHT = 44
+SIDEBAR_ICON_SIZE = 28
+
 
 class FloatingRecorderWindow(QFrame):
     """Cross-platform floating panel; OS tray/activation policies stay outside this class."""
@@ -185,26 +189,27 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame(self)
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(68)
+        sidebar.setFixedWidth(SIDEBAR_WIDTH)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(12, 18, 12, 14)
-        layout.setSpacing(4)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(6)
 
         for index, item in enumerate(SIDEBAR_ITEMS):
             item_container = QWidget(sidebar)
             item_container.setObjectName("navItem")
-            item_container.setFixedSize(44, 44)
+            item_container.setMinimumHeight(SIDEBAR_ITEM_HEIGHT)
             item_container.setToolTip(item.label)
             item_container.setAccessibleName(item.label)
             item_container.setAccessibleDescription(f"{item.label} navigation destination")
             item_layout = QHBoxLayout(item_container)
             item_layout.setContentsMargins(0, 0, 0, 0)
-            button = QPushButton(item_container)
+            button = QPushButton(item.label, item_container)
             button.setObjectName("navButton")
             button.setCheckable(True)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            button.setIcon(sidebar_icon(item))
-            button.setIconSize(QSize(28, 28))
+            button.setIcon(sidebar_icon(item, SIDEBAR_ICON_SIZE))
+            button.setIconSize(QSize(SIDEBAR_ICON_SIZE, SIDEBAR_ICON_SIZE))
+            button.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             button.setToolTip(item.label)
             button.setAccessibleName(item.label)
             button.setAccessibleDescription(f"{item.label} navigation destination")

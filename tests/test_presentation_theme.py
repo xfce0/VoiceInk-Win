@@ -66,7 +66,9 @@ def test_sidebar_registry_matches_reference_order_and_has_unique_icons() -> None
         "VoiceInk Pro",
     ]
     assert len({item.icon_name for item in SIDEBAR_ITEMS}) == len(SIDEBAR_ITEMS)
+    assert len({item.tile_color for item in SIDEBAR_ITEMS}) == len(SIDEBAR_ITEMS)
     assert all(item.icon_name in LUCIDE_PATHS for item in SIDEBAR_ITEMS)
+    assert all(item.icon_foreground for item in SIDEBAR_ITEMS)
     assert all("d=" in path or "x=" in path for path in LUCIDE_PATHS.values())
     assert SIDEBAR_ITEMS[0].enabled
     assert not any(item.enabled for item in SIDEBAR_ITEMS[1:])
