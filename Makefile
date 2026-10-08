@@ -61,7 +61,7 @@ endif
 
 ## build-deps: Create the build environment and verify the exact GUI/PyInstaller extras
 build-deps: require-windows
-	$(PYTHON) -c "import platform, sys; version = sys.version_info[:2]; allowed = {(3, 12), (3, 13), (3, 14)}; raise SystemExit('Python 3.12, 3.13, or 3.14 is required; found ' + platform.python_version()) if version not in allowed else None"
+	$(PYTHON) -c "import platform, sys; version = sys.version_info[:2]; allowed = {(3, 12), (3, 13), (3, 14)}; sys.exit('Python 3.12, 3.13, or 3.14 is required; found ' + platform.python_version()) if version not in allowed else None"
 	$(PYTHON) -m venv $(VENV)
 	$(VENV_PIP) install --upgrade "pip==$(PIP_VERSION)"
 	$(VENV_PIP) install --editable ".[gui,build]" --constraint "$(BUILD_CONSTRAINTS)"
