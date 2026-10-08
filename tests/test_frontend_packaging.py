@@ -25,6 +25,46 @@ def test_make_build_contract_is_windows_only_and_reproducible() -> None:
     )
 
 
+def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstaller_commands(
+    tmp_path: Path, monkeypatch
+) -> None:
+    commands: list[list[str]] = []
+    icon_output = tmp_path / "build" / "dist" / "voiceink-shell.ico"
+    monkeypatch.setattr(frontend_build, "ICON_OUTPUT", icon_output)
+
+    def fake_run(command, **kwargs) -> None:
+        commands.append(command)
+        if command[1] == str(frontend_build.ICON_BUILDER):
+            icon_output.parent.mkdir(parents=True)
+            icon_output.write_bytes(b"ico")
+
+    monkeypatch.setattr(
+        frontend_build,
+        "_run",
+        fake_run,
+    )
+
+    frontend_build._generate_icon("python")
+    frontend_build._build_executable("voiceink-shell", "--windowed", "python")
+    frontend_build._build_executable("voiceink-shell-smoke", "--console", "python")
+
+    assert commands[0] == [
+        "python",
+        str(frontend_build.ICON_BUILDER),
+        str(frontend_build.ICON_SOURCE),
+        str(icon_output),
+    ]
+    pyinstaller_commands = commands[1:]
+    assert len(pyinstaller_commands) == 2
+    assert all(
+        command[command.index("--icon") + 1] == str(icon_output) for command in pyinstaller_commands
+    )
+    assert 'fill="#db594b"' in frontend_build.ICON_SOURCE.read_text(encoding="utf-8")
+    assert 'd="M3 12h2l1.5-5L9 19l2-14 2.5 11 1.5-4H21"' in frontend_build.ICON_SOURCE.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_frontend_build_refuses_unrelated_dist_entries(tmp_path: Path, monkeypatch) -> None:
     dist = tmp_path / "dist"
     dist.mkdir()

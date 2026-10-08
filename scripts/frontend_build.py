@@ -12,6 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 WORK = ROOT / "build" / "frontend"
+ICON_BUILD_DIR = ROOT / "build" / "dist"
+ICON_SOURCE = ROOT / "packaging" / "voiceink-shell-windows-x64" / "voiceink-shell.svg"
+ICON_BUILDER = ROOT / "scripts" / "build_icon.py"
+ICON_OUTPUT = ICON_BUILD_DIR / "voiceink-shell.ico"
 PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
 VALIDATOR = ROOT / "scripts" / "frontend_package_smoke.py"
 ENTRYPOINT = ROOT / "scripts" / "frontend_entrypoint.py"
@@ -106,12 +110,22 @@ def _build_executable(name: str, mode: str, python: str) -> None:
         str(workpath),
         "--specpath",
         str(specpath),
+        "--icon",
+        str(ICON_OUTPUT),
         mode,
         "--name",
         name,
         str(ENTRYPOINT),
     ]
     _run(command)
+
+
+def _generate_icon(python: str) -> None:
+    if not ICON_SOURCE.is_file():
+        raise FrontendBuildError(f"Missing repository-owned SVG icon source: {ICON_SOURCE}")
+    _run([python, str(ICON_BUILDER), str(ICON_SOURCE), str(ICON_OUTPUT)])
+    if not ICON_OUTPUT.is_file() or ICON_OUTPUT.stat().st_size == 0:
+        raise FrontendBuildError(f"Icon builder did not produce a non-empty {ICON_OUTPUT}")
 
 
 def _validate_package(python: str) -> None:
@@ -147,6 +161,7 @@ def main() -> int:
         _require_supported_host()
         _prepare_outputs()
         python = sys.executable
+        _generate_icon(python)
         _build_executable("voiceink-shell", "--windowed", python)
         _build_executable("voiceink-shell-smoke", "--console", python)
         _validate_package(python)
