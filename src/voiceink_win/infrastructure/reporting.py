@@ -45,7 +45,7 @@ def sanitize_report_value(value: Any, *, key: str = "") -> Any:
             for item_key, item in value.items()
             if str(item_key).casefold() not in _REDACTED_KEYS
         }
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [sanitize_report_value(item) for item in value]
     if isinstance(value, str):
         return _ABSOLUTE_PATH.sub("<path>", value)

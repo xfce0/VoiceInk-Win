@@ -401,7 +401,11 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
     try:
         report["failure_stage"] = "application_start"
         capabilities = application.capabilities()
-        application.start()
+        try:
+            application.start()
+        except BaseException:
+            report["runtime_diagnostics"] = application.diagnostics
+            raise
         runtime_started = True
         report["failure_stage"] = "runtime_ready"
         _emit_event(

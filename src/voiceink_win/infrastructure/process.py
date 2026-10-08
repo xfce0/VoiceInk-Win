@@ -12,8 +12,8 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from ctypes import wintypes
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Protocol
@@ -21,9 +21,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from voiceink_win.domain import ConfigurationError, MissingModelError, RuntimeUnavailableError
+from voiceink_win.domain import (
+    ConfigurationError,
+    MissingModelError,
+    RuntimeRecoveryPendingError,
+    RuntimeUnavailableError,
+)
 
 from .authentication import ASR_API_KEY_ENV, ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce
+from .startup_diagnostics import StartupDiagnostics
 
 
 class ProcessHandle(Protocol):
@@ -41,6 +47,12 @@ class ProcessHandle(Protocol):
 class ReadinessProbe(Protocol):
     def ready(self, timeout: float) -> bool: ...
 
+    def set_nonce(self, nonce: str) -> None: ...
+
+    def set_api_key(self, api_key: str) -> None: ...
+
+    def clear_credentials(self) -> None: ...
+
 
 class MonotonicClock(Protocol):
     def monotonic(self) -> float: ...
@@ -54,6 +66,16 @@ class _SystemClock:
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
+
+
+class _ProcessLifecycleState(StrEnum):
+    NOT_CREATED = "not_created"
+    CREATED_SUSPENDED = "created_suspended"
+    RUNNING = "running"
+    STOP_REQUESTED = "stop_requested"
+    TERMINATION_FAILED = "termination_failed"
+    EXITED = "exited"
+    REAPED = "reaped"
 
 
 def _run_process_reaper(
@@ -332,6 +354,10 @@ class UrllibReadinessProbe:
             raise ConfigurationError("sidecar readiness API key must be non-empty")
         self._api_key = api_key
 
+    def clear_credentials(self) -> None:
+        self._nonce = None
+        self._api_key = None
+
     def ready(self, timeout: float) -> bool:
         headers: dict[str, str] = {}
         if self._nonce is not None:
@@ -366,6 +392,7 @@ class SubprocessSupervisor:
         readiness_probe: ReadinessProbe | None = None,
         popen_factory: Callable[..., ProcessHandle] = subprocess.Popen,
         clock: MonotonicClock | None = None,
+        diagnostics: StartupDiagnostics | None = None,
     ) -> None:
         self.config = config
         self._verifier = verifier or RuntimeArtifactVerifier()
@@ -374,7 +401,10 @@ class SubprocessSupervisor:
         )
         self._popen_factory = popen_factory
         self._clock = clock or _SystemClock()
+        self._diagnostics = diagnostics or StartupDiagnostics()
         self._process: ProcessHandle | None = None
+        self._process_state = _ProcessLifecycleState.NOT_CREATED
+        self._termination_lock = Lock()
         self._windows_job = None
         self._artifact_locks: list[_WindowsArtifactReadLock] = []
         self._artifact_recovery: set[_WindowsArtifactReadLock] = set()
@@ -390,7 +420,13 @@ class SubprocessSupervisor:
         self._process_reaper_done.set()
         self._nonce: str | None = None
         self._api_key: str | None = None
+        self._credential_recovery_pending = False
+        self._unsafe_tree_recovery_pending = False
         self.process_tree_mode = "windows-taskkill" if os.name == "nt" else "posix-process-group"
+
+    @property
+    def diagnostics(self) -> StartupDiagnostics:
+        return self._diagnostics
 
     @property
     def nonce(self) -> str | None:
@@ -402,7 +438,7 @@ class SubprocessSupervisor:
 
     def start(self) -> None:
         if self._has_pending_cleanup_resources():
-            raise RuntimeUnavailableError("sidecar cleanup is still pending")
+            raise RuntimeRecoveryPendingError("sidecar cleanup is still pending")
         if self.is_running() and not self.reaper_owns_process():
             return
         if self._process is not None:
@@ -421,18 +457,45 @@ class SubprocessSupervisor:
             if errors:
                 raise ExceptionGroup("previous sidecar cleanup failed", errors)
             self._process = None
-        self._nonce = generate_nonce()
-        self._api_key = generate_nonce()
-        set_probe_nonce = getattr(self._readiness_probe, "set_nonce", None)
-        if set_probe_nonce is not None:
-            set_probe_nonce(self._nonce)
-        set_probe_api_key = getattr(self._readiness_probe, "set_api_key", None)
-        if set_probe_api_key is not None:
-            set_probe_api_key(self._api_key)
+            self._process_state = _ProcessLifecycleState.NOT_CREATED
+        self._diagnostics.reset()
+        phase = "configuration"
+        operation = "validate_endpoint"
         try:
-            if os.name == "nt":
-                for artifact in (self.config.executable, self.config.model):
-                    self._artifact_locks.append(_open_artifact_read_lock(artifact))
+            self._diagnostics.record(phase, operation, "validated")
+            self._nonce = generate_nonce()
+            operation = "set_nonce"
+            self._readiness_probe.set_nonce(self._nonce)
+            self._api_key = generate_nonce()
+            operation = "set_api_key"
+            self._readiness_probe.set_api_key(self._api_key)
+            sidecar_environment = {
+                key: os.environ[key]
+                for key in (
+                    "PATH",
+                    "SystemRoot",
+                    "TEMP",
+                    "TMP",
+                    "USERPROFILE",
+                    "LOCALAPPDATA",
+                    "CUDA_PATH",
+                    "CUDA_VISIBLE_DEVICES",
+                )
+                if key in os.environ
+            }
+            sidecar_environment[ASR_NONCE_ENV] = self._nonce
+            sidecar_environment[ASR_API_KEY_ENV] = self._api_key
+            kwargs = {
+                "shell": False,
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "env": sidecar_environment,
+            }
+            if os.name != "nt":
+                kwargs["start_new_session"] = True
+            phase = "artifact_verification"
+            operation = "verify_artifact"
             self._verifier.verify_manifest(
                 self.config.executable, self.config.executable_manifest, label="runtime executable"
             )
@@ -443,109 +506,117 @@ class SubprocessSupervisor:
                 self._verifier.identity(self.config.executable),
                 self._verifier.identity(self.config.model),
             )
-        except BaseException:
-            self._close_artifact_locks()
-            raise
-        sidecar_environment = {
-            key: os.environ[key]
-            for key in (
-                "PATH",
-                "SystemRoot",
-                "TEMP",
-                "TMP",
-                "USERPROFILE",
-                "LOCALAPPDATA",
-                "CUDA_PATH",
-                "CUDA_VISIBLE_DEVICES",
-            )
-            if key in os.environ
-        }
-        sidecar_environment[ASR_NONCE_ENV] = self._nonce
-        sidecar_environment[ASR_API_KEY_ENV] = self._api_key
-        kwargs = {
-            "shell": False,
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "env": sidecar_environment,
-        }
-        if os.name != "nt":
-            kwargs["start_new_session"] = True
-        try:
+            self._diagnostics.record(phase, operation, "verified")
             identities = (
                 self._verifier.identity(self.config.executable),
                 self._verifier.identity(self.config.model),
             )
             if identities != verified_identities:
                 raise ConfigurationError("runtime artifact identity changed before launch")
+            if os.name == "nt":
+                phase = "artifact_lease"
+                operation = "open_artifact"
+                for artifact in (self.config.executable, self.config.model):
+                    self._artifact_locks.append(_open_artifact_read_lock(artifact))
+                self._diagnostics.record(phase, operation, "acquired")
             windows_job = None
             resume = None
             if os.name == "nt":
                 from .media_process import WindowsJobObject, _resume_suspended_process
 
                 kwargs["creationflags"] = 0x00000004  # CREATE_SUSPENDED
+                phase = "job_assignment"
+                operation = "assign_job"
                 windows_job = WindowsJobObject(
                     max_processes=None,
                     max_process_memory_bytes=None,
                 )
                 resume = _resume_suspended_process
                 self._windows_job = windows_job
+            phase = "process_create_suspended" if os.name == "nt" else "process_create_suspended"
+            operation = "create_process"
+            self._process = self._popen_factory(self.config.argv(), **kwargs)
+            self._process_state = (
+                _ProcessLifecycleState.CREATED_SUSPENDED
+                if windows_job is not None
+                else _ProcessLifecycleState.RUNNING
+            )
+            self._diagnostics.record(phase, operation, "created")
+            if windows_job is not None and resume is not None:
+                phase = "job_assignment"
+                operation = "assign_job"
+                windows_job.assign(self._process)
+                self._diagnostics.record(phase, operation, "assigned")
+                phase = "artifact_revalidation"
+                operation = "revalidate_artifact"
                 for lock, manifest in zip(
                     self._artifact_locks,
                     (self.config.executable_manifest, self.config.model_manifest),
                     strict=True,
                 ):
                     lock.revalidate(manifest.sha256, manifest.allowed_path)
-            self._process = self._popen_factory(self.config.argv(), **kwargs)
-            if windows_job is not None and resume is not None:
-                windows_job.assign(self._process)
+                self._diagnostics.record(phase, operation, "revalidated")
+                phase = "resume"
+                operation = "resume_process"
                 resume(self._process.pid)
+                self._process_state = _ProcessLifecycleState.RUNNING
+                self._diagnostics.record(phase, operation, "resumed")
                 self.process_tree_mode = "windows-job-object-adapter"
         except BaseException as error:
+            failure = (
+                error
+                if isinstance(error, ConfigurationError)
+                else ConfigurationError("sidecar process could not be started", cause=error)
+            )
+            self._diagnostics.record_failure(phase, operation, failure)
+            cleanup_errors: list[BaseException] = []
             try:
-                reaper_started = False
-                if self._windows_job is not None and self._process is not None:
-
-                    def start_reaper(process: ProcessHandle) -> None:
-                        nonlocal reaper_started
-                        reaper_started = True
-                        self._start_process_reaper(process, pending_job=self._windows_job)
-
-                    _terminate_job_process(
-                        self._windows_job,
-                        self._process,
-                        self._clock.monotonic() + 1.0,
-                        clock=self._clock,
-                        start_reaper=start_reaper,
-                    )
-                elif os.name == "nt" and self._process is not None and self._process.poll() is None:
-                    self._kill_windows_tree(self._process, clock=self._clock)
-                    self._process.kill()
-                    cleanup_deadline = self._clock.monotonic() + 1.0
-                    try:
-                        self._process.wait(
-                            timeout=max(0.0, cleanup_deadline - self._clock.monotonic())
-                        )
-                    except (TimeoutError, subprocess.TimeoutExpired):
-                        self._start_process_reaper(self._process)
+                self._stop_owned_process(self._clock.monotonic() + 1.0)
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+                self._diagnostics.record_cleanup_failure("terminate_process", cleanup_error)
             finally:
-                errors: list[BaseException] = []
                 if self._windows_job is not None:
                     try:
-                        if not reaper_started:
-                            self._close_job(self._windows_job)
+                        job = self._windows_job
+                        if not self._defer_job_until_reaped(job):
+                            self._close_job(job)
                     except BaseException as cleanup_error:
-                        errors.append(cleanup_error)
+                        cleanup_errors.append(cleanup_error)
+                        self._diagnostics.record_cleanup_failure("close_resource", cleanup_error)
                 try:
                     self._close_artifact_locks()
                 except BaseException as cleanup_error:
-                    errors.append(cleanup_error)
-            if errors:
-                raise ExceptionGroup("sidecar startup cleanup failed", errors) from error
-            self._nonce = None
-            if isinstance(error, ConfigurationError):
-                raise
-            raise ConfigurationError("sidecar process could not be started", cause=error) from error
+                    cleanup_errors.append(cleanup_error)
+                    self._diagnostics.record_cleanup_failure("close_resource", cleanup_error)
+            try:
+                self.clear_credentials()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+                self._diagnostics.record_cleanup_failure("close_resource", cleanup_error)
+            cleanup_pending = not self.cleanup_complete()
+            if cleanup_pending:
+                pending = RuntimeRecoveryPendingError("sidecar cleanup is still pending")
+                cleanup_errors.append(pending)
+                self._diagnostics.record_cleanup_failure("wait_for_exit", pending)
+            self._diagnostics.set_cleanup_outcome(
+                "pending" if cleanup_pending else "failed" if cleanup_errors else "complete"
+            )
+            raise failure from error
+
+    def clear_credentials(self) -> None:
+        errors: list[BaseException] = []
+        self._nonce = None
+        self._api_key = None
+        clear_credentials = getattr(self._readiness_probe, "clear_credentials", None)
+        if clear_credentials is not None:
+            try:
+                clear_credentials()
+            except BaseException as error:
+                errors.append(error)
+        self._credential_recovery_pending = bool(errors)
+        if errors:
+            raise ExceptionGroup("sidecar credential cleanup failed", errors)
 
     def wait_ready(self, deadline: float) -> bool:
         while self._clock.monotonic() < deadline:
@@ -561,12 +632,84 @@ class SubprocessSupervisor:
         return self._process is not None and self._process.poll() is None
 
     def terminate(self, deadline: float) -> None:
+        self._stop_owned_process(deadline)
+
+    def kill(self, deadline: float | None = None) -> None:
+        cleanup_deadline = deadline
+        if cleanup_deadline is None:
+            cleanup_deadline = self._clock.monotonic() + 1.0
+        self._stop_owned_process(cleanup_deadline)
+
+    def _stop_owned_process(self, deadline: float) -> None:
         process = self._process
         if process is None:
+            self._diagnostics.record("cleanup", "get_process_state", "process_not_owned")
             return
+        with self._termination_lock:
+            if self._process_state is _ProcessLifecycleState.REAPED:
+                self._diagnostics.record("cleanup", "get_process_state", "process_reaped")
+                return
+            if self._process_state is _ProcessLifecycleState.STOP_REQUESTED:
+                self._diagnostics.record(
+                    "cleanup", "terminate_process", "termination_already_requested"
+                )
+                return
+            try:
+                already_stopped = process.poll() is not None
+            except BaseException:
+                already_stopped = False
+            escalation = self._process_state is _ProcessLifecycleState.TERMINATION_FAILED
+            if not already_stopped:
+                self._process_state = _ProcessLifecycleState.STOP_REQUESTED
+        if already_stopped:
+            self._process_state = _ProcessLifecycleState.EXITED
+            self._diagnostics.record("cleanup", "get_process_state", "process_already_stopped")
+            try:
+                process.wait(timeout=max(0.0, deadline - self._clock.monotonic()))
+                self._process_state = _ProcessLifecycleState.REAPED
+                self._diagnostics.record("cleanup", "reap_process", "reaped")
+            except (TimeoutError, subprocess.TimeoutExpired):
+                self._diagnostics.record("cleanup", "wait_for_exit", "deadline_exceeded")
+                self._start_process_reaper(process)
+            finally:
+                self._close_cleanup_resources()
+            return
+        self._diagnostics.record(
+            "cleanup", "terminate_process", "escalation_requested" if escalation else "requested"
+        )
+        try:
+            self._terminate_process_once(process, deadline, escalation=escalation)
+            if not _process_is_alive(process):
+                self._process_state = _ProcessLifecycleState.REAPED
+        except RuntimeRecoveryPendingError:
+            self._unsafe_tree_recovery_pending = True
+            if _process_is_alive(process):
+                self._process_state = _ProcessLifecycleState.TERMINATION_FAILED
+                self._start_process_reaper(process, pending_job=self._windows_job)
+            else:
+                self._process_state = _ProcessLifecycleState.REAPED
+            raise
+        except BaseException:
+            if _process_is_alive(process):
+                self._process_state = _ProcessLifecycleState.TERMINATION_FAILED
+                self._start_process_reaper(process, pending_job=self._windows_job)
+            else:
+                self._process_state = _ProcessLifecycleState.REAPED
+            raise
+        finally:
+            if (
+                not _process_is_alive(process)
+                and self._process_state is not _ProcessLifecycleState.REAPED
+            ):
+                self._process_state = _ProcessLifecycleState.REAPED
+                self._diagnostics.record("cleanup", "reap_process", "reaped")
+            self._close_cleanup_resources()
+
+    def _terminate_process_once(
+        self, process: ProcessHandle, deadline: float, *, escalation: bool = False
+    ) -> None:
         if self._windows_job is not None:
             job = self._windows_job
-            errors: list[BaseException] = []
             reaper_started = False
 
             def start_reaper(process: ProcessHandle) -> None:
@@ -582,124 +725,97 @@ class SubprocessSupervisor:
                     clock=self._clock,
                     start_reaper=start_reaper,
                 )
-            except BaseException as error:
-                errors.append(error)
-            try:
-                self._close_artifact_locks()
-            except BaseException as error:
-                errors.append(error)
-            try:
-                if not reaper_started:
-                    self._close_job(job)
-            except BaseException as error:
-                errors.append(error)
-            if errors:
-                raise ExceptionGroup("sidecar termination cleanup failed", errors)
-            return
-        if process.poll() is not None:
-            if os.name == "nt":
-                self.kill(deadline=deadline)
-            else:
-                try:
-                    process.wait(timeout=max(0.0, deadline - self._clock.monotonic()))
-                except (TimeoutError, subprocess.TimeoutExpired):
-                    return
-                except BaseException:
-                    if _process_is_alive(process):
-                        self._start_process_reaper(process)
+                if _process_is_alive(process):
+                    self._process_state = _ProcessLifecycleState.TERMINATION_FAILED
+                else:
+                    self._process_state = _ProcessLifecycleState.REAPED
+            except BaseException:
+                if _process_is_alive(process):
                     raise
-                finally:
-                    self._close_artifact_locks()
+                self._process_state = _ProcessLifecycleState.REAPED
+                self._diagnostics.record("cleanup", "get_process_state", "process_already_stopped")
             return
         if os.name == "nt":
-            process.terminate()
-            self._kill_windows_tree(process, deadline=deadline, clock=self._clock)
+            try:
+                if self._windows_job is None:
+                    raise RuntimeRecoveryPendingError(
+                        "Windows process tree ownership is unavailable"
+                    )
+                if escalation:
+                    self._kill_windows_tree(process, deadline=deadline, clock=self._clock)
+                    process.kill()
+                else:
+                    process.terminate()
+            except RuntimeRecoveryPendingError:
+                raise
+            except BaseException:
+                if _process_is_alive(process):
+                    raise
+                self._process_state = _ProcessLifecycleState.REAPED
+                self._diagnostics.record("cleanup", "terminate_process", "process_already_stopped")
+                return
+            if not escalation:
+                self._kill_windows_tree(process, deadline=deadline, clock=self._clock)
         else:
-            self._signal_process_group(process, signal.SIGTERM)
+            if escalation:
+                self._signal_process_group(process, signal.SIGKILL)
+                process.kill()
+            else:
+                self._signal_process_group(process, signal.SIGTERM)
         remaining = max(0.0, deadline - self._clock.monotonic())
         try:
             process.wait(timeout=remaining)
+            self._process_state = _ProcessLifecycleState.REAPED
         except (TimeoutError, subprocess.TimeoutExpired):
-            self.kill(deadline=deadline)
-            return
-        except BaseException:
-            if _process_is_alive(process):
-                self._start_process_reaper(process)
-            raise
-        finally:
-            self._close_artifact_locks()
-
-    def kill(self, deadline: float | None = None) -> None:
-        process = self._process
-        if process is None:
-            return
-        if self._windows_job is not None:
-            job = self._windows_job
-            errors: list[BaseException] = []
-            reaper_started = False
-
-            def start_reaper(process: ProcessHandle) -> None:
-                nonlocal reaper_started
-                reaper_started = True
-                self._start_process_reaper(process, pending_job=job)
-
-            try:
-                cleanup_deadline = deadline
-                if cleanup_deadline is None:
-                    cleanup_deadline = self._clock.monotonic() + 1.0
-                _terminate_job_process(
-                    job,
-                    process,
-                    cleanup_deadline,
-                    clock=self._clock,
-                    start_reaper=start_reaper,
-                )
-            except BaseException as error:
-                errors.append(error)
-            try:
-                if not reaper_started:
-                    self._close_job(job)
-            except BaseException as error:
-                errors.append(error)
-            try:
-                self._close_artifact_locks()
-            except BaseException as error:
-                errors.append(error)
-            if errors:
-                raise ExceptionGroup("sidecar kill cleanup failed", errors)
-            return
-        if os.name == "nt":
-            self._kill_windows_tree(process, clock=self._clock)
-        else:
-            self._signal_process_group(process, signal.SIGKILL)
-        cleanup_deadline = deadline
-        if cleanup_deadline is None:
-            cleanup_deadline = self._clock.monotonic() + 1.0
-        try:
-            process.wait(timeout=max(0.0, cleanup_deadline - self._clock.monotonic()))
-        except (TimeoutError, subprocess.TimeoutExpired):
+            self._diagnostics.record("cleanup", "wait_for_exit", "deadline_exceeded")
+            if not _process_is_alive(process):
+                return
+            if os.name != "nt":
+                self._signal_process_group(process, signal.SIGKILL)
             try:
                 process.kill()
             except BaseException:
                 if _process_is_alive(process):
                     self._start_process_reaper(process)
                 raise
-            remaining = max(0.0, cleanup_deadline - self._clock.monotonic())
+            remaining = max(0.0, deadline - self._clock.monotonic())
             if remaining:
                 try:
                     process.wait(timeout=remaining)
                 except (TimeoutError, subprocess.TimeoutExpired):
                     if _process_is_alive(process):
                         self._start_process_reaper(process)
+                    else:
+                        self._process_state = _ProcessLifecycleState.REAPED
             else:
                 if _process_is_alive(process):
                     self._start_process_reaper(process)
+                else:
+                    self._process_state = _ProcessLifecycleState.REAPED
         except BaseException:
             if _process_is_alive(process):
-                self._start_process_reaper(process)
+                self._process_state = _ProcessLifecycleState.TERMINATION_FAILED
+                self._start_process_reaper(process, pending_job=self._windows_job)
+            else:
+                self._process_state = _ProcessLifecycleState.REAPED
             raise
-        finally:
+
+    def _close_cleanup_resources(self) -> None:
+        errors: list[BaseException] = []
+        try:
             self._close_artifact_locks()
+        except BaseException as error:
+            errors.append(error)
+            self._diagnostics.record_cleanup_failure("close_resource", error)
+        job = self._windows_job
+        if job is not None and not self._defer_job_until_reaped(job):
+            try:
+                self._close_job(job)
+            except BaseException as error:
+                errors.append(error)
+                self._diagnostics.record_cleanup_failure("close_resource", error)
+        if errors:
+            raise ExceptionGroup("sidecar termination cleanup failed", errors)
 
     def _start_process_reaper(
         self, process: ProcessHandle, *, pending_job: object | None = None
@@ -756,6 +872,9 @@ class SubprocessSupervisor:
             if self._process_reaper_generation is generation:
                 self._process_reaper_generation = None
                 self._process_reaper_done.set()
+        with self._termination_lock:
+            if self._process is generation.process:
+                self._process_state = _ProcessLifecycleState.REAPED
         generation.done.set()
 
     def reaper_owns_process(self) -> bool:
@@ -773,8 +892,16 @@ class SubprocessSupervisor:
             jobs_pending = bool(self._job_recovery)
         with self._process_reaper_lock:
             process_reaper_pending = self._process_reaper_generation is not None
+        process_pending = (
+            self._process is not None and self._process_state is not _ProcessLifecycleState.REAPED
+        )
+        if process_pending:
+            process_pending = _process_is_alive(self._process)
         return not (
             process_reaper_pending
+            or process_pending
+            or getattr(self, "_credential_recovery_pending", False)
+            or getattr(self, "_unsafe_tree_recovery_pending", False)
             or artifacts_pending
             or jobs_pending
             or self._artifact_locks
@@ -894,16 +1021,11 @@ class SubprocessSupervisor:
         *,
         clock: MonotonicClock | None = None,
     ) -> None:
+        del process, deadline, clock
         if sys.platform != "win32":
             return
-        expected_creation_time = _process_creation_time(getattr(process, "_handle", None))
-        if expected_creation_time is None:
-            raise OSError("cannot safely identify the Windows process tree")
-        _kill_windows_descendants(
-            process.pid,
-            expected_creation_time,
-            deadline=deadline,
-            clock=clock or _SystemClock(),
+        raise RuntimeRecoveryPendingError(
+            "Windows PID-tree fallback is disabled because child PID ownership is unverified"
         )
 
     def _signal_process_group(self, process: ProcessHandle, sig: signal.Signals) -> None:
@@ -1031,125 +1153,8 @@ def _open_artifact_read_lock(path: Path) -> _WindowsArtifactReadLock:
     return _WindowsArtifactReadLock(api, handles, identity, native_path, registry)
 
 
-def _process_creation_time(handle) -> int | None:
-    if handle is None:
-        return None
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    filetime = wintypes.FILETIME
-    kernel32.GetProcessTimes.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(filetime),
-        ctypes.POINTER(filetime),
-        ctypes.POINTER(filetime),
-        ctypes.POINTER(filetime),
-    ]
-    kernel32.GetProcessTimes.restype = wintypes.BOOL
-    creation = filetime()
-    exit_time = filetime()
-    kernel_time = filetime()
-    user_time = filetime()
-    if not kernel32.GetProcessTimes(
-        handle,
-        ctypes.byref(creation),
-        ctypes.byref(exit_time),
-        ctypes.byref(kernel_time),
-        ctypes.byref(user_time),
-    ):
-        return None
-    return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
-
-
-def _kill_windows_descendants(
-    root_pid: int,
-    expected_creation_time: int | None,
-    *,
-    deadline: float | None = None,
-    clock: MonotonicClock | None = None,
-) -> None:
-    class ProcessEntry(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.c_size_t),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", wintypes.WCHAR * 260),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    invalid_handle = ctypes.c_void_p(-1).value
-    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
-    kernel32.Process32FirstW.restype = wintypes.BOOL
-    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
-    kernel32.Process32NextW.restype = wintypes.BOOL
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    kernel32.TerminateProcess.restype = wintypes.BOOL
-    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    kernel32.WaitForSingleObject.restype = wintypes.DWORD
-    from .windows_snapshot import NativeHandleLeaseRegistry
-
-    native_handles = NativeHandleLeaseRegistry(clock=clock)
-    if expected_creation_time is None:
-        return
-    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
-    if snapshot in (None, invalid_handle):
-        return
-    try:
-        native_handles.register_handle(snapshot, kernel32.CloseHandle)
-        root_handle = kernel32.OpenProcess(0x1000, False, root_pid)
-        if root_handle in (None, invalid_handle):
-            error = ctypes.get_last_error()
-            if error == 87:  # ERROR_INVALID_PARAMETER: the root already exited.
-                return
-            raise ctypes.WinError(error)
-        native_handles.register_handle(root_handle, kernel32.CloseHandle)
-        if _process_creation_time(root_handle) != expected_creation_time:
-            return
-        children: dict[int, list[int]] = {}
-        entry = ProcessEntry()
-        entry.dwSize = ctypes.sizeof(ProcessEntry)
-        if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
-            while True:
-                children.setdefault(int(entry.th32ParentProcessID), []).append(
-                    int(entry.th32ProcessID)
-                )
-                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
-                    break
-    finally:
-        native_handles.close()
-    descendants: list[int] = []
-    pending = list(children.get(root_pid, ()))
-    while pending:
-        pid = pending.pop()
-        descendants.append(pid)
-        pending.extend(children.get(pid, ()))
-    handles = []
-    try:
-        for pid in [root_pid, *reversed(descendants)]:
-            handle = kernel32.OpenProcess(0x0001 | 0x00100000, False, pid)
-            if handle not in (None, invalid_handle):
-                handles.append(handle)
-                native_handles.register_handle(handle, kernel32.CloseHandle)
-            elif pid != root_pid:
-                raise ctypes.WinError(ctypes.get_last_error())
-        now = (clock or _SystemClock()).monotonic
-        cleanup_deadline = deadline if deadline is not None else now() + 1.0
-        for handle in handles:
-            if not kernel32.TerminateProcess(handle, 1):
-                raise ctypes.WinError(ctypes.get_last_error())
-            remaining = cleanup_deadline - now()
-            if remaining <= 0:
-                raise TimeoutError("Windows process tree cleanup deadline expired")
-            remaining_ms = max(0, int(remaining * 1000))
-            if kernel32.WaitForSingleObject(handle, remaining_ms) != 0:
-                raise TimeoutError("Windows process tree did not terminate before the deadline")
-    finally:
-        native_handles.close()
+def _require_matching_process_creation_time(expected: int | None, actual: int | None) -> None:
+    if expected is None or actual is None or expected != actual:
+        raise RuntimeRecoveryPendingError(
+            "Windows child process identity could not be verified before termination"
+        )

@@ -59,6 +59,7 @@ def _health_payload(application: BackendApplication) -> dict[str, object]:
         "backend": health.backend,
         "model_id": capabilities.model_id,
         "endpoint": application.endpoint,
+        "diagnostics": application.diagnostics,
     }
 
 
@@ -67,9 +68,16 @@ def _print_json(payload: dict[str, object]) -> None:
 
 
 def _exit_code(error: BaseException) -> int:
-    if isinstance(error, (ConfigurationError, MissingModelError)):
+    if isinstance(error, ConfigurationError | MissingModelError):
         return 2
     return 3
+
+
+def _error_payload(error: AsrError, application: BackendApplication | None) -> dict[str, object]:
+    payload: dict[str, object] = {"error": {"code": error.code.value, "message": error.message}}
+    if application is not None:
+        payload["diagnostics"] = application.diagnostics
+    return payload
 
 
 def _build_from_args(args: argparse.Namespace) -> BackendApplication:
@@ -103,17 +111,22 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         return_code = 0
     except AsrError as error:
-        _print_json({"error": {"code": error.code.value, "message": error.message}})
+        _print_json(_error_payload(error, application))
         return_code = _exit_code(error)
     except Exception:
-        _print_json({"error": {"code": "execution", "message": "backend startup failed"}})
+        payload: dict[str, object] = {
+            "error": {"code": "execution", "message": "backend startup failed"}
+        }
+        if application is not None:
+            payload["diagnostics"] = application.diagnostics
+        _print_json(payload)
         return_code = 3
     finally:
         if application is not None:
             try:
                 application.close()
             except AsrError as error:
-                _print_json({"error": {"code": error.code.value, "message": error.message}})
+                _print_json(_error_payload(error, application))
                 if return_code == 0:
                     return_code = 4
         for signum, handler in handlers.items():
