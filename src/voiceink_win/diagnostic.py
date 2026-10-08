@@ -97,7 +97,7 @@ class DiagnosticLogger:
                 else self._sanitize(item)
                 for key, item in value.items()
             }
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, list | tuple):
             return [self._sanitize(item) for item in value]
         if isinstance(value, str):
             result = value

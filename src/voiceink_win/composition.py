@@ -223,6 +223,10 @@ class BackendApplication:
     def health(self) -> RuntimeHealth:
         return self._asr.health()
 
+    @property
+    def diagnostics(self) -> dict[str, object]:
+        return self._runtime.diagnostics.as_dict()
+
     def capabilities(self) -> AsrCapabilities:
         return self._asr.capabilities()
 

@@ -128,6 +128,22 @@ def test_readiness_probe_sends_nonce_header(monkeypatch) -> None:
     assert headers[ASR_NONCE_HEADER.casefold()] == "test-nonce"
 
 
+def test_credential_bearing_transport_objects_clear_all_credentials() -> None:
+    probe = UrllibReadinessProbe("http://127.0.0.1:8123")
+    probe.set_nonce("probe-secret-nonce")
+    probe.set_api_key("probe-secret-api-key")
+    probe.clear_credentials()
+
+    transport = UrllibLoopbackTransport("http://127.0.0.1:8123", nonce="transport-secret-nonce")
+    transport.set_api_key("transport-secret-api-key")
+    transport.close()
+
+    assert probe._nonce is None
+    assert probe._api_key is None
+    assert transport._nonce is None
+    assert transport._api_key is None
+
+
 def test_readiness_probe_rejects_forged_health_payload(monkeypatch) -> None:
     class Response:
         status = 200

@@ -60,6 +60,7 @@ from .runtime_manifest import (
     load_runtime_manifest,
 )
 from .sidecar import NeMoSidecarRuntime, ProcessSupervisor, SidecarConfig, SidecarTransport
+from .startup_diagnostics import PrimaryFailure, StartupDiagnostics
 from .transport import TransportResponse, UrllibLoopbackTransport
 from .windows_snapshot import (
     WindowsKernel32,
@@ -101,6 +102,8 @@ __all__ = [
     "ProcessSupervisor",
     "SidecarConfig",
     "SidecarTransport",
+    "PrimaryFailure",
+    "StartupDiagnostics",
     "TransportResponse",
     "UrllibLoopbackTransport",
     "FakeMediaNormalizer",
