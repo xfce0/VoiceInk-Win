@@ -31,6 +31,7 @@ from voiceink_win.domain import (
     Stage,
     Success,
     TerminalResult,
+    TranscribeAvailability,
     TranscribePageSnapshot,
     TranscriptDocument,
     TranscriptionQueueItemSnapshot,
@@ -85,10 +86,16 @@ class TranscribePageController:
         clipboard: ClipboardPort | None = None,
         text_files: TextFilePort | None = None,
         unavailable_message: str = "Imported media transcription is unavailable in this build.",
+        availability: TranscribeAvailability | None = None,
     ) -> None:
         self._imported_media = imported_media
         self._clipboard = clipboard
         self._text_files = text_files
+        self._availability = availability or (
+            TranscribeAvailability.AVAILABLE
+            if imported_media is not None
+            else TranscribeAvailability.UNAVAILABLE
+        )
         self._items: list[_Item] = []
         self._listeners: list[Callable[[TranscribePageSnapshot], None]] = []
         self._lock = RLock()
@@ -98,8 +105,16 @@ class TranscribePageController:
         self._cancel_threads: set[Thread] = set()
         self._output_threads: set[Thread] = set()
         self._snapshot = TranscribePageSnapshot(
-            accepting_files=imported_media is not None,
-            page_error=(None if imported_media is not None else unavailable_message),
+            accepting_files=(
+                imported_media is not None
+                and self._availability is TranscribeAvailability.AVAILABLE
+            ),
+            availability=self._availability,
+            page_error=(
+                None
+                if self._availability is TranscribeAvailability.AVAILABLE
+                else unavailable_message
+            ),
         )
 
     @property
@@ -119,6 +134,45 @@ class TranscribePageController:
                     self._listeners.remove(listener)
 
         return unsubscribe
+
+    def set_output_ports(
+        self,
+        *,
+        clipboard: ClipboardPort | None,
+        text_files: TextFilePort | None,
+    ) -> None:
+        with self._lock:
+            self._clipboard = clipboard
+            self._text_files = text_files
+
+    def attach_backend(self, imported_media: ImportedMediaPort) -> bool:
+        with self._lock:
+            if self._closed:
+                return False
+            self._imported_media = imported_media
+            self._availability = TranscribeAvailability.AVAILABLE
+            self._snapshot = replace(
+                self._snapshot,
+                accepting_files=True,
+                availability=self._availability,
+                page_error=None,
+            )
+            self._publish_locked()
+            return True
+
+    def mark_unavailable(self, message: str) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._imported_media = None
+            self._availability = TranscribeAvailability.UNAVAILABLE
+            self._snapshot = replace(
+                self._snapshot,
+                accepting_files=False,
+                availability=self._availability,
+                page_error=message,
+            )
+            self._publish_locked()
 
     def add_paths(self, paths: list[str | Path]) -> None:
         with self._lock:
@@ -263,13 +317,21 @@ class TranscribePageController:
         self._set_output_status(OutputState.COPYING, "Copying transcript...")
 
         def copy_text() -> None:
+            def complete(error: BaseException | None) -> None:
+                if error is not None:
+                    logger.error(
+                        "clipboard completion failed",
+                        extra={"item_id": item_id, "error": str(error)},
+                    )
+                    self._set_output_status(OutputState.FAILED, "Could not copy the transcript.")
+                else:
+                    self._set_output_status(OutputState.SUCCEEDED, "Transcript copied.")
+
             try:
-                clipboard.copy(text)
+                clipboard.copy(text, complete)
             except Exception:
                 logger.exception("clipboard worker failed", extra={"item_id": item_id})
                 self._set_output_status(OutputState.FAILED, "Could not copy the transcript.")
-            else:
-                self._set_output_status(OutputState.SUCCEEDED, "Transcript copied.")
             finally:
                 with self._lock:
                     self._output_threads.discard(current_thread())
@@ -311,8 +373,8 @@ class TranscribePageController:
             if subscription is not None:
                 subscription.close()
         if media is not None:
-            for _item_id, job_id in jobs:
-                self._cancel_admitted_job(media, job_id)
+            for item_id, job_id in jobs:
+                self._start_cancel(item_id, job_id, media)
 
         deadline = time.monotonic() + max(0.0, timeout)
         threads = tuple(
@@ -424,7 +486,7 @@ class TranscribePageController:
                         self._publish_locked()
                 if closing:
                     subscription.close()
-                    self._cancel_admitted_job(media, job_id)
+                    self._start_cancel(item_id, job_id, media)
                     continue
                 watcher = Thread(
                     target=self._watch_item,
@@ -457,6 +519,7 @@ class TranscribePageController:
                 if observation is None:
                     continue
                 if isinstance(observation, EndOfStream):
+                    self._fail_observer(item_id)
                     return
                 self._apply_observation(item_id, observation)
                 if observation.terminal is not None:
@@ -550,12 +613,12 @@ class TranscribePageController:
     def _fail_observer(self, item_id: str) -> None:
         with self._lock:
             item = self._item(item_id)
-            if item is None or item.state in _TERMINAL:
+            if self._closed or item is None or item.state in _TERMINAL:
                 return
             item.state = QueueState.FAILED
             item.failure = ImportFailure(
                 ErrorCode.RUNTIME_UNAVAILABLE,
-                "Transcription progress could not be observed.",
+                "Observation ended without a terminal result.",
                 "observation",
                 True,
             )
@@ -613,12 +676,18 @@ class TranscribePageController:
             sum(item.state is QueueState.REJECTED for item in self._items),
         )
         is_processing = active > 0 or self._admission_active_locked()
+        available = (
+            self._imported_media is not None
+            and self._availability is TranscribeAvailability.AVAILABLE
+            and not self._closed
+        )
         self._snapshot = TranscribePageSnapshot(
             snapshots,
             is_processing=is_processing,
-            can_start=pending > 0 and not is_processing,
+            can_start=pending > 0 and available and not is_processing,
             can_cancel_all=can_cancel_all,
-            accepting_files=self._imported_media is not None and not self._closed,
+            accepting_files=available,
+            availability=self._availability,
             aggregate=aggregate,
             page_error=self._snapshot.page_error,
             output_status=self._snapshot.output_status,

@@ -60,6 +60,12 @@ class TranscriptVariant(StrEnum):
     ENHANCED = "enhanced"
 
 
+class TranscribeAvailability(StrEnum):
+    LOADING = "loading"
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
 class OutputState(StrEnum):
     IDLE = "idle"
     COPYING = "copying"
@@ -200,6 +206,7 @@ class TranscribePageSnapshot:
     can_start: bool = False
     can_cancel_all: bool = False
     accepting_files: bool = True
+    availability: TranscribeAvailability = TranscribeAvailability.AVAILABLE
     aggregate: QueueAggregate = QueueAggregate(0, 0, 0, 0, 0, 0, 0)
     page_error: str | None = None
     output_status: OutputStatus = OutputStatus()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -13,7 +14,7 @@ from voiceink_win.domain import TranscriptDocument, TranscriptVariant, resolve_v
 
 
 class ClipboardPort(Protocol):
-    def copy(self, text: str) -> None: ...
+    def copy(self, text: str, completion: Callable[[BaseException | None], None]) -> None: ...
 
 
 class TextFilePort(Protocol):
@@ -65,7 +66,8 @@ def _format_timestamp(value: str) -> str:
         raise ValueError("transcript timestamp is not ISO-8601") from error
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
-    return timestamp.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    normalized = timestamp.astimezone(UTC)
+    return normalized.strftime("%Y-%m-%dT%H:%M:%S.") + f"{normalized.microsecond // 1000:03d}Z"
 
 
 def atomic_write(target: Path, content: bytes) -> None:

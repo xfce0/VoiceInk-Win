@@ -26,6 +26,7 @@ from voiceink_win.domain import (
     SUPPORTED_MEDIA_FORMATS,
     OutputState,
     QueueState,
+    TranscribeAvailability,
     TranscribePageSnapshot,
     TranscriptionQueueItemSnapshot,
     TranscriptVariant,
@@ -103,11 +104,11 @@ class TranscribePage(QWidget):
         or_label.setObjectName("muted")
         or_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         drop_layout.addWidget(or_label)
-        choose = QPushButton("Choose Files", self._drop_zone)
-        choose.setObjectName("primaryButton")
-        choose.setAccessibleName("Choose files for transcription")
-        choose.clicked.connect(self._choose_files)
-        drop_layout.addWidget(choose, 0, Qt.AlignmentFlag.AlignCenter)
+        self._choose_button = QPushButton("Choose Files", self._drop_zone)
+        self._choose_button.setObjectName("primaryButton")
+        self._choose_button.setAccessibleName("Choose files for transcription")
+        self._choose_button.clicked.connect(self._choose_files)
+        drop_layout.addWidget(self._choose_button, 0, Qt.AlignmentFlag.AlignCenter)
         self._drop_zone.setMinimumHeight(150)
         root.addWidget(self._drop_zone)
 
@@ -169,6 +170,8 @@ class TranscribePage(QWidget):
         root.addWidget(scroll, 1)
 
     def _choose_files(self) -> None:
+        if self._controller.snapshot.availability is not TranscribeAvailability.AVAILABLE:
+            return
         extensions = " ".join(f"*.{extension}" for extension in sorted(SUPPORTED_MEDIA_EXTENSIONS))
         paths, _ = QFileDialog.getOpenFileNames(
             self,
@@ -180,6 +183,10 @@ class TranscribePage(QWidget):
             self._controller.add_paths(paths)
 
     def _render(self, snapshot: TranscribePageSnapshot) -> None:
+        available = snapshot.availability is TranscribeAvailability.AVAILABLE
+        self._drop_zone.setEnabled(available)
+        self._drop_zone.setAcceptDrops(available)
+        self._choose_button.setEnabled(available)
         self._add_button.setEnabled(snapshot.accepting_files)
         self._start_button.setEnabled(snapshot.can_start)
         self._cancel_button.setEnabled(snapshot.can_cancel_all)
@@ -343,7 +350,6 @@ class TranscribePage(QWidget):
         if self._unsubscribe is not None:
             self._unsubscribe()
             self._unsubscribe = None
-            self._controller.close()
 
 
 def _status_text(state: QueueState) -> str:

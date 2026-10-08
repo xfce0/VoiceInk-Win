@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from threading import Event
 
 import pytest
 
@@ -15,6 +17,15 @@ except ImportError:
 
 from voiceink_win.domain import ShellState
 from voiceink_win.presentation.main_window import MainWindow
+
+
+def _wait_for(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    assert predicate()
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +60,8 @@ def test_unavailable_presentation_uses_exact_copy_and_no_active_timers(
     assert recorder._waveform._timer is None
     assert not recorder._waveform._active
     assert recorder._timer is None
+    assert not window._open_recorder_button.isEnabled()
+    assert window._open_recorder_button.text() == "Recorder unavailable"
 
     rendered_text = " ".join(
         widget.text()
@@ -216,9 +229,70 @@ def test_composition_wires_real_imported_media_adapter_when_runtime_is_configure
 
     composed = desktop_composition.build_desktop_composition()
     try:
-        assert backend.started
+        _wait_for(
+            lambda: backend.started and composed.transcribe_controller._imported_media is backend
+        )
         assert composed.controller.snapshot.state is ShellState.UNAVAILABLE
         assert composed.transcribe_controller._imported_media is backend
     finally:
         composed.close()
     assert backend.closed
+
+
+def test_composition_returns_loading_state_before_backend_readiness(
+    application: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del application
+    import voiceink_win.composition as composition_module
+    import voiceink_win.desktop_composition as desktop_composition
+    from voiceink_win.domain import TranscribeAvailability
+
+    entered = Event()
+    release = Event()
+
+    class Backend:
+        imported_media_available = True
+
+        def start(self) -> None:
+            entered.set()
+            release.wait(2)
+
+        def close(self) -> None:
+            return None
+
+    backend = Backend()
+    for name in (
+        "VOICEINK_RUNTIME_MANIFEST",
+        "VOICEINK_ARTIFACT_LOCK",
+        "VOICEINK_ARTIFACT_LOCK_SHA256",
+        "VOICEINK_FFMPEG_PATH",
+        "VOICEINK_IMPORT_WORKSPACE_ROOT",
+        "VOICEINK_IMPORT_ROOTS",
+        "VOICEINK_FFMPEG_VERSION",
+        "VOICEINK_FFMPEG_PROVENANCE_URL",
+        "VOICEINK_FFMPEG_SHA256",
+        "VOICEINK_FFMPEG_LICENSE",
+    ):
+        monkeypatch.setenv(name, "configured")
+    monkeypatch.setattr(composition_module, "build_application_from_environment", lambda: backend)
+
+    started = time.monotonic()
+    composed = desktop_composition.build_desktop_composition()
+    try:
+        assert time.monotonic() - started < 0.5
+        assert (
+            composed.transcribe_controller.snapshot.availability is TranscribeAvailability.LOADING
+        )
+        assert not composed.transcribe_controller.snapshot.accepting_files
+        assert entered.wait(1)
+        release.set()
+        _wait_for(
+            lambda: (
+                composed.transcribe_controller.snapshot.availability
+                is TranscribeAvailability.AVAILABLE
+            )
+        )
+    finally:
+        release.set()
+        composed.close()

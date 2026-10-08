@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Lock, Thread, current_thread
 from typing import Protocol
 
 from voiceink_win.application import ShellController, TranscribePageController
-from voiceink_win.application.transcribe_output import LocalTextFilePort
+from voiceink_win.domain import TranscribeAvailability
 
 logger = logging.getLogger(__name__)
 
@@ -24,76 +25,121 @@ class DesktopComposition(Protocol):
 
 
 @dataclass(slots=True)
-class _UnavailableDesktopComposition:
+class _DesktopComposition:
     controller: ShellController
     transcribe_controller: TranscribePageController
+    _backend: object | None = field(default=None, init=False, repr=False)
+    _bootstrap_thread: Thread | None = field(default=None, init=False, repr=False)
+    _lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _closing: bool = field(default=False, init=False)
+
+    def start(self) -> None:
+        thread = Thread(
+            target=self._bootstrap_backend,
+            name="desktop-imported-media-bootstrap",
+            daemon=True,
+        )
+        with self._lock:
+            self._bootstrap_thread = thread
+        thread.start()
 
     def close(self) -> None:
-        self.transcribe_controller.close()
+        with self._lock:
+            if self._closing:
+                return
+            self._closing = True
+            bootstrap = self._bootstrap_thread
 
+        if bootstrap is not None and bootstrap is not current_thread():
+            bootstrap.join(2.0)
+            if bootstrap.is_alive():
+                logger.error("desktop backend bootstrap did not stop before close deadline")
 
-@dataclass(slots=True)
-class _BackendDesktopComposition:
-    backend: object
-    controller: ShellController
-    transcribe_controller: TranscribePageController
+        self.transcribe_controller.close(timeout=3.0)
+        with self._lock:
+            backend = self._backend
+            self._backend = None
+        if backend is not None:
+            self._close_backend_safely(backend)
 
-    def close(self) -> None:
-        self.transcribe_controller.close()
-        self.backend.close()
+    def _bootstrap_backend(self) -> None:
+        backend = None
+        try:
+            from voiceink_win.composition import build_application_from_environment
+            from voiceink_win.domain import (
+                ConfigurationError,
+                MissingModelError,
+                RuntimeUnavailableError,
+            )
+            from voiceink_win.infrastructure import WindowsAdapterRequiredError
 
-
-def build_desktop_composition() -> DesktopComposition:
-    """Build imported-media transcription when its trusted runtime is configured.
-
-    Recording remains deliberately unavailable: this composition only wires the
-    existing imported-media backend and never enables microphone/WASAPI paths.
-    """
-    if not _imported_media_environment_present():
-        return _unavailable("imported-media runtime is not configured")
-
-    backend = None
-    try:
-        from voiceink_win.composition import build_application_from_environment
-        from voiceink_win.domain import (
+            backend = build_application_from_environment()
+            backend.start()
+        except (
             ConfigurationError,
             MissingModelError,
             RuntimeUnavailableError,
-        )
-        from voiceink_win.infrastructure import WindowsAdapterRequiredError
+            WindowsAdapterRequiredError,
+            OSError,
+        ) as error:
+            if backend is not None:
+                self._close_backend_safely(backend)
+            logger.warning("imported-media runtime unavailable", extra={"reason": str(error)})
+            self.transcribe_controller.mark_unavailable(
+                "Imported media transcription is unavailable: runtime prerequisites failed."
+            )
+            return
+        except Exception:
+            if backend is not None:
+                self._close_backend_safely(backend)
+            logger.exception("unexpected imported-media bootstrap failure")
+            self.transcribe_controller.mark_unavailable(
+                "Imported media transcription is unavailable: startup failed."
+            )
+            return
 
-        backend = build_application_from_environment()
-        backend.start()
-    except (
-        ConfigurationError,
-        MissingModelError,
-        RuntimeUnavailableError,
-        WindowsAdapterRequiredError,
-        OSError,
-    ) as error:
-        if backend is not None:
-            try:
-                backend.close()
-            except Exception:
-                logger.exception("failed to clean up unavailable imported-media runtime")
-        logger.warning("imported-media runtime unavailable", extra={"reason": str(error)})
-        return _unavailable("imported-media runtime is unavailable")
+        if not backend.imported_media_available:
+            self._close_backend_safely(backend)
+            self.transcribe_controller.mark_unavailable(
+                "Imported media transcription is unavailable: configuration is incomplete."
+            )
+            return
 
-    if not backend.imported_media_available:
-        backend.close()
-        return _unavailable("imported-media configuration is unavailable")
+        with self._lock:
+            closing = self._closing
+            if not closing:
+                self._backend = backend
+        if closing or not self.transcribe_controller.attach_backend(backend):
+            self._close_backend_safely(backend)
 
-    from voiceink_win.presentation.clipboard import QtClipboardPort
+    @staticmethod
+    def _close_backend_safely(backend: object) -> None:
+        try:
+            backend.close()
+        except Exception:
+            logger.exception("failed to close imported-media runtime")
 
-    return _BackendDesktopComposition(
-        backend=backend,
-        controller=ShellController.unavailable(),
-        transcribe_controller=TranscribePageController(
-            backend,
-            clipboard=QtClipboardPort(),
-            text_files=LocalTextFilePort(),
-        ),
+
+def build_desktop_composition() -> DesktopComposition:
+    """Return promptly and bootstrap imported media outside the Qt thread.
+
+    Recording remains deliberately unavailable: this composition never enables
+    microphone or WASAPI paths.
+    """
+    transcribe_controller = TranscribePageController(
+        None,
+        availability=TranscribeAvailability.LOADING,
+        unavailable_message="Loading imported-media transcription runtime...",
     )
+    composition = _DesktopComposition(
+        controller=ShellController.unavailable(),
+        transcribe_controller=transcribe_controller,
+    )
+    if not _imported_media_environment_present():
+        transcribe_controller.mark_unavailable("Imported media runtime is not configured.")
+    else:
+        composition.start()
+    return composition
 
 
 def _imported_media_environment_present() -> bool:
@@ -110,16 +156,6 @@ def _imported_media_environment_present() -> bool:
         "VOICEINK_FFMPEG_LICENSE",
     )
     return all(os.environ.get(name, "").strip() for name in names)
-
-
-def _unavailable(reason: str) -> _UnavailableDesktopComposition:
-    return _UnavailableDesktopComposition(
-        controller=ShellController.unavailable(),
-        transcribe_controller=TranscribePageController(
-            None,
-            unavailable_message=reason,
-        ),
-    )
 
 
 __all__ = ["DesktopComposition", "build_desktop_composition"]

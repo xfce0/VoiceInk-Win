@@ -20,8 +20,10 @@ from PySide6.QtWidgets import (
 )
 
 from voiceink_win.application import ShellController, TranscribePageController
+from voiceink_win.application.transcribe_output import LocalTextFilePort
 from voiceink_win.domain import ShellSnapshot, ShellState
 
+from .clipboard import QtClipboardPort
 from .icon_registry import SIDEBAR_ITEMS
 from .qt_icons import sidebar_icon
 from .theme import ThemeMode, ThemeTokens, stylesheet_for, theme_for
@@ -175,6 +177,10 @@ class MainWindow(QMainWindow):
         self._theme = theme or theme_for(ThemeMode.LIGHT)
         self._controller = controller
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
+        self._transcribe_controller.set_output_ports(
+            clipboard=QtClipboardPort(self),
+            text_files=LocalTextFilePort(),
+        )
         self._unsubscribe = controller.subscribe(self._render)
         self._theme_signal = None
         self._theme_callback = None
@@ -327,10 +333,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._hero_detail)
         actions = QHBoxLayout()
         actions.setSpacing(12)
-        record = QPushButton("Open recorder", hero)
-        record.setObjectName("primaryButton")
-        record.clicked.connect(lambda: self._recorder.show_near(self))
-        actions.addWidget(record, 0)
+        self._open_recorder_button = QPushButton("Open recorder", hero)
+        self._open_recorder_button.setObjectName("primaryButton")
+        self._open_recorder_button.clicked.connect(lambda: self._recorder.show_near(self))
+        actions.addWidget(self._open_recorder_button, 0)
         insights = QPushButton("Insights locked", hero)
         insights.setObjectName("secondaryButton")
         insights.setEnabled(False)
@@ -381,6 +387,8 @@ class MainWindow(QMainWindow):
         self._state_pill.style().polish(self._state_pill)
 
         if snapshot.state is ShellState.UNAVAILABLE:
+            self._open_recorder_button.setEnabled(False)
+            self._open_recorder_button.setText("Recorder unavailable")
             self._page_subtext.setText(
                 "Recording cannot start because microphone capture and ASR are not included."
             )
@@ -392,6 +400,8 @@ class MainWindow(QMainWindow):
                 "Transcripts are unavailable because recording and ASR are not included."
             )
         elif snapshot.state is ShellState.TRANSCRIPT_READY:
+            self._open_recorder_button.setEnabled(True)
+            self._open_recorder_button.setText("Open recorder")
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
             )
@@ -401,6 +411,8 @@ class MainWindow(QMainWindow):
             self._transcript_metadata.setText(datetime.now().strftime("Today, %H:%M"))
             self._transcript_text.setText(snapshot.transcript)
         elif snapshot.state is ShellState.EMPTY:
+            self._open_recorder_button.setEnabled(True)
+            self._open_recorder_button.setText("Open recorder")
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
             )
@@ -412,6 +424,8 @@ class MainWindow(QMainWindow):
                 "VoiceInk did not detect speech. Start another session to try again."
             )
         elif snapshot.state is ShellState.ERROR:
+            self._open_recorder_button.setEnabled(True)
+            self._open_recorder_button.setText("Open recorder")
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
             )
@@ -423,6 +437,8 @@ class MainWindow(QMainWindow):
             self._transcript_metadata.setText("Transcription error")
             self._transcript_text.setText(snapshot.error)
         elif snapshot.state is ShellState.RECORDING:
+            self._open_recorder_button.setEnabled(True)
+            self._open_recorder_button.setText("Open recorder")
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
             )
@@ -434,6 +450,8 @@ class MainWindow(QMainWindow):
                 "Your transcript will appear here when recording is complete."
             )
         elif snapshot.state is ShellState.PROCESSING:
+            self._open_recorder_button.setEnabled(True)
+            self._open_recorder_button.setText("Open recorder")
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
             )
@@ -443,6 +461,8 @@ class MainWindow(QMainWindow):
             self._transcript_metadata.setText("Transcription in progress")
             self._transcript_text.setText("VoiceInk is preparing your transcript.")
         else:
+            self._open_recorder_button.setEnabled(True)
+            self._open_recorder_button.setText("Open recorder")
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
             )

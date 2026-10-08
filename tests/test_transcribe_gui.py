@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
 from tests.support.fake_shell import FakeShellBackend
 from voiceink_win.application import ShellController, TranscribePageController
+from voiceink_win.presentation.clipboard import QtClipboardPort
 from voiceink_win.presentation.main_window import MainWindow
 from voiceink_win.presentation.transcribe_page import TranscribePage
 
@@ -56,6 +58,46 @@ def test_transcribe_destination_is_enabled_and_renders_real_page(qt_app) -> None
     finally:
         window.close()
         qt_app.processEvents()
+
+
+def test_unavailable_transcribe_page_disables_file_inputs_and_detaches_without_shutdown(
+    qt_app,
+) -> None:
+    controller = TranscribePageController(
+        None,
+        unavailable_message="Imported media runtime is not configured.",
+    )
+    page = TranscribePage(controller)
+    page.show()
+    try:
+        assert not page._choose_button.isEnabled()
+        assert not page._add_button.isEnabled()
+        assert not page._drop_zone.isEnabled()
+        assert page._error_label.text() == "Imported media runtime is not configured."
+        page.dispose()
+        assert controller._closed is False
+    finally:
+        controller.close()
+        page.close()
+        qt_app.processEvents()
+
+
+def test_qt_clipboard_reports_completion_after_gui_thread_mutation(qt_app) -> None:
+    port = QtClipboardPort()
+    completed = Event()
+    errors: list[BaseException | None] = []
+
+    worker = Thread(
+        target=lambda: port.copy(
+            "queued clipboard text", lambda error: (errors.append(error), completed.set())
+        ),
+    )
+    worker.start()
+    worker.join(1)
+    wait_for(qt_app, completed.is_set)
+
+    assert errors == [None]
+    assert QApplication.clipboard().text() == "queued clipboard text"
 
 
 def test_drag_drop_adds_supported_matrix_labels_without_extension_acceptance(

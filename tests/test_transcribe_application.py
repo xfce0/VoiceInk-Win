@@ -13,6 +13,7 @@ from voiceink_win.application.transcribe_output import serialize_markdown
 from voiceink_win.domain import (
     Attempt,
     Cancelled,
+    EndOfStream,
     ErrorCode,
     Failed,
     ImportedTranscriptionResult,
@@ -133,15 +134,19 @@ class FakeImportedMedia:
             )
         )
 
+    def finish_without_terminal(self, job_id: JobId) -> None:
+        self.jobs[job_id].push(EndOfStream())  # type: ignore[arg-type]
+
 
 class FakeClipboard:
     def __init__(self) -> None:
         self.text = ""
         self.thread_id: int | None = None
 
-    def copy(self, text: str) -> None:
+    def copy(self, text: str, completion) -> None:
         self.text = text
         self.thread_id = current_thread().ident
+        completion(None)
 
 
 class FakeFiles:
@@ -283,6 +288,20 @@ def test_controller_exports_and_copies_selected_variant(tmp_path: Path) -> None:
     controller.close()
 
 
+def test_controller_disables_start_when_runtime_becomes_unavailable(tmp_path: Path) -> None:
+    controller = TranscribePageController(FakeImportedMedia())
+    source = tmp_path / "queued.wav"
+    source.write_bytes(b"content")
+    controller.add_paths([source])
+
+    assert controller.snapshot.can_start
+    controller.mark_unavailable("runtime stopped")
+
+    assert not controller.snapshot.accepting_files
+    assert not controller.snapshot.can_start
+    controller.close()
+
+
 def test_markdown_export_has_stable_utc_timestamp_and_escaped_content() -> None:
     document = TranscriptDocument(
         "meeting[1].wav",
@@ -294,7 +313,7 @@ def test_markdown_export_has_stable_utc_timestamp_and_escaped_content() -> None:
     assert serialize_markdown(document).decode("utf-8") == (
         "# Transcription\n\n"
         "**Source:** meeting\\[1\\]\\.wav\n"
-        "**Date:** 2024-01-02 00:04:05 UTC\n"
+        "**Date:** 2024-01-02T00:04:05.123Z\n"
         "**Duration:** 1.250s\n"
         "**Variant:** Original\n\n"
         "\\# title\n"
@@ -345,6 +364,25 @@ def test_controller_retry_restarts_admission_for_retryable_failure(tmp_path: Pat
     assert second_job != first_job
     media.finish_success(second_job, "retried")
     wait_for(lambda: controller.snapshot.items[0].state.value == "succeeded")
+    controller.close()
+
+
+def test_controller_surfaces_end_of_stream_without_terminal_result(tmp_path: Path) -> None:
+    media = FakeImportedMedia()
+    controller = TranscribePageController(media)
+    source = tmp_path / "stream-ended.wav"
+    source.write_bytes(b"content")
+    controller.add_paths([source])
+    controller.start_queue()
+    wait_for(lambda: len(media.jobs) == 1)
+
+    media.finish_without_terminal(next(iter(media.jobs)))
+    wait_for(lambda: controller.snapshot.items[0].state.value == "failed")
+
+    failure = controller.snapshot.items[0].failure
+    assert failure is not None
+    assert failure.stage == "observation"
+    assert "terminal" in failure.message
     controller.close()
 
 
