@@ -53,6 +53,7 @@ def _force_posix(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class PosixOsProxy:
         name = "posix"
+        killpg = getattr(real_os, "killpg", None)
 
         def __getattr__(self, name):
             return getattr(real_os, name)
