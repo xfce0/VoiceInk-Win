@@ -34,3 +34,6 @@ documents:
   - path: rfcs/desktop-composition-boundary.md
     kind: rfc
     status: draft
+  - path: rfcs/native-windows-runtime-startup.md
+    kind: rfc
+    status: proposed
