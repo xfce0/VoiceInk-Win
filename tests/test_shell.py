@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tests.support.fake_shell import FakeShellBackend
 from voiceink_win.application import ShellController
 from voiceink_win.domain import (
@@ -33,6 +35,11 @@ def test_shell_starts_idle_without_transcript() -> None:
     assert controller.snapshot.state is ShellState.IDLE
     assert controller.snapshot.transcript == ""
     assert controller.snapshot.error == ""
+
+
+def test_shell_constructor_rejects_missing_backend() -> None:
+    with pytest.raises(TypeError, match="backend is required"):
+        ShellController(None)  # type: ignore[arg-type]
 
 
 def test_shell_publishes_recording_processing_and_ready_states() -> None:

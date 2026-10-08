@@ -39,7 +39,7 @@ def main(*, smoke: bool = False) -> int:
             "PySide6 is optional. Install the GUI extra with `pip install -e '.[gui]'`."
         ) from error
 
-    application = QApplication(sys.argv)
+    application = QApplication.instance() or QApplication(sys.argv)
     application.setApplicationName("VoiceInk")
     from .theme import detect_system_theme, theme_for
 

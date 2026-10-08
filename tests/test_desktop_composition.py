@@ -11,6 +11,7 @@ import pytest
 import voiceink_win.desktop_composition as desktop_composition
 from voiceink_win.application import ShellController
 from voiceink_win.domain import ShellState
+from voiceink_win.presentation.app import _run_session
 
 
 def test_builder_has_exact_no_argument_api_and_returns_unavailable_controller() -> None:
@@ -51,7 +52,7 @@ def test_session_runner_preserves_normal_exit_code_and_closes_once() -> None:
     composition = _CompositionFake()
     events: list[str] = []
 
-    result = desktop_composition_runner(
+    result = _run_session(
         composition,
         lambda: _WindowFake(events),
         lambda: events.append("exec") or 17,
@@ -67,7 +68,7 @@ def test_session_runner_closes_and_reraises_window_exception() -> None:
     error = RuntimeError("window construction failed")
 
     with pytest.raises(RuntimeError) as raised:
-        desktop_composition_runner(
+        _run_session(
             composition,
             lambda: (_ for _ in ()).throw(error),
             lambda: 0,
@@ -82,7 +83,7 @@ def test_session_runner_closes_and_reraises_show_exception() -> None:
     error = RuntimeError("show failed")
 
     with pytest.raises(RuntimeError) as raised:
-        desktop_composition_runner(
+        _run_session(
             composition,
             lambda: _WindowFake([], show_error=error),
             lambda: 0,
@@ -97,7 +98,7 @@ def test_session_runner_closes_and_reraises_event_loop_exception() -> None:
     error = ValueError("event loop failed")
 
     with pytest.raises(ValueError) as raised:
-        desktop_composition_runner(
+        _run_session(
             composition,
             lambda: _WindowFake([]),
             lambda: (_ for _ in ()).throw(error),
@@ -141,10 +142,3 @@ assert not any(name.endswith("fake_shell") for name in sys.modules)
     )
 
     assert result.returncode == 0, result.stderr
-
-
-def desktop_composition_runner(composition, create_window, event_loop) -> int:
-    """Test-only mirror of the production session runner contract."""
-    from voiceink_win.presentation.app import _run_session
-
-    return _run_session(composition, create_window, event_loop)

@@ -51,3 +51,30 @@ jobs:
 
       - name: Compile
         run: python -m compileall -q src scripts
+
+  gui-offscreen:
+    name: Offscreen GUI contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      VOICEINK_GUI_TESTS: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install development and GUI dependencies
+        run: python -m pip install --editable ".[dev,gui]"
+
+      - name: Verify PySide6 is available
+        run: python -c "from PySide6.QtWidgets import QApplication; print(QApplication.__name__)"
+
+      - name: Run unavailable presentation contract
+        run: python -m pytest tests/test_unavailable_presentation.py

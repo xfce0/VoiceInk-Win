@@ -21,14 +21,14 @@ class ShellController:
     """Coordinate shell actions and expose immutable snapshots to presentation."""
 
     def __init__(self, backend: ShellTranscriptionBackend) -> None:
+        if backend is None:
+            raise TypeError("backend is required")
         self._initialize(backend, ShellSnapshot())
 
     @classmethod
     def unavailable(cls) -> ShellController:
         """Create a controller for a build without recording capability."""
-        controller = cls.__new__(cls)
-        controller._initialize(None, ShellSnapshot(state=ShellState.UNAVAILABLE))
-        return controller
+        return _UnavailableShellController()
 
     def _initialize(
         self,
@@ -120,3 +120,10 @@ def _safe_error_message(error: AsrError) -> str:
         AsrErrorCode.PROTOCOL: "The transcription runtime returned an invalid response.",
     }
     return messages.get(error.code, "Transcription failed. Check the runtime and try again.")
+
+
+class _UnavailableShellController(ShellController):
+    """Controller construction path for builds without a recording backend."""
+
+    def __init__(self) -> None:
+        self._initialize(None, ShellSnapshot(state=ShellState.UNAVAILABLE))
