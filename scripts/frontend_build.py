@@ -24,6 +24,7 @@ EXPECTED_OUTPUTS = {
     "voiceink-shell.exe",
     "voiceink-shell-smoke.exe",
 }
+SMOKE_TIMEOUT_SECONDS = 120
 
 
 class FrontendBuildError(RuntimeError):
@@ -150,10 +151,77 @@ def _validate_package(python: str) -> None:
         raise FrontendBuildError(f"Unexpected entries in dist/: {', '.join(unexpected)}")
 
 
+def _format_process_output(output: str | bytes | None) -> str:
+    if output is None:
+        return "<no output>"
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    return output.strip() or "<no output>"
+
+
+def _terminate_smoke_process(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
 def _run_smoke() -> None:
     environment = os.environ.copy()
     environment["QT_QPA_PLATFORM"] = "offscreen"
-    _run([str(DIST / "voiceink-shell-smoke.exe"), "--smoke"], env=environment)
+    command = [str(DIST / "voiceink-shell-smoke.exe"), "--smoke"]
+    process = subprocess.Popen(
+        command,
+        cwd=ROOT,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        close_fds=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=SMOKE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        _terminate_smoke_process(process)
+        cleanup_error = None
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired as error_after_cleanup:
+            _terminate_smoke_process(process)
+            cleanup_error = error_after_cleanup
+            stdout, stderr = "", ""
+        stdout = stdout or error.stdout
+        stderr = stderr or error.stderr
+        cleanup_note = (
+            "\nProcess cleanup did not finish within 10 seconds."
+            if cleanup_error is not None
+            else ""
+        )
+        raise FrontendBuildError(
+            f"Frontend smoke timed out after {SMOKE_TIMEOUT_SECONDS} seconds.\n"
+            f"stdout:\n{_format_process_output(stdout)}\n"
+            f"stderr:\n{_format_process_output(stderr)}{cleanup_note}"
+        ) from error
+
+    if process.returncode != 0:
+        raise FrontendBuildError(
+            f"Frontend smoke failed with exit code {process.returncode}.\n"
+            f"stdout:\n{_format_process_output(stdout)}\n"
+            f"stderr:\n{_format_process_output(stderr)}"
+        )
 
 
 def main() -> int:

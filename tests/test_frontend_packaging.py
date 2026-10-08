@@ -14,13 +14,23 @@ WORKFLOW = ROOT / ".github" / "workflows" / "build-frontend.yml"
 
 def test_make_build_contract_is_windows_only_and_reproducible() -> None:
     makefile = MAKEFILE.read_text(encoding="utf-8")
+    constraints = (ROOT / "packaging" / "windows-build-constraints.txt").read_text(encoding="utf-8")
 
     assert "build: require-windows build-deps" in makefile
     assert 'install --editable ".[gui,build]"' in makefile
+    assert "pip==26.2.1" in constraints
+    assert "PySide6==6.12.0" in constraints
+    assert "pyinstaller==6.22.3" in constraints
+    assert "Pillow==12.3.0" in constraints
+    assert 'install --upgrade "pip==$(PIP_VERSION)"' in makefile
+    assert '--constraint "$(BUILD_CONSTRAINTS)"' in makefile
     assert "PyInstaller" in makefile
     assert "scripts/frontend_build.py" in makefile
     assert "check: spec-check format-check lint test compile" in makefile
     assert "unrelated entries found" in (ROOT / "scripts" / "frontend_build.py").read_text(
+        encoding="utf-8"
+    )
+    assert "SMOKE_TIMEOUT_SECONDS = 120" in (ROOT / "scripts" / "frontend_build.py").read_text(
         encoding="utf-8"
     )
 
@@ -86,6 +96,69 @@ def test_frontend_workflow_builds_a_windowed_pyside6_executable() -> None:
     assert "Build Windows x64 GUI and smoke executables" in workflow
     assert "make build" in workflow
     assert "voiceink-shell-windows-x64" in workflow
+
+
+def test_readme_documents_windows_make_prerequisites() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "GNU Make" in readme
+    assert "sh.exe" in readme
+    assert "make --version" in readme
+
+
+def test_frontend_smoke_reports_output_on_nonzero_exit(monkeypatch) -> None:
+    class FailedProcess:
+        returncode = 17
+
+        def communicate(self, *, timeout):
+            assert timeout == frontend_build.SMOKE_TIMEOUT_SECONDS
+            return "smoke stdout", "smoke stderr"
+
+    monkeypatch.setattr(frontend_build.subprocess, "Popen", lambda *args, **kwargs: FailedProcess())
+
+    with pytest.raises(frontend_build.FrontendBuildError, match="exit code 17") as error:
+        frontend_build._run_smoke()
+
+    assert "smoke stdout" in str(error.value)
+    assert "smoke stderr" in str(error.value)
+
+
+def test_frontend_smoke_terminates_and_reports_output_on_timeout(monkeypatch) -> None:
+    terminated = False
+
+    class HungProcess:
+        pid = 42
+        returncode = None
+
+        def communicate(self, *, timeout=None):
+            if timeout is not None:
+                assert timeout in {10, frontend_build.SMOKE_TIMEOUT_SECONDS}
+            if self.returncode is None:
+                raise frontend_build.subprocess.TimeoutExpired(
+                    "voiceink-shell-smoke.exe",
+                    timeout,
+                    output="partial stdout",
+                    stderr="partial stderr",
+                )
+            return "", ""
+
+    process = HungProcess()
+
+    def fake_terminate(candidate) -> None:
+        nonlocal terminated
+        assert candidate is process
+        terminated = True
+        candidate.returncode = -9
+
+    monkeypatch.setattr(frontend_build.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(frontend_build, "_terminate_smoke_process", fake_terminate)
+
+    with pytest.raises(frontend_build.FrontendBuildError, match="timed out") as error:
+        frontend_build._run_smoke()
+
+    assert terminated
+    assert "partial stdout" in str(error.value)
+    assert "partial stderr" in str(error.value)
 
 
 def test_frontend_entrypoint_delegates_to_presentation_app() -> None:

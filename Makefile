@@ -2,6 +2,8 @@ SHELL := /bin/sh
 
 PROJECT := voiceink-win
 VENV := .venv
+PIP_VERSION := 26.2.1
+BUILD_CONSTRAINTS := packaging/windows-build-constraints.txt
 
 ifeq ($(OS),Windows_NT)
 PYTHON ?= python
@@ -22,7 +24,7 @@ help:
 ## setup: Create the virtual environment and install development dependencies
 setup:
 	$(PYTHON) -m venv $(VENV)
-	$(VENV_PIP) install --upgrade pip
+	$(VENV_PIP) install --upgrade "pip==$(PIP_VERSION)"
 	$(VENV_PIP) install --editable '.[dev]'
 
 ## format: Format Python source, scripts, and tests
@@ -61,10 +63,10 @@ endif
 build-deps: require-windows
 	$(PYTHON) -c "import platform, sys; version = sys.version_info[:2]; allowed = {(3, 12), (3, 13), (3, 14)}; raise SystemExit('Python 3.12, 3.13, or 3.14 is required; found ' + platform.python_version()) if version not in allowed else None"
 	$(PYTHON) -m venv $(VENV)
-	$(VENV_PIP) install --upgrade pip
-	$(VENV_PIP) install --editable ".[gui,build]"
+	$(VENV_PIP) install --upgrade "pip==$(PIP_VERSION)"
+	$(VENV_PIP) install --editable ".[gui,build]" --constraint "$(BUILD_CONSTRAINTS)"
 	$(VENV_PIP) check
-	$(VENV_PYTHON) -c "import importlib.metadata as metadata; import PyInstaller, PySide6, shiboken6; print('Verified build dependencies: ' + ', '.join(name + '==' + metadata.version(name) for name in ('PySide6', 'shiboken6', 'pyinstaller')))"
+	$(VENV_PYTHON) -c "import importlib.metadata as metadata; expected = {'Pillow': '12.3.0', 'PySide6': '6.12.0', 'PySide6-Addons': '6.12.0', 'PySide6-Essentials': '6.12.0', 'PySide6-Pdf': '6.12.0.140', 'PySide6-WebEngine': '6.12.0.140', 'altgraph': '0.17.5', 'packaging': '26.3', 'pefile': '2024.8.26', 'pyinstaller': '6.22.3', 'pyinstaller-hooks-contrib': '2026.8', 'pywin32-ctypes': '0.2.3', 'shiboken6': '6.12.0'}; actual = {name: metadata.version(name) for name in expected}; mismatches = [name + '==' + actual[name] + ' (expected ' + version + ')' for name, version in expected.items() if actual[name] != version]; raise SystemExit('Build dependency pin mismatch: ' + ', '.join(mismatches)) if mismatches else print('Verified build dependency pins: ' + ', '.join(name + '==' + actual[name] for name in sorted(actual)))"
 
 ## build: Build and validate the Windows GUI and console smoke executables in dist/
 build: require-windows build-deps

@@ -57,6 +57,13 @@ the console executable with Qt's offscreen platform. It requires 64-bit Windows,
 GNU Make, and Python 3.12, 3.13, or 3.14. macOS and Linux are intentionally
 rejected for this target; use `make check` there.
 
+Build prerequisites are GNU Make (`make --version` must work) and Git for
+Windows with `sh.exe` available on `PATH`; the Makefile uses `/bin/sh`. Git
+Bash supplies the required shell, but GNU Make is still required. PowerShell
+is supported when both `make.exe` and `sh.exe` are available on `PATH`.
+Direct frontend build pins, including the Qt split packages, are committed in
+`packaging/windows-build-constraints.txt`.
+
 PowerShell:
 
 ```powershell

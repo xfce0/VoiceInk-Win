@@ -1,0 +1,16 @@
+# Direct Windows x64 frontend build inputs. Update these pins deliberately.
+pip==26.2.1
+setuptools==84.0.0
+PySide6==6.12.0
+PySide6-Addons==6.12.0
+PySide6-Essentials==6.12.0
+PySide6-Pdf==6.12.0.140
+PySide6-WebEngine==6.12.0.140
+shiboken6==6.12.0
+Pillow==12.3.0
+altgraph==0.17.5
+packaging==26.3
+pefile==2024.8.26
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+pywin32-ctypes==0.2.3
