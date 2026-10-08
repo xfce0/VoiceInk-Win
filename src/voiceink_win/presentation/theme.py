@@ -256,8 +256,9 @@ QPushButton#navButton:disabled {{
     border-color: transparent;
 }}
 QPushButton#navButton:disabled:hover {{
-    background: {theme.nav_hover};
+    background: transparent;
     color: {theme.disabled};
+    border-color: transparent;
 }}
 QPushButton#navButton:focus {{
     border-color: {theme.nav_focus_border};

@@ -18,15 +18,34 @@ def _run_session(
     create_window: Callable[[], _Window],
     event_loop: Callable[[], int],
     after_show: Callable[[_Window], None] | None = None,
+    cleanup_window: Callable[[_Window], None] | None = None,
 ) -> int:
+    window: _Window | None = None
     try:
         window = create_window()
         window.show()
         if after_show is not None:
             after_show(window)
-        return event_loop()
-    finally:
-        composition.close()
+        result = event_loop()
+    except BaseException:
+        # Window cleanup must not replace the original session failure.
+        try:
+            if window is not None and cleanup_window is not None:
+                cleanup_window(window)
+        except BaseException:
+            pass
+        try:
+            composition.close()
+        except BaseException:
+            pass
+        raise
+    else:
+        try:
+            if window is not None and cleanup_window is not None:
+                cleanup_window(window)
+        finally:
+            composition.close()
+        return result
 
 
 def main(*, smoke: bool = False) -> int:
@@ -53,13 +72,14 @@ def main(*, smoke: bool = False) -> int:
     from .main_window import MainWindow
 
     composition = build_desktop_composition()
+    color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
         window = MainWindow(composition.controller, theme=theme)
-        color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
         if color_scheme_changed is not None:
-            color_scheme_changed.connect(
-                lambda *_: window.apply_theme(theme_for(detect_system_theme(application)))
+            window.connect_theme_signal(
+                color_scheme_changed,
+                lambda *_: window.apply_theme(theme_for(detect_system_theme(application))),
             )
         return window
 
@@ -67,7 +87,13 @@ def main(*, smoke: bool = False) -> int:
         if smoke:
             QTimer.singleShot(100, application.quit)
 
-    return _run_session(composition, create_window, application.exec, after_show)
+    return _run_session(
+        composition,
+        create_window,
+        application.exec,
+        after_show,
+        cleanup_window=lambda window: window.dispose(),
+    )
 
 
 if __name__ == "__main__":

@@ -108,6 +108,25 @@ def test_session_runner_closes_and_reraises_event_loop_exception() -> None:
     assert composition.close_calls == 1
 
 
+def test_session_runner_preserves_session_error_when_window_cleanup_fails() -> None:
+    composition = _CompositionFake()
+    session_error = ValueError("event loop failed")
+
+    def fail_cleanup(_window: _WindowFake) -> None:
+        raise RuntimeError("window cleanup failed")
+
+    with pytest.raises(ValueError) as raised:
+        _run_session(
+            composition,
+            lambda: _WindowFake([]),
+            lambda: (_ for _ in ()).throw(session_error),
+            cleanup_window=fail_cleanup,
+        )
+
+    assert raised.value is session_error
+    assert composition.close_calls == 1
+
+
 def test_production_composition_and_entrypoint_do_not_reference_fake_shell() -> None:
     source_root = Path(__file__).resolve().parents[1] / "src" / "voiceink_win"
 

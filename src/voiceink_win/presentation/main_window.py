@@ -168,6 +168,9 @@ class MainWindow(QMainWindow):
         self._theme = theme or theme_for(ThemeMode.LIGHT)
         self._controller = controller
         self._unsubscribe = controller.subscribe(self._render)
+        self._theme_signal = None
+        self._theme_callback = None
+        self._disposed = False
         self._recorder = FloatingRecorderWindow(controller, self, self._theme)
         self.setWindowTitle("VoiceInk")
         self.setMinimumSize(860, 600)
@@ -227,6 +230,25 @@ class MainWindow(QMainWindow):
         self._theme = theme
         self.setStyleSheet(stylesheet_for(theme))
         self._recorder.apply_theme(theme)
+
+    def connect_theme_signal(self, signal, callback) -> None:
+        """Subscribe to a Qt theme signal and retain both sides for cleanup."""
+        self._disconnect_theme_signal()
+        signal.connect(callback)
+        self._theme_signal = signal
+        self._theme_callback = callback
+
+    def _disconnect_theme_signal(self) -> None:
+        signal = self._theme_signal
+        callback = self._theme_callback
+        self._theme_signal = None
+        self._theme_callback = None
+        if signal is None or callback is None:
+            return
+        try:
+            signal.disconnect(callback)
+        except (RuntimeError, TypeError):
+            pass
 
     def _build_dashboard(self) -> QScrollArea:
         scroll = QScrollArea(self)
@@ -379,12 +401,20 @@ class MainWindow(QMainWindow):
             )
             self._hero_headline.setText("Listening for your next thought.")
             self._hero_detail.setText("Stop when you are finished; transcription stays local.")
+            self._transcript_body.setObjectName("emptyCard")
+            self._transcript_metadata.setText("Recording in progress")
+            self._transcript_text.setText(
+                "Your transcript will appear here when recording is complete."
+            )
         elif snapshot.state is ShellState.PROCESSING:
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
             )
             self._hero_headline.setText("Turning audio into clear text.")
             self._hero_detail.setText("The local adapter is processing this session.")
+            self._transcript_body.setObjectName("emptyCard")
+            self._transcript_metadata.setText("Transcription in progress")
+            self._transcript_text.setText("VoiceInk is preparing your transcript.")
         else:
             self._page_subtext.setText(
                 "Record a thought, then let VoiceInk turn it into clear text."
@@ -411,6 +441,13 @@ class MainWindow(QMainWindow):
         return "Hi."
 
     def closeEvent(self, event) -> None:
+        self.dispose()
+        event.accept()
+
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
+        self._disconnect_theme_signal()
         self._recorder.dispose()
         self._unsubscribe()
-        event.accept()
