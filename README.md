@@ -68,9 +68,13 @@ Replace `RUN_ID` with the workflow run ID, or download the artifact ZIP from
 the Actions page and extract it with `Expand-Archive`. The artifact includes
 the same command in its `README.txt`.
 
-This is the first desktop shell demo. It uses a deterministic fake backend;
-microphone capture, real ASR, global hotkeys, system tray, history persistence,
-and imported-media actions are not wired yet.
+The desktop composition RFC narrows the user-facing shell to a no-resource
+unavailable state: microphone capture and real ASR are not included, and
+production startup must not construct a fake backend or show synthetic text.
+A deterministic fake backend is reserved for focused tests and a separately
+named developer demo; it is not a production fallback. Global hotkeys, system
+tray, history persistence, and imported-media actions are also not wired into
+the desktop shell.
 
 ## Windows Diagnostic Build
 
