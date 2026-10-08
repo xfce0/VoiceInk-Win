@@ -415,10 +415,11 @@ class NeMoSidecarRuntime:
         except BaseException as error:
             failures.append(error)
             running = True
-        try:
-            self._kill_supervisor(deadline)
-        except BaseException as error:
-            failures.append(error)
+        if running:
+            try:
+                self._kill_supervisor(deadline)
+            except BaseException as error:
+                failures.append(error)
 
         while self._clock.monotonic() < deadline:
             try:
