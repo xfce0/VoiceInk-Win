@@ -2,13 +2,17 @@
 
 ## Status and Scope
 
-Status: implemented.
+Status: proposed amendment to the implemented presentation baseline. The
+unavailable-shell composition described by
+`rfcs/desktop-composition-boundary.md` is not implemented yet.
 
 This feature provides the first PySide6 presentation slice for VoiceInk-Win. It
 ports the macOS VoiceInk visual hierarchy into a Windows-friendly desktop shell
 without copying SwiftUI or AppKit implementation details. The slice includes a
 dashboard, a small floating recorder panel, and an application-owned state
-controller backed by an injected transcription protocol.
+controller. Production startup is a no-resource unavailable shell; injected
+backends are test seams, while any optional demo is a separate development-only
+path.
 
 It excludes microphone capture, global hotkeys, imported-media selection,
 history persistence, real ASR runtime wiring, system tray integration, and
@@ -16,10 +20,12 @@ Windows-specific APIs.
 
 ## User Scenarios
 
-- A user opens VoiceInk and sees a dashboard with a clear first-session action.
-- A user opens the floating recorder, starts and stops a demo session, and sees
-  recording, processing, and transcript-ready feedback.
-- A user receives a useful empty or error state instead of a silent failure.
+- A user opens VoiceInk and sees that recording is unavailable in this build,
+  with an explanation that microphone capture and ASR are not included.
+- A user opens the recorder explanation panel and sees a disabled recording
+  action, inactive waveform, and no synthetic transcript.
+- Focused tests may use an injected fake backend; a separately named,
+  development-only demo is optional and is not the production composition.
 
 ## Product Intent
 
@@ -27,12 +33,13 @@ Windows-specific APIs.
   progress card, and compact transcript rows. Its navigation is a 68 px
   icon-only rail with repository-owned Lucide-style tiles; original destination
   names remain available through tooltips and accessibility labels.
-- Recording is represented by a black, compact floating panel with a record
-  button, waveform, and processing indicator.
-- Idle, recording, processing, transcript-ready, empty, and error states are
-  explicit and user-visible. Empty and error states explain the next action.
-- The shell is usable on macOS without PySide6 or native ASR dependencies by
-  using a deterministic fake backend through an application protocol.
+- The unavailable explanation is represented by a black, compact floating panel
+  with a disabled action and inactive waveform; it has no processing indicator
+  or recording timer.
+- The production unavailable state is explicit and user-visible. It does not
+  render idle/recording copy, a success timestamp, or a transcript.
+- The shell is usable without native ASR dependencies because its production
+  composition creates no backend and exposes an unavailable controller state.
 
 ## Architecture
 
@@ -45,21 +52,30 @@ Presentation -> Application -> Domain <- Infrastructure
 - Domain owns `ShellState` and immutable `ShellSnapshot` values.
 - Application owns `ShellController` and the `ShellTranscriptionBackend`
   protocol. The controller never imports Qt, subprocess, HTTP, or Windows APIs.
-- Infrastructure provides `FakeShellBackend` for the shell demo and tests.
+- `FakeShellBackend` is a test fixture and is not exported by the production
+  infrastructure package. An optional separately named development-only demo
+  may use that fixture directly; production composition must not import,
+  construct, package, or select it.
+- The desktop composition owns the controller and exposes only the no-resource
+  lifecycle API defined by `rfcs/desktop-composition-boundary.md`.
 - Presentation owns the optional PySide6 window and maps snapshots to widgets.
 
 ## Functional Requirements
 
-1. A fresh controller starts in `idle` with no transcript or error.
-2. Starting a session moves the controller to `recording`; stopping it moves to
-   `processing` before the backend is called.
-3. A non-empty backend result becomes `transcript_ready`; an empty result
-   becomes `empty`; backend failures become `error` with a safe message.
-4. The presentation must not construct or call a concrete ASR runtime.
-5. The floating panel can be shown, hidden, and closed without a Windows API.
-6. Closing the main window closes the floating panel and exits the Qt process.
-7. Tray behavior is deferred behind a future lifecycle adapter; the shell must
-   not claim tray support in this slice.
+1. The production composition creates an unavailable controller with no
+   backend, runtime, process, microphone, or network resource.
+2. An unavailable controller starts in `UNAVAILABLE`; start, stop, and complete
+   actions return `False`, while reset is an idempotent no-op.
+3. Unavailable snapshots have no transcript or error, and unavailable actions
+   do not publish snapshots or notify listeners.
+4. The presentation renders the exact unavailable copy and disables the
+   recorder action with an accessible explanation.
+5. The waveform is inactive and no recording, processing, or animation timer
+   runs in the unavailable state.
+6. The production entrypoint obtains its controller only from
+   `build_desktop_composition()` and closes that composition on normal and
+   exceptional event-loop paths.
+7. Tray behavior, microphone capture, and runtime integration remain deferred.
 
 ## Non-Functional Requirements
 
@@ -78,18 +94,24 @@ Presentation -> Application -> Domain <- Infrastructure
 
 ## Error and Cancellation Behavior
 
-The first slice has no live audio cancellation path. A user can dismiss the
-floating panel, which resets the demo session to `idle`; an in-flight Qt timer
-is stopped before reset. Backend errors become `error` snapshots and do not
-become empty successful transcripts.
+The unavailable state has no live audio or cancellation path. User actions
+cannot start recording, processing, or transcription. No exception is mapped
+to a synthetic transcript. If composition construction fails, the exception
+propagates. If window construction or the Qt event loop fails after composition
+construction, the composition is closed and the original exception propagates;
+normal Qt exit codes are preserved. Aggregate cleanup failure and cleanup exit
+codes are deferred to a shutdown-reliability RFC.
 
 ## Acceptance Criteria
 
-- `pytest` covers every controller state transition and invalid transition.
+- `pytest` covers unavailable behavior and the injected enabled-controller
+  transitions without requiring PySide6 or native runtime dependencies.
 - The core tests import and run without PySide6 or a display server.
 - `PySide6` is an optional dependency and the regular package remains importable
   when it is absent.
-- `make check` passes on the existing macOS development environment.
+- Offscreen presentation tests cover exact unavailable copy, disabled controls,
+  inactive waveform, and absent timers.
+- `make spec-check` passes on the registered source-of-truth documents.
 - The commit does not add microphone, hotkey, history, media queue, or ASR
   runtime behavior.
 
@@ -108,8 +130,11 @@ become empty successful transcripts.
 
 - Windows tray icon, close-to-tray policy, and application activation policy.
 - Native global hotkey and WASAPI adapters.
+- Desktop archive inspection and frozen-bundle content policy.
+- Full composition cleanup aggregation and resource rollback.
 - Connecting the shell controller to `AsrApplicationService` after microphone
-  capture and an audio input port are specified.
+  capture and an audio input port are specified; runtime details remain in the
+  Parakeet runtime RFC.
 - The PyInstaller Windows x64 shell artifact is now packaged by the pinned
   `Windows Frontend Shell Build` workflow; packaging a production ASR runtime
   remains deferred.
