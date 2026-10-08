@@ -50,9 +50,52 @@ make push
 
 ## Windows Frontend Shell Artifact
 
-The `Windows Frontend Shell Build` workflow publishes the artifact
-`voiceink-shell-windows-x64` with the user-facing GUI executable
-`voiceink-shell.exe` and a separate console-mode CI smoke executable.
+After a clean clone, `make build` is the reproducible Windows packaging command.
+It creates or updates only the frontend outputs in `dist/`, installs the exact
+`.[gui,build]` extras into `.venv`, validates both x64 PE subsystems, and runs
+the console executable with Qt's offscreen platform. It requires 64-bit Windows,
+GNU Make, and Python 3.12, 3.13, or 3.14. macOS and Linux are intentionally
+rejected for this target; use `make check` there.
+
+PowerShell:
+
+```powershell
+git clone https://github.com/xfce0/VoiceInk-Win.git
+Set-Location .\VoiceInk-Win
+python --version  # 3.12.x, 3.13.x, or 3.14.x
+make build
+```
+
+If `python` is not the desired supported interpreter, use the Python launcher:
+
+```powershell
+make build 'PYTHON=py -3.12'
+```
+
+Git Bash:
+
+```bash
+git clone https://github.com/xfce0/VoiceInk-Win.git
+cd VoiceInk-Win
+python --version  # 3.12.x, 3.13.x, or 3.14.x
+make build
+```
+
+The command produces exactly these package files:
+
+```text
+dist/
+  README.txt
+  voiceink-shell.exe          # user-facing GUI executable
+  voiceink-shell-smoke.exe    # console/offscreen smoke executable
+```
+
+If `dist/` contains unrelated files, the build refuses to overwrite them. Move
+those files or explicitly run `make clean` before retrying. `make clean` removes
+all generated `dist/` and build directories.
+
+The `Windows Frontend Shell Build` workflow uses the same `make build` command
+and publishes the artifact `voiceink-shell-windows-x64`.
 GitHub CLI downloads and extracts it into the requested directory:
 
 ```powershell

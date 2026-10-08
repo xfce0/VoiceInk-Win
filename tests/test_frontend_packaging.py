@@ -4,10 +4,39 @@ from pathlib import Path
 
 import pytest
 
+from scripts import frontend_build
 from scripts.frontend_package_smoke import WINDOWS_CONSOLE_SUBSYSTEM, validate_executable
 
 ROOT = Path(__file__).resolve().parents[1]
+MAKEFILE = ROOT / "Makefile"
 WORKFLOW = ROOT / ".github" / "workflows" / "build-frontend.yml"
+
+
+def test_make_build_contract_is_windows_only_and_reproducible() -> None:
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+
+    assert "build: require-windows build-deps" in makefile
+    assert 'install --editable ".[gui,build]"' in makefile
+    assert "PyInstaller" in makefile
+    assert "scripts/frontend_build.py" in makefile
+    assert "check: spec-check format-check lint test compile" in makefile
+    assert "unrelated entries found" in (ROOT / "scripts" / "frontend_build.py").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_frontend_build_refuses_unrelated_dist_entries(tmp_path: Path, monkeypatch) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "unrelated.txt").write_text("do not overwrite", encoding="utf-8")
+    package_readme = tmp_path / "README.txt"
+    package_readme.write_text("package", encoding="utf-8")
+    monkeypatch.setattr(frontend_build, "DIST", dist)
+    monkeypatch.setattr(frontend_build, "PACKAGE_README", package_readme)
+    monkeypatch.setattr(frontend_build, "WORK", tmp_path / "build" / "frontend")
+
+    with pytest.raises(frontend_build.FrontendBuildError, match="unrelated entries"):
+        frontend_build._prepare_outputs()
 
 
 def test_frontend_workflow_builds_a_windowed_pyside6_executable() -> None:
@@ -15,18 +44,7 @@ def test_frontend_workflow_builds_a_windowed_pyside6_executable() -> None:
 
     assert "runs-on: windows-2022" in workflow
     assert "Build Windows x64 GUI and smoke executables" in workflow
-    assert 'pip install --editable ".[gui,build]"' in workflow
-    assert "--onefile" in workflow
-    assert "--windowed" in workflow
-    assert "--console" in workflow
-    assert '"--collect-all", "PySide6"' in workflow
-    assert '"--collect-all", "shiboken6"' in workflow
-    assert "scripts/frontend_entrypoint.py" in workflow
-    assert "--smoke" in workflow
-    assert "voiceink-shell-smoke.exe" in workflow
-    assert "--subsystem console" in workflow
-    assert workflow.count("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") == 4
-    assert 'QT_QPA_PLATFORM = "offscreen"' in workflow
+    assert "make build" in workflow
     assert "voiceink-shell-windows-x64" in workflow
 
 

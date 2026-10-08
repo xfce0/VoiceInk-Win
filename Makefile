@@ -1,18 +1,19 @@
 SHELL := /bin/sh
 
 PROJECT := voiceink-win
-PYTHON ?= python3
 VENV := .venv
 
 ifeq ($(OS),Windows_NT)
+PYTHON ?= python
 VENV_PYTHON := $(VENV)/Scripts/python.exe
 VENV_PIP := $(VENV)/Scripts/python.exe -m pip
 else
+PYTHON ?= python3
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test build diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check test compile build build-deps require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -44,9 +45,30 @@ spec-check:
 test:
 	$(VENV_PYTHON) -m pytest
 
-## build: Compile Python source without creating a distributable artifact
-build:
+## compile: Compile Python source without creating a distributable artifact
+compile:
 	$(VENV_PYTHON) -m compileall -q src scripts
+
+## require-windows: Stop Windows-only packaging with an actionable error elsewhere
+require-windows:
+ifeq ($(OS),Windows_NT)
+	@:
+else
+	@printf '%s\n' 'Frontend packaging requires 64-bit Windows (Windows_NT). Run `make check` on macOS/Linux, or use a Windows 10/11 x64 host for `make build`.' >&2; exit 1
+endif
+
+## build-deps: Create the build environment and verify the exact GUI/PyInstaller extras
+build-deps: require-windows
+	$(PYTHON) -c "import platform, sys; version = sys.version_info[:2]; allowed = {(3, 12), (3, 13), (3, 14)}; raise SystemExit('Python 3.12, 3.13, or 3.14 is required; found ' + platform.python_version()) if version not in allowed else None"
+	$(PYTHON) -m venv $(VENV)
+	$(VENV_PIP) install --upgrade pip
+	$(VENV_PIP) install --editable ".[gui,build]"
+	$(VENV_PIP) check
+	$(VENV_PYTHON) -c "import importlib.metadata as metadata; import PyInstaller, PySide6, shiboken6; print('Verified build dependencies: ' + ', '.join(name + '==' + metadata.version(name) for name in ('PySide6', 'shiboken6', 'pyinstaller')))"
+
+## build: Build and validate the Windows GUI and console smoke executables in dist/
+build: require-windows build-deps
+	$(VENV_PYTHON) scripts/frontend_build.py
 
 ## diagnostic-build: Build the Windows diagnostic executable (run on Windows)
 diagnostic-build:
@@ -58,8 +80,8 @@ diagnostic-build:
 native-smoke:
 	$(VENV_PYTHON) scripts/native_smoke.py
 
-## check: Run the complete local quality gate
-check: spec-check format-check lint test build
+## check: Run the complete platform-independent local quality gate
+check: spec-check format-check lint test compile
 
 ## run: Start the application after the runtime is implemented
 run:
