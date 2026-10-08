@@ -57,3 +57,6 @@ documents:
       - rfcs/microphone-recording.md#open-questions
       - spec/features/005-microphone-recording.md#open-questions-and-deferred-work
     decision_sync: required
+  - path: rfcs/native-windows-runtime-startup.md
+    kind: rfc
+    status: proposed
