@@ -4,17 +4,30 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import itertools
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from threading import Thread, Timer
 from time import monotonic, sleep
 
 NATIVE_SMOKE_READINESS_TIMEOUT = 60.0
+_SAFE_EXCEPTION_TYPE = re.compile(r"[^A-Za-z0-9_.-]+")
+_SAFE_EXCEPTION_MODULES = (
+    "builtins",
+    "http",
+    "scripts",
+    "socket",
+    "subprocess",
+    "urllib",
+    "voiceink_win",
+)
 
 
 class NativeSmokeDiagnosticsError(RuntimeError):
@@ -79,6 +92,42 @@ def _write_report_best_effort(path: Path, report: dict[str, object]) -> None:
         _write_report(path, report)
     except Exception:
         report["report_write_error"] = True
+
+
+def _exception_types(error: BaseException) -> list[str]:
+    types: list[str] = []
+    seen: set[int] = set()
+    pending: list[Iterator[BaseException]] = [iter((error,))]
+
+    while pending and len(types) < 12:
+        try:
+            current = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        module = type(current).__module__
+        if not any(
+            module == prefix or module.startswith(f"{prefix}.")
+            for prefix in _SAFE_EXCEPTION_MODULES
+        ):
+            types.append("ExternalError")
+        else:
+            error_type = _SAFE_EXCEPTION_TYPE.sub("_", type(current).__name__).strip("_")
+            types.append(error_type[:80] or "Exception")
+
+        related: list[Iterator[BaseException]] = []
+        if current.__cause__ is not None:
+            related.append(iter((current.__cause__,)))
+        elif not current.__suppress_context__ and current.__context__ is not None:
+            related.append(iter((current.__context__,)))
+        if isinstance(current, BaseExceptionGroup):
+            related.append(iter(current.exceptions))
+        if related:
+            pending.append(itertools.chain.from_iterable(related))
+    return types
 
 
 def _emit_event(events, name: str, **fields: object) -> None:
@@ -212,7 +261,9 @@ def main() -> int:
     except Exception as error:
         from voiceink_win.infrastructure import safe_failure
 
-        report["failure"] = safe_failure(error)
+        failure: dict[str, object] = dict(safe_failure(error))
+        failure["cause_types"] = _exception_types(error)
+        report["failure"] = failure
         _write_report_best_effort(report_path, report)
         if isinstance(error, NativeSmokeDiagnosticsError) or _cleanup_failed(report):
             return 4
