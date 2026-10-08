@@ -30,6 +30,9 @@ class FakeProbe:
     def set_api_key(self, api_key: str) -> None:
         del api_key
 
+    def clear_credentials(self) -> None:
+        pass
+
     def ready(self, timeout: float) -> bool:
         return timeout > 0
 
@@ -187,6 +190,57 @@ def test_supervisor_rechecks_artifact_identity_immediately_before_popen(tmp_path
     )
     with pytest.raises(ConfigurationError, match="identity changed"):
         SubprocessSupervisor(config, verifier=ChangingVerifier()).start()
+
+
+def test_supervisor_credential_setup_failure_is_primary_and_clears_probe(tmp_path: Path) -> None:
+    executable = tmp_path / "sidecar"
+    model = tmp_path / "model.gguf"
+    executable_hash = write_artifact(executable, b"executable")
+    model_hash = write_artifact(model, b"model")
+    executable.chmod(0o755)
+
+    class FailingProbe:
+        def __init__(self) -> None:
+            self.nonce = None
+            self.api_key = None
+
+        def set_nonce(self, nonce: str) -> None:
+            self.nonce = nonce
+
+        def set_api_key(self, api_key: str) -> None:
+            self.api_key = api_key
+            raise OSError("credential setup failed")
+
+        def clear_credentials(self) -> None:
+            self.nonce = None
+            self.api_key = None
+
+        def ready(self, timeout: float) -> bool:
+            del timeout
+            return False
+
+    config = SubprocessConfig(
+        executable=executable,
+        model=model,
+        executable_sha256=executable_hash,
+        model_sha256=model_hash,
+        executable_manifest=manifest(executable, executable_hash),
+        model_manifest=manifest(model, model_hash),
+        endpoint="http://127.0.0.1:8123",
+    )
+    probe = FailingProbe()
+    supervisor = SubprocessSupervisor(config, readiness_probe=probe)
+
+    with pytest.raises(ConfigurationError):
+        supervisor.start()
+
+    primary = supervisor.diagnostics.as_dict()["primary_failure"]
+    assert primary["startup_phase"] == "configuration"
+    assert primary["operation"] == "set_api_key"
+    assert supervisor.nonce is None
+    assert supervisor.api_key is None
+    assert probe.nonce is None
+    assert probe.api_key is None
 
 
 def test_windows_supervisor_uses_canonical_launch_order(tmp_path: Path, monkeypatch) -> None:

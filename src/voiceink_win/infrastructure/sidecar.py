@@ -67,6 +67,8 @@ class SidecarTransport(Protocol):
         deadline: float | None = None,
     ) -> TransportResponse: ...
 
+    def clear_credentials(self) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -84,6 +86,8 @@ class ProcessSupervisor(Protocol):
     def terminate(self, deadline: float) -> None: ...
 
     def kill(self, deadline: float | None = None) -> None: ...
+
+    def clear_credentials(self) -> None: ...
 
 
 class MonotonicClock(Protocol):
@@ -160,6 +164,7 @@ class NeMoSidecarRuntime:
         self._started = False
         self._closed = False
         self._cleanup_pending = False
+        self._credentials_clear_pending = False
         self._last_failure: str | None = None
 
     @property
@@ -379,6 +384,7 @@ class NeMoSidecarRuntime:
 
     def close(self, deadline: float | None = None) -> None:
         if self._closed:
+            self._clear_credentials()
             return
         failures: list[BaseException] = []
         cleanup_complete = True
@@ -428,6 +434,12 @@ class NeMoSidecarRuntime:
         except Exception as error:
             failures.append(error)
             self._diagnostics.record_cleanup_failure("close_resource", error)
+        try:
+            self._clear_credentials()
+        except BaseException as error:
+            failures.append(error)
+            self._record_cleanup_failure(error)
+        cleanup_complete = cleanup_complete and not self._credentials_clear_pending
         self._closed = cleanup_complete and not failures
         if failures:
             pending = next(
@@ -437,6 +449,20 @@ class NeMoSidecarRuntime:
             if pending is not None:
                 raise pending
             raise ExecutionError("sidecar cleanup failed", cause=failures[0]) from failures[0]
+
+    def _clear_credentials(self) -> None:
+        errors: list[BaseException] = []
+        for component in (self._supervisor, self._transport):
+            clear_credentials = getattr(component, "clear_credentials", None)
+            if clear_credentials is None:
+                continue
+            try:
+                clear_credentials()
+            except BaseException as error:
+                errors.append(error)
+        self._credentials_clear_pending = bool(errors)
+        if errors:
+            raise ExceptionGroup("sidecar credential cleanup failed", errors)
 
     def _kill_after_start_failure(self, deadline: float) -> BaseException | None:
         """Roll back a process started by a failed readiness transaction."""
@@ -481,10 +507,6 @@ class NeMoSidecarRuntime:
             self._diagnostics.record_cleanup_failure("get_process_state", error)
             running = True
             cleanup_complete = False
-        if self._clock.monotonic() >= deadline:
-            error = AsrTimeoutError("sidecar cleanup exceeded the request deadline")
-            self._diagnostics.record_cleanup_failure("wait_for_exit", error)
-            return error
         if running:
             error = RuntimeError("sidecar process remained alive after startup cleanup")
             failures.append(error)
@@ -493,6 +515,16 @@ class NeMoSidecarRuntime:
             error = RuntimeError("sidecar resource cleanup is still pending")
             failures.append(error)
             self._diagnostics.record_cleanup_failure("close_resource", error)
+        try:
+            self._clear_credentials()
+        except BaseException as error:
+            failures.append(error)
+            self._record_cleanup_failure(error)
+        cleanup_complete = cleanup_complete and not self._credentials_clear_pending
+        if self._clock.monotonic() >= deadline:
+            error = AsrTimeoutError("sidecar cleanup exceeded the request deadline")
+            self._diagnostics.record_cleanup_failure("wait_for_exit", error)
+            return error
         if failures:
             return ExceptionGroup("sidecar startup cleanup failed", failures)
         return None
@@ -581,11 +613,21 @@ class NeMoSidecarRuntime:
         nonce = self._supervisor.nonce or generate_nonce()
         set_transport_nonce = getattr(self._transport, "set_nonce", None)
         if set_transport_nonce is not None:
-            set_transport_nonce(nonce)
+            try:
+                set_transport_nonce(nonce)
+            except BaseException as error:
+                failure = ConfigurationError("sidecar nonce credential setup failed", cause=error)
+                self._diagnostics.record_failure("configuration", "set_nonce", failure)
+                raise failure from error
         api_key = self._supervisor.api_key
         set_transport_api_key = getattr(self._transport, "set_api_key", None)
         if api_key is not None and set_transport_api_key is not None:
-            set_transport_api_key(api_key)
+            try:
+                set_transport_api_key(api_key)
+            except BaseException as error:
+                failure = ConfigurationError("sidecar API key credential setup failed", cause=error)
+                self._diagnostics.record_failure("configuration", "set_api_key", failure)
+                raise failure from error
 
     def _kill_supervisor(self, deadline: float) -> None:
         kill = self._supervisor.kill

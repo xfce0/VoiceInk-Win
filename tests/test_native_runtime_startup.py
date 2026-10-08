@@ -164,7 +164,7 @@ def test_t03_running_owned_process_gets_one_termination_and_is_reaped(monkeypatc
     assert process.poll() == 0
 
 
-def test_termination_failure_keeps_live_process_recoverable_for_later_cleanup(monkeypatch) -> None:
+def test_windows_pid_tree_fallback_refuses_unowned_process_cleanup(monkeypatch) -> None:
     _force_posix(monkeypatch)
 
     class WindowsOsProxy:
@@ -204,19 +204,38 @@ def test_termination_failure_keeps_live_process_recoverable_for_later_cleanup(mo
     process = FailingTerminateProcess()
     supervisor = _supervisor_for_process(process)
 
-    with pytest.raises(OSError):
+    with pytest.raises(RuntimeRecoveryPendingError, match="ownership is unavailable"):
         supervisor.terminate(time.monotonic() + 1.0)
 
-    assert process.terminate_calls == 1
+    assert process.terminate_calls == 0
     assert process.running
     assert supervisor._process_state is process_module._ProcessLifecycleState.TERMINATION_FAILED
-
-    supervisor.terminate(time.monotonic() + 1.0)
-
-    assert process.terminate_calls == 1
-    assert process.kill_calls == 1
-    assert supervisor._process_state is process_module._ProcessLifecycleState.REAPED
+    process.released.set()
+    process.running = False
     assert supervisor._process_reaper_done.wait(1.0)
+    assert not supervisor.cleanup_complete()
+
+
+@pytest.mark.parametrize("actual_creation_time", [None, 101])
+def test_windows_child_pid_creation_time_mismatch_is_recovery_pending(actual_creation_time) -> None:
+    with pytest.raises(RuntimeRecoveryPendingError, match="child process identity"):
+        process_module._require_matching_process_creation_time(100, actual_creation_time)
+
+
+def test_windows_pid_tree_fallback_never_terminates_unverified_children(monkeypatch) -> None:
+    monkeypatch.setattr(process_module.sys, "platform", "win32")
+    process = _Process()
+    process.kill_calls = 0
+
+    def kill() -> None:
+        process.kill_calls += 1
+
+    process.kill = kill
+
+    with pytest.raises(RuntimeRecoveryPendingError, match="child PID ownership"):
+        SubprocessSupervisor._kill_windows_tree(process)
+
+    assert process.kill_calls == 0
 
 
 def test_t04_repeated_concurrent_cleanup_cannot_issue_a_second_termination(monkeypatch) -> None:

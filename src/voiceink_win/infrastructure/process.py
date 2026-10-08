@@ -12,7 +12,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from ctypes import wintypes
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -51,6 +50,8 @@ class ReadinessProbe(Protocol):
     def set_nonce(self, nonce: str) -> None: ...
 
     def set_api_key(self, api_key: str) -> None: ...
+
+    def clear_credentials(self) -> None: ...
 
 
 class MonotonicClock(Protocol):
@@ -353,6 +354,10 @@ class UrllibReadinessProbe:
             raise ConfigurationError("sidecar readiness API key must be non-empty")
         self._api_key = api_key
 
+    def clear_credentials(self) -> None:
+        self._nonce = None
+        self._api_key = None
+
     def ready(self, timeout: float) -> bool:
         headers: dict[str, str] = {}
         if self._nonce is not None:
@@ -415,6 +420,8 @@ class SubprocessSupervisor:
         self._process_reaper_done.set()
         self._nonce: str | None = None
         self._api_key: str | None = None
+        self._credential_recovery_pending = False
+        self._unsafe_tree_recovery_pending = False
         self.process_tree_mode = "windows-taskkill" if os.name == "nt" else "posix-process-group"
 
     @property
@@ -452,39 +459,43 @@ class SubprocessSupervisor:
             self._process = None
             self._process_state = _ProcessLifecycleState.NOT_CREATED
         self._diagnostics.reset()
-        self._diagnostics.record("configuration", "validate_endpoint", "validated")
-        self._nonce = generate_nonce()
-        self._api_key = generate_nonce()
-        self._readiness_probe.set_nonce(self._nonce)
-        self._readiness_probe.set_api_key(self._api_key)
-        sidecar_environment = {
-            key: os.environ[key]
-            for key in (
-                "PATH",
-                "SystemRoot",
-                "TEMP",
-                "TMP",
-                "USERPROFILE",
-                "LOCALAPPDATA",
-                "CUDA_PATH",
-                "CUDA_VISIBLE_DEVICES",
-            )
-            if key in os.environ
-        }
-        sidecar_environment[ASR_NONCE_ENV] = self._nonce
-        sidecar_environment[ASR_API_KEY_ENV] = self._api_key
-        kwargs = {
-            "shell": False,
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "env": sidecar_environment,
-        }
-        if os.name != "nt":
-            kwargs["start_new_session"] = True
-        phase = "artifact_verification"
-        operation = "verify_artifact"
+        phase = "configuration"
+        operation = "validate_endpoint"
         try:
+            self._diagnostics.record(phase, operation, "validated")
+            self._nonce = generate_nonce()
+            operation = "set_nonce"
+            self._readiness_probe.set_nonce(self._nonce)
+            self._api_key = generate_nonce()
+            operation = "set_api_key"
+            self._readiness_probe.set_api_key(self._api_key)
+            sidecar_environment = {
+                key: os.environ[key]
+                for key in (
+                    "PATH",
+                    "SystemRoot",
+                    "TEMP",
+                    "TMP",
+                    "USERPROFILE",
+                    "LOCALAPPDATA",
+                    "CUDA_PATH",
+                    "CUDA_VISIBLE_DEVICES",
+                )
+                if key in os.environ
+            }
+            sidecar_environment[ASR_NONCE_ENV] = self._nonce
+            sidecar_environment[ASR_API_KEY_ENV] = self._api_key
+            kwargs = {
+                "shell": False,
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "env": sidecar_environment,
+            }
+            if os.name != "nt":
+                kwargs["start_new_session"] = True
+            phase = "artifact_verification"
+            operation = "verify_artifact"
             self._verifier.verify_manifest(
                 self.config.executable, self.config.executable_manifest, label="runtime executable"
             )
@@ -578,7 +589,11 @@ class SubprocessSupervisor:
                 except BaseException as cleanup_error:
                     cleanup_errors.append(cleanup_error)
                     self._diagnostics.record_cleanup_failure("close_resource", cleanup_error)
-            self._nonce = None
+            try:
+                self.clear_credentials()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+                self._diagnostics.record_cleanup_failure("close_resource", cleanup_error)
             cleanup_pending = not self.cleanup_complete()
             if cleanup_pending:
                 pending = RuntimeRecoveryPendingError("sidecar cleanup is still pending")
@@ -588,6 +603,20 @@ class SubprocessSupervisor:
                 "pending" if cleanup_pending else "failed" if cleanup_errors else "complete"
             )
             raise failure from error
+
+    def clear_credentials(self) -> None:
+        errors: list[BaseException] = []
+        self._nonce = None
+        self._api_key = None
+        clear_credentials = getattr(self._readiness_probe, "clear_credentials", None)
+        if clear_credentials is not None:
+            try:
+                clear_credentials()
+            except BaseException as error:
+                errors.append(error)
+        self._credential_recovery_pending = bool(errors)
+        if errors:
+            raise ExceptionGroup("sidecar credential cleanup failed", errors)
 
     def wait_ready(self, deadline: float) -> bool:
         while self._clock.monotonic() < deadline:
@@ -652,6 +681,14 @@ class SubprocessSupervisor:
             self._terminate_process_once(process, deadline, escalation=escalation)
             if not _process_is_alive(process):
                 self._process_state = _ProcessLifecycleState.REAPED
+        except RuntimeRecoveryPendingError:
+            self._unsafe_tree_recovery_pending = True
+            if _process_is_alive(process):
+                self._process_state = _ProcessLifecycleState.TERMINATION_FAILED
+                self._start_process_reaper(process, pending_job=self._windows_job)
+            else:
+                self._process_state = _ProcessLifecycleState.REAPED
+            raise
         except BaseException:
             if _process_is_alive(process):
                 self._process_state = _ProcessLifecycleState.TERMINATION_FAILED
@@ -700,11 +737,17 @@ class SubprocessSupervisor:
             return
         if os.name == "nt":
             try:
+                if self._windows_job is None:
+                    raise RuntimeRecoveryPendingError(
+                        "Windows process tree ownership is unavailable"
+                    )
                 if escalation:
                     self._kill_windows_tree(process, deadline=deadline, clock=self._clock)
                     process.kill()
                 else:
                     process.terminate()
+            except RuntimeRecoveryPendingError:
+                raise
             except BaseException:
                 if _process_is_alive(process):
                     raise
@@ -857,6 +900,8 @@ class SubprocessSupervisor:
         return not (
             process_reaper_pending
             or process_pending
+            or getattr(self, "_credential_recovery_pending", False)
+            or getattr(self, "_unsafe_tree_recovery_pending", False)
             or artifacts_pending
             or jobs_pending
             or self._artifact_locks
@@ -976,16 +1021,11 @@ class SubprocessSupervisor:
         *,
         clock: MonotonicClock | None = None,
     ) -> None:
+        del process, deadline, clock
         if sys.platform != "win32":
             return
-        expected_creation_time = _process_creation_time(getattr(process, "_handle", None))
-        if expected_creation_time is None:
-            raise OSError("cannot safely identify the Windows process tree")
-        _kill_windows_descendants(
-            process.pid,
-            expected_creation_time,
-            deadline=deadline,
-            clock=clock or _SystemClock(),
+        raise RuntimeRecoveryPendingError(
+            "Windows PID-tree fallback is disabled because child PID ownership is unverified"
         )
 
     def _signal_process_group(self, process: ProcessHandle, sig: signal.Signals) -> None:
@@ -1113,125 +1153,8 @@ def _open_artifact_read_lock(path: Path) -> _WindowsArtifactReadLock:
     return _WindowsArtifactReadLock(api, handles, identity, native_path, registry)
 
 
-def _process_creation_time(handle) -> int | None:
-    if handle is None:
-        return None
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    filetime = wintypes.FILETIME
-    kernel32.GetProcessTimes.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(filetime),
-        ctypes.POINTER(filetime),
-        ctypes.POINTER(filetime),
-        ctypes.POINTER(filetime),
-    ]
-    kernel32.GetProcessTimes.restype = wintypes.BOOL
-    creation = filetime()
-    exit_time = filetime()
-    kernel_time = filetime()
-    user_time = filetime()
-    if not kernel32.GetProcessTimes(
-        handle,
-        ctypes.byref(creation),
-        ctypes.byref(exit_time),
-        ctypes.byref(kernel_time),
-        ctypes.byref(user_time),
-    ):
-        return None
-    return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
-
-
-def _kill_windows_descendants(
-    root_pid: int,
-    expected_creation_time: int | None,
-    *,
-    deadline: float | None = None,
-    clock: MonotonicClock | None = None,
-) -> None:
-    class ProcessEntry(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.c_size_t),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", wintypes.WCHAR * 260),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    invalid_handle = ctypes.c_void_p(-1).value
-    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
-    kernel32.Process32FirstW.restype = wintypes.BOOL
-    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
-    kernel32.Process32NextW.restype = wintypes.BOOL
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    kernel32.TerminateProcess.restype = wintypes.BOOL
-    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    kernel32.WaitForSingleObject.restype = wintypes.DWORD
-    from .windows_snapshot import NativeHandleLeaseRegistry
-
-    native_handles = NativeHandleLeaseRegistry(clock=clock)
-    if expected_creation_time is None:
-        return
-    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
-    if snapshot in (None, invalid_handle):
-        return
-    try:
-        native_handles.register_handle(snapshot, kernel32.CloseHandle)
-        root_handle = kernel32.OpenProcess(0x1000, False, root_pid)
-        if root_handle in (None, invalid_handle):
-            error = ctypes.get_last_error()
-            if error == 87:  # ERROR_INVALID_PARAMETER: the root already exited.
-                return
-            raise ctypes.WinError(error)
-        native_handles.register_handle(root_handle, kernel32.CloseHandle)
-        if _process_creation_time(root_handle) != expected_creation_time:
-            return
-        children: dict[int, list[int]] = {}
-        entry = ProcessEntry()
-        entry.dwSize = ctypes.sizeof(ProcessEntry)
-        if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
-            while True:
-                children.setdefault(int(entry.th32ParentProcessID), []).append(
-                    int(entry.th32ProcessID)
-                )
-                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
-                    break
-    finally:
-        native_handles.close()
-    descendants: list[int] = []
-    pending = list(children.get(root_pid, ()))
-    while pending:
-        pid = pending.pop()
-        descendants.append(pid)
-        pending.extend(children.get(pid, ()))
-    handles = []
-    try:
-        for pid in [root_pid, *reversed(descendants)]:
-            handle = kernel32.OpenProcess(0x0001 | 0x00100000, False, pid)
-            if handle not in (None, invalid_handle):
-                handles.append(handle)
-                native_handles.register_handle(handle, kernel32.CloseHandle)
-            elif pid != root_pid:
-                raise ctypes.WinError(ctypes.get_last_error())
-        now = (clock or _SystemClock()).monotonic
-        cleanup_deadline = deadline if deadline is not None else now() + 1.0
-        for handle in handles:
-            if not kernel32.TerminateProcess(handle, 1):
-                raise ctypes.WinError(ctypes.get_last_error())
-            remaining = cleanup_deadline - now()
-            if remaining <= 0:
-                raise TimeoutError("Windows process tree cleanup deadline expired")
-            remaining_ms = max(0, int(remaining * 1000))
-            if kernel32.WaitForSingleObject(handle, remaining_ms) != 0:
-                raise TimeoutError("Windows process tree did not terminate before the deadline")
-    finally:
-        native_handles.close()
+def _require_matching_process_creation_time(expected: int | None, actual: int | None) -> None:
+    if expected is None or actual is None or expected != actual:
+        raise RuntimeRecoveryPendingError(
+            "Windows child process identity could not be verified before termination"
+        )

@@ -29,6 +29,8 @@ STARTUP_PHASES = frozenset(
 STARTUP_OPERATIONS = frozenset(
     {
         "validate_endpoint",
+        "set_nonce",
+        "set_api_key",
         "open_artifact",
         "verify_artifact",
         "create_process",

@@ -39,12 +39,20 @@ class FakeTransport:
         self.api_keys: list[str] = []
         self.attestation_credentials: list[tuple[str | None, str | None]] = []
         self.closed = False
+        self._nonce: str | None = None
+        self._api_key: str | None = None
 
     def set_nonce(self, nonce: str) -> None:
+        self._nonce = nonce
         self.nonces.append(nonce)
 
     def set_api_key(self, api_key: str) -> None:
+        self._api_key = api_key
         self.api_keys.append(api_key)
+
+    def clear_credentials(self) -> None:
+        self._nonce = None
+        self._api_key = None
 
     def get(
         self, path: str, timeout: float | None, max_response_bytes: int, nonce: str | None = None
@@ -94,6 +102,7 @@ class FakeTransport:
         return self.post(path, json.dumps(payload).encode(), timeout, max_response_bytes)
 
     def close(self) -> None:
+        self.clear_credentials()
         self.closed = True
 
 
@@ -111,6 +120,10 @@ class FakeSupervisor:
         self.nonce = None
         self.api_key = "test-api-key"
         self.diagnostics = StartupDiagnostics()
+
+    def clear_credentials(self) -> None:
+        self.nonce = None
+        self.api_key = None
 
     def start(self) -> None:
         self.started = True
@@ -181,6 +194,63 @@ def test_sidecar_start_transcribe_and_close_use_injected_boundaries() -> None:
     assert payload["schema"] == "voiceink.asr.request.v1"
     assert supervisor.started and supervisor.terminated
     assert transport.closed
+
+
+@pytest.mark.parametrize("failure_operation", ["set_nonce", "set_api_key"])
+def test_sidecar_credential_setup_failure_is_primary_configuration_failure(
+    failure_operation: str,
+) -> None:
+    class CleanupFailSupervisor(FakeSupervisor):
+        def terminate(self, deadline: float) -> None:
+            del deadline
+            raise OSError("cleanup failed")
+
+        def is_running(self) -> bool:
+            return False
+
+    class FailingTransport(FakeTransport):
+        def set_nonce(self, nonce: str) -> None:
+            super().set_nonce(nonce)
+            if failure_operation == "set_nonce":
+                raise OSError("credential setup failed")
+
+        def set_api_key(self, api_key: str) -> None:
+            super().set_api_key(api_key)
+            if failure_operation == "set_api_key":
+                raise OSError("credential setup failed")
+
+    transport = FailingTransport(TransportResponse(200, result_body()))
+    supervisor = CleanupFailSupervisor()
+    runtime = NeMoSidecarRuntime(config(), transport, supervisor)
+
+    with pytest.raises(ConfigurationError):
+        runtime.start()
+
+    primary = runtime.diagnostics.as_dict()["primary_failure"]
+    assert primary["startup_phase"] == "configuration"
+    assert primary["operation"] == failure_operation
+    assert supervisor.nonce is None
+    assert supervisor.api_key is None
+    assert transport._nonce is None
+    assert transport._api_key is None
+    assert runtime.diagnostics.as_dict()["primary_failure"]["operation"] == failure_operation
+    assert runtime.diagnostics.as_dict()["cleanup_failures"]
+
+
+def test_sidecar_close_clears_supervisor_and_transport_credentials() -> None:
+    transport = FakeTransport(TransportResponse(200, result_body()))
+    supervisor = FakeSupervisor()
+    runtime = NeMoSidecarRuntime(config(), transport, supervisor)
+
+    runtime.start()
+    assert transport._nonce is not None
+    assert transport._api_key == supervisor.api_key
+    runtime.close()
+
+    assert supervisor.nonce is None
+    assert supervisor.api_key is None
+    assert transport._nonce is None
+    assert transport._api_key is None
 
 
 def test_sidecar_model_attestation_is_authenticated_and_fail_closed() -> None:

@@ -73,6 +73,10 @@ class UrllibLoopbackTransport:
             raise ConfigurationError("sidecar API key must be non-empty")
         self._api_key = api_key
 
+    def clear_credentials(self) -> None:
+        self._nonce = None
+        self._api_key = None
+
     def post_multipart_audio(
         self,
         path: str,
@@ -533,7 +537,7 @@ class UrllibLoopbackTransport:
         raise ProtocolError("sidecar response exceeds the configured byte limit")
 
     def close(self) -> None:
-        pass
+        self.clear_credentials()
 
     def _effective_nonce(self, nonce: str | None) -> str:
         value = nonce if nonce is not None else self._nonce
