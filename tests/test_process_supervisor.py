@@ -115,6 +115,8 @@ def test_artifact_verifier_reads_runtime_artifacts_in_binary_mode(
 
     def open_binary(path, flags):
         captured_flags.append(flags)
+        if os.name == "nt":
+            return real_open(path, flags)
         return real_open(path, flags & ~binary_flag)
 
     monkeypatch.setattr(process_module.os, "O_BINARY", binary_flag, raising=False)
