@@ -18,12 +18,14 @@ from voiceink_win.domain import (
     CancellationReason,
     Cancelled,
     CleanupWarningError,
+    EndOfStream,
     ErrorCode,
     Failed,
     ImportedDeadlineExceededError,
     ImportedProcessingError,
     ImportedTranscriptionResult,
     ImportJob,
+    ImportObservation,
     ImportOptions,
     ImportRecoveryPendingError,
     ImportShutdownError,
@@ -35,6 +37,7 @@ from voiceink_win.domain import (
     NormalizationFailedError,
     NormalizedAudio,
     ProcessingMetadata,
+    ProgressSnapshot,
     ProtocolError,
     RuntimeDiagnostics,
     RuntimeUnavailableError,
@@ -116,6 +119,51 @@ class _Record:
     reservation_release_lock: Lock = field(default_factory=Lock)
     cleanup_warning: bool = False
     deadline_interrupt_started: float | None = None
+
+
+class _JobObservation:
+    """Closeable, read-only view over one existing import job."""
+
+    def __init__(self, service: ImportedMediaTranscriptionService, job_id: JobId) -> None:
+        self._service = service
+        self._job_id = job_id
+        self._closed = Event()
+        self._last_key: tuple[Stage, int, bool] | None = None
+        self._terminal_emitted = False
+
+    def next(self, timeout: float | None = None) -> ImportObservation | EndOfStream | None:
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        while not self._closed.is_set():
+            record = self._service._record(self._job_id)
+            job = record.job
+            with job.lock:
+                stage = job.stage
+                attempt = job.attempt
+                terminal = job.result
+                done = job.done.is_set()
+            key = (stage, attempt.value, done)
+            if done and self._terminal_emitted:
+                return EndOfStream()
+            if key != self._last_key:
+                self._last_key = key
+                self._terminal_emitted = done
+                return ImportObservation(
+                    self._job_id,
+                    attempt,
+                    ProgressSnapshot(stage),
+                    terminal if done else None,
+                )
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+            else:
+                remaining = 0.05
+            self._closed.wait(min(0.05, remaining))
+        return EndOfStream()
+
+    def close(self) -> None:
+        self._closed.set()
 
 
 class ImportedMediaTranscriptionService:
@@ -241,6 +289,11 @@ class ImportedMediaTranscriptionService:
         if not record.job.done.wait(timeout):
             raise TimeoutError("import job did not finish before timeout")
         return record.job.result
+
+    def observe(self, job_id: JobId) -> _JobObservation:
+        """Observe one admitted job without creating another worker queue."""
+        self._record(job_id)
+        return _JobObservation(self, job_id)
 
     def consume(self, job_id: JobId, timeout: float | None = None) -> TerminalResult:
         result = self.wait(job_id, timeout)

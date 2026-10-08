@@ -241,6 +241,14 @@ class BackendApplication:
         """Return a terminal imported-media result, waiting up to ``timeout``."""
         return self._require_imported_media().wait(job_id, timeout=timeout)
 
+    def wait(self, job_id: JobId, timeout: float | None = None) -> TerminalResult:
+        """Expose the imported-media wait contract to application page adapters."""
+        return self.status_or_wait(job_id, timeout=timeout)
+
+    def observe(self, job_id: JobId):
+        """Observe an imported-media job through the existing service state machine."""
+        return self._require_imported_media().observe(job_id)
+
     def cancel(self, job_id: JobId) -> bool:
         """Request cancellation of an imported-media job."""
         return self._require_imported_media().cancel(job_id)

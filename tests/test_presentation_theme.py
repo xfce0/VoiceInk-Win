@@ -71,4 +71,5 @@ def test_sidebar_registry_matches_reference_order_and_has_unique_icons() -> None
     assert all(item.icon_foreground for item in SIDEBAR_ITEMS)
     assert all("d=" in path or "x=" in path for path in LUCIDE_PATHS.values())
     assert SIDEBAR_ITEMS[0].enabled
-    assert not any(item.enabled for item in SIDEBAR_ITEMS[1:])
+    assert SIDEBAR_ITEMS[2].enabled
+    assert not any(item.enabled for item in (*SIDEBAR_ITEMS[1:2], *SIDEBAR_ITEMS[3:]))

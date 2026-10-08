@@ -66,7 +66,12 @@ from .imported_models import (
     TerminalResult,
     VerifiedMediaHandle,
 )
-from .imported_ports import MediaNormalizer, MediaSnapshotStore, MonotonicClock
+from .imported_ports import (
+    MediaNormalizer,
+    MediaSnapshotStore,
+    MonotonicClock,
+    ObservationSubscription,
+)
 from .models import (
     MAX_CANONICAL_AUDIO_BYTES,
     AsrCapabilities,
@@ -81,6 +86,24 @@ from .models import (
 )
 from .ports import AsrRuntime
 from .shell import ShellSnapshot, ShellState
+from .transcribe import (
+    SUPPORTED_MEDIA_EXTENSIONS,
+    SUPPORTED_MEDIA_FORMATS,
+    EndOfStream,
+    ImportFailure,
+    ImportObservation,
+    MediaFormat,
+    ProgressSnapshot,
+    QueueAggregate,
+    QueueState,
+    TranscribePageSnapshot,
+    TranscriptDocument,
+    TranscriptionQueueItemSnapshot,
+    TranscriptVariant,
+    media_format_hint,
+    resolve_variant,
+    safe_basename,
+)
 
 __all__ = [
     "AsrCapabilities",
@@ -134,6 +157,7 @@ __all__ = [
     "MediaNormalizer",
     "MediaSnapshotStore",
     "MonotonicClock",
+    "ObservationSubscription",
     "NoAudioStreamError",
     "NormalizedAudio",
     "NormalizationFailedError",
@@ -159,4 +183,20 @@ __all__ = [
     "VerifiedMediaHandle",
     "WarningCode",
     "safe_message",
+    "EndOfStream",
+    "ImportFailure",
+    "ImportObservation",
+    "MediaFormat",
+    "ProgressSnapshot",
+    "QueueAggregate",
+    "QueueState",
+    "SUPPORTED_MEDIA_EXTENSIONS",
+    "SUPPORTED_MEDIA_FORMATS",
+    "TranscriptDocument",
+    "TranscriptVariant",
+    "TranscribePageSnapshot",
+    "TranscriptionQueueItemSnapshot",
+    "media_format_hint",
+    "resolve_variant",
+    "safe_basename",
 ]

@@ -55,7 +55,7 @@ LUCIDE_PATHS = {
 SIDEBAR_ITEMS = (
     SidebarItem("Dashboard", "dashboard", "#e8892e", "#24170f", True),
     SidebarItem("Modes", "modes", "#6256c9", "#ffffff", False),
-    SidebarItem("Transcribe", "transcribe", "#db594b", "#ffffff", False),
+    SidebarItem("Transcribe", "transcribe", "#db594b", "#ffffff", True),
     SidebarItem("History", "history", "#df4f82", "#2a101d", False),
     SidebarItem("Dictionary", "dictionary", "#3478d4", "#ffffff", False),
     SidebarItem("AI Models", "models", "#986d4b", "#24150d", False),

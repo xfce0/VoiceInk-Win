@@ -14,16 +14,18 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from voiceink_win.application import ShellController
+from voiceink_win.application import ShellController, TranscribePageController
 from voiceink_win.domain import ShellSnapshot, ShellState
 
 from .icon_registry import SIDEBAR_ITEMS
 from .qt_icons import sidebar_icon
 from .theme import ThemeMode, ThemeTokens, stylesheet_for, theme_for
+from .transcribe_page import TranscribePage
 from .widgets import WaveformWidget
 
 SIDEBAR_WIDTH = 208
@@ -163,10 +165,16 @@ class FloatingRecorderWindow(QFrame):
 class MainWindow(QMainWindow):
     """Main VoiceInk shell with a dashboard-first information hierarchy."""
 
-    def __init__(self, controller: ShellController, theme: ThemeTokens | None = None) -> None:
+    def __init__(
+        self,
+        controller: ShellController,
+        theme: ThemeTokens | None = None,
+        transcribe_controller=None,
+    ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
         self._controller = controller
+        self._transcribe_controller = transcribe_controller or TranscribePageController(None)
         self._unsubscribe = controller.subscribe(self._render)
         self._theme_signal = None
         self._theme_callback = None
@@ -186,7 +194,11 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_sidebar())
-        layout.addWidget(self._build_dashboard(), 1)
+        self._pages = QStackedWidget(root)
+        self._pages.addWidget(self._build_dashboard())
+        self._transcribe_page = TranscribePage(self._transcribe_controller, self._pages)
+        self._pages.addWidget(self._transcribe_page)
+        layout.addWidget(self._pages, 1)
         self.setCentralWidget(root)
 
     def _build_sidebar(self) -> QFrame:
@@ -197,6 +209,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(14, 18, 14, 14)
         layout.setSpacing(6)
 
+        self._nav_buttons = {}
         for index, item in enumerate(SIDEBAR_ITEMS):
             item_container = QWidget(sidebar)
             item_container.setObjectName("navItem")
@@ -220,11 +233,25 @@ class MainWindow(QMainWindow):
             button.setEnabled(item.enabled)
             if item.label == "Dashboard":
                 button.setChecked(True)
+            button.clicked.connect(
+                lambda _checked=False, label=item.label: self._select_page(label)
+            )
+            self._nav_buttons[item.label] = button
             item_layout.addWidget(button)
             layout.addWidget(item_container)
             if index == 6:
                 layout.addStretch(1)
         return sidebar
+
+    def _select_page(self, label: str) -> None:
+        if label == "Dashboard":
+            self._pages.setCurrentIndex(0)
+        elif label == "Transcribe":
+            self._pages.setCurrentIndex(1)
+        else:
+            return
+        for name, button in self._nav_buttons.items():
+            button.setChecked(name == label)
 
     def apply_theme(self, theme: ThemeTokens) -> None:
         self._theme = theme
@@ -450,4 +477,5 @@ class MainWindow(QMainWindow):
         self._disposed = True
         self._disconnect_theme_signal()
         self._recorder.dispose()
+        self._transcribe_page.dispose()
         self._unsubscribe()
