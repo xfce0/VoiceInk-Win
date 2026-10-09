@@ -215,6 +215,9 @@ def test_subprocess_config_adds_no_warmup_only_for_packaged_smoke(
     monkeypatch.setenv("VOICEINK_SIDECAR_NO_WARMUP", "1")
     assert config.argv()[-1] == "--no-warmup"
 
+    monkeypatch.setenv("VOICEINK_SIDECAR_VERBOSE", "1")
+    assert config.argv()[1] == "--verbose"
+
 
 def test_supervisor_credential_setup_failure_is_primary_and_clears_probe(tmp_path: Path) -> None:
     executable = tmp_path / "sidecar"

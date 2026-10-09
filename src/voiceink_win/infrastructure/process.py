@@ -318,6 +318,8 @@ class SubprocessConfig:
             "--device",
             self.backend,
         ]
+        if os.environ.get("VOICEINK_SIDECAR_VERBOSE") == "1":
+            args.insert(1, "--verbose")
         if os.environ.get("VOICEINK_SIDECAR_NO_WARMUP") == "1":
             args.append("--no-warmup")
         args.extend(self.extra_args)
