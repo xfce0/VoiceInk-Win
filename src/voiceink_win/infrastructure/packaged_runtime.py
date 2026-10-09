@@ -15,6 +15,29 @@ from .ffmpeg import FfmpegArtifactManifest
 
 PACKAGE_DESCRIPTOR = "voiceink-package.json"
 PACKAGE_SCHEMA = "voiceink.runtime.package.v1"
+TRUSTED_PACKAGE_ARTIFACTS = {
+    "nemo-speech-cpp-windows-amd64": {
+        "version": "0.2.0",
+        "provenance_url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.2.0",
+        "sha256": "72ed6e35506150dc7edaa0507904688ace62a8d9a47c4976330b556d361492aa",
+        "license": "Apache-2.0",
+        "path": "runtime/nemo-speech.exe",
+    },
+    "parakeet-tdt-0.6b-v3.oss-align.q8_0": {
+        "version": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+        "provenance_url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/tree/541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+        "sha256": "e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e",
+        "license": "CC-BY-4.0",
+        "path": "models/parakeet.gguf",
+    },
+    "ffmpeg": {
+        "version": "7.1.1",
+        "provenance_url": "https://github.com/GyanD/codexffmpeg/releases/tag/7.1.1",
+        "sha256": "b90225987bdd042cca09a1efb5e34e9848f2d1dbf5fbcd388753a44145522997",
+        "license": "GPL-3.0-or-later",
+        "path": "tools/ffmpeg.exe",
+    },
+}
 
 
 def _invalid(message: str, *, cause: BaseException | None = None) -> ConfigurationError:
@@ -86,7 +109,10 @@ class PackagedRuntime:
 
 
 def load_packaged_runtime(
-    *, root: Path | None = None, environ: Mapping[str, str] | None = None
+    *,
+    root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    trusted_artifacts: Mapping[str, Mapping[str, str]] | None = None,
 ) -> PackagedRuntime | None:
     values = environ if environ is not None else os.environ
     configured_root = values.get("VOICEINK_PACKAGE_ROOT", "").strip()
@@ -115,12 +141,15 @@ def load_packaged_runtime(
         raise _invalid("packaged runtime descriptor schema is malformed")
     if descriptor["schema"] != PACKAGE_SCHEMA or descriptor["version"] != 1:
         raise _invalid("packaged runtime descriptor schema is unsupported")
+    trusted = trusted_artifacts or TRUSTED_PACKAGE_ARTIFACTS
 
     executable_id = _string(descriptor["executable_artifact_id"], "executable_artifact_id")
     model_id = _string(descriptor["model_artifact_id"], "model_artifact_id")
     artifacts = descriptor["artifacts"]
     if not isinstance(artifacts, Mapping) or set(artifacts) != {executable_id, model_id}:
         raise _invalid("packaged runtime artifacts are malformed")
+    if executable_id not in trusted or model_id not in trusted:
+        raise _invalid("packaged runtime artifact ID is not trusted")
 
     lock_artifacts: dict[str, dict[str, object]] = {}
     artifact_paths: dict[str, Path] = {}
@@ -131,6 +160,12 @@ def load_packaged_runtime(
         expected_keys = {"kind", "version", "provenance_url", "sha256", "license", "path"}
         if set(artifact) != expected_keys:
             raise _invalid("packaged runtime artifact schema is malformed")
+        trusted_artifact = trusted.get(str(artifact_id))
+        if trusted_artifact is None:
+            raise _invalid("packaged runtime artifact ID is not trusted")
+        for field in ("version", "provenance_url", "sha256", "license", "path"):
+            if artifact[field] != trusted_artifact.get(field):
+                raise _invalid(f"packaged runtime artifact {artifact_id} does not match trust root")
         path = _relative_file(package_root, artifact.pop("path"), f"artifacts.{artifact_id}.path")
         artifact_paths[artifact_id] = path
         lock_artifacts[str(artifact_id)] = {
@@ -149,6 +184,12 @@ def load_packaged_runtime(
     ffmpeg_value = dict(ffmpeg)
     if set(ffmpeg_value) != {"version", "provenance_url", "sha256", "license", "path"}:
         raise _invalid("packaged runtime FFmpeg metadata is malformed")
+    trusted_ffmpeg = trusted.get("ffmpeg")
+    if trusted_ffmpeg is None or any(
+        ffmpeg_value[field] != trusted_ffmpeg.get(field)
+        for field in ("version", "provenance_url", "sha256", "license", "path")
+    ):
+        raise _invalid("packaged runtime FFmpeg metadata does not match trust root")
     ffmpeg_path = _relative_file(package_root, ffmpeg_value.pop("path"), "ffmpeg.path")
     ffmpeg_manifest = FfmpegArtifactManifest(
         version=_string(ffmpeg_value["version"], "ffmpeg.version"),
@@ -203,6 +244,7 @@ def packaged_runtime_available(*, environ: Mapping[str, str] | None = None) -> b
 __all__ = [
     "PACKAGE_DESCRIPTOR",
     "PACKAGE_SCHEMA",
+    "TRUSTED_PACKAGE_ARTIFACTS",
     "PackagedRuntime",
     "load_packaged_runtime",
     "packaged_runtime_available",

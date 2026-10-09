@@ -461,7 +461,8 @@ def build_application_from_environment(
         "VOICEINK_ARTIFACT_LOCK_SHA256",
     )
     packaged = None
-    if not all(values.get(name, "").strip() for name in runtime_names):
+    package_root_configured = values.get("VOICEINK_PACKAGE_ROOT", "").strip()
+    if package_root_configured or not all(values.get(name, "").strip() for name in runtime_names):
         packaged = load_packaged_runtime(environ=values)
     if packaged is not None:
         configuration = load_runtime_configuration(packaged.manifest, packaged.artifact_lock)

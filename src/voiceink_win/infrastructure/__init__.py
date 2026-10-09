@@ -39,6 +39,7 @@ from .media_snapshot import (
 from .packaged_runtime import (
     PACKAGE_DESCRIPTOR,
     PACKAGE_SCHEMA,
+    TRUSTED_PACKAGE_ARTIFACTS,
     PackagedRuntime,
     load_packaged_runtime,
     packaged_runtime_available,
@@ -119,6 +120,7 @@ __all__ = [
     "UrllibReadinessProbe",
     "PACKAGE_DESCRIPTOR",
     "PACKAGE_SCHEMA",
+    "TRUSTED_PACKAGE_ARTIFACTS",
     "PackagedRuntime",
     "load_packaged_runtime",
     "packaged_runtime_available",

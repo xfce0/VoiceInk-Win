@@ -160,7 +160,15 @@ def build_package(
             json.dumps(descriptor, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         (staged / "voiceink-shell.cmd").write_text(
-            '@echo off\nset "VOICEINK_PACKAGE_ROOT=%~dp0"\n"%~dp0voiceink-shell.exe" %*\n',
+            "@echo off\n"
+            'set "VOICEINK_PACKAGE_ROOT=%~dp0"\n'
+            'set "VOICEINK_RUNTIME_MANIFEST="\n'
+            'set "VOICEINK_ARTIFACT_LOCK="\n'
+            'set "VOICEINK_ARTIFACT_LOCK_SHA256="\n'
+            'set "VOICEINK_FFMPEG_PATH="\n'
+            'set "VOICEINK_IMPORT_WORKSPACE_ROOT="\n'
+            'set "VOICEINK_IMPORT_ROOTS="\n'
+            '"%~dp0voiceink-shell.exe" %*\n',
             encoding="ascii",
         )
         output.parent.mkdir(parents=True, exist_ok=True)

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from scripts.portable_package import PackageBuildError, build_package
+from voiceink_win.domain import ConfigurationError
 from voiceink_win.infrastructure import load_packaged_runtime, load_runtime_manifest
 
 
@@ -71,7 +72,34 @@ def test_build_package_stages_and_discovers_verified_runtime(tmp_path: Path) -> 
         lock_template=lock_path,
     )
 
-    packaged = load_packaged_runtime(root=output)
+    with pytest.raises(ConfigurationError, match="trusted"):
+        load_packaged_runtime(root=output)
+    packaged = load_packaged_runtime(
+        root=output,
+        trusted_artifacts={
+            "sidecar": {
+                "version": "0.2.0",
+                "provenance_url": "https://example.invalid/sidecar",
+                "sha256": _sha256(sidecar),
+                "license": "Apache-2.0",
+                "path": "runtime/nemo-speech.exe",
+            },
+            "parakeet": {
+                "version": "model-1",
+                "provenance_url": "https://example.invalid/model",
+                "sha256": _sha256(model),
+                "license": "CC-BY-4.0",
+                "path": "models/parakeet.gguf",
+            },
+            "ffmpeg": {
+                "version": "7.1.1",
+                "provenance_url": "https://example.invalid/ffmpeg",
+                "sha256": _sha256(ffmpeg),
+                "license": "GPL-3.0-or-later",
+                "path": "tools/ffmpeg.exe",
+            },
+        },
+    )
     assert packaged is not None
     loaded = load_runtime_manifest(packaged.manifest, packaged.artifact_lock)
     assert loaded.executable == output / "runtime" / "nemo-speech.exe"
