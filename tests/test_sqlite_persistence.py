@@ -80,6 +80,15 @@ def test_settings_roundtrip(store: SQLitePersistence) -> None:
     assert store.get_settings().result(timeout=2) == settings
 
 
+def test_field_level_settings_update_preserves_complete_hotkey_shape(
+    store: SQLitePersistence,
+) -> None:
+    updated = store.update_settings({"hotkeys.start_stop": "Ctrl+Space"}).result(timeout=2)
+
+    assert updated.hotkeys == {"start_stop": "Ctrl+Space", "cancel": ""}
+    assert store.get_settings().result(timeout=2) == updated
+
+
 def test_dictionary_crud_and_deterministic_order(store: SQLitePersistence) -> None:
     first = DictionaryEntry(id="first", phrase="zeta", replacement="Z")
     second = DictionaryEntry(id="second", phrase="alpha", replacement="A")

@@ -6,6 +6,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from inspect import Parameter, signature
 from threading import Lock, Thread, current_thread
 from typing import Protocol
 
@@ -87,7 +88,7 @@ class _DesktopComposition:
             )
             from voiceink_win.infrastructure import WindowsAdapterRequiredError
 
-            backend = build_application_from_environment(history_port=self.persistence)
+            backend = _build_backend(build_application_from_environment, self.persistence)
             backend.start()
         except (
             ConfigurationError,
@@ -132,6 +133,18 @@ class _DesktopComposition:
             backend.close()
         except Exception:
             logger.exception("failed to close imported-media runtime")
+
+
+def _build_backend(builder: Callable[..., object], history_port: PersistenceService) -> object:
+    """Support narrow test builders without weakening production history wiring."""
+    parameters = signature(builder).parameters
+    history_parameter = parameters.get("history_port")
+    accepts_keywords = any(
+        parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+    if history_parameter is not None or accepts_keywords:
+        return builder(history_port=history_port)
+    return builder()
 
 
 def build_desktop_composition() -> DesktopComposition:

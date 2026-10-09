@@ -239,6 +239,53 @@ def test_composition_wires_real_imported_media_adapter_when_runtime_is_configure
     assert backend.closed
 
 
+def test_configured_composition_keeps_history_wiring_for_builder_with_keyword(
+    application: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del application
+    import voiceink_win.composition as composition_module
+    import voiceink_win.desktop_composition as desktop_composition
+
+    class Backend:
+        imported_media_available = True
+
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    backend = Backend()
+    received: list[object] = []
+
+    def builder(*, history_port) -> Backend:
+        received.append(history_port)
+        return backend
+
+    for name in (
+        "VOICEINK_RUNTIME_MANIFEST",
+        "VOICEINK_ARTIFACT_LOCK",
+        "VOICEINK_ARTIFACT_LOCK_SHA256",
+        "VOICEINK_FFMPEG_PATH",
+        "VOICEINK_IMPORT_WORKSPACE_ROOT",
+        "VOICEINK_IMPORT_ROOTS",
+        "VOICEINK_FFMPEG_VERSION",
+        "VOICEINK_FFMPEG_PROVENANCE_URL",
+        "VOICEINK_FFMPEG_SHA256",
+        "VOICEINK_FFMPEG_LICENSE",
+    ):
+        monkeypatch.setenv(name, "configured")
+    monkeypatch.setattr(composition_module, "build_application_from_environment", builder)
+
+    composed = desktop_composition.build_desktop_composition()
+    try:
+        _wait_for(lambda: composed.transcribe_controller._imported_media is backend)
+        assert received == [composed.persistence]
+    finally:
+        composed.close()
+
+
 def test_composition_returns_loading_state_before_backend_readiness(
     application: QApplication,
     monkeypatch: pytest.MonkeyPatch,
