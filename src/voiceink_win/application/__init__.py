@@ -1,6 +1,11 @@
 """Application-layer ASR orchestration."""
 
-from .asr_service import ApplicationAsrService, AsrApplicationService, AsrRequestHandle
+from .asr_service import (
+    ApplicationAsrService,
+    AsrApplicationService,
+    AsrRequestHandle,
+    QuiescenceFence,
+)
 from .cancellation import CancellationTokenSource, EventCancellationToken
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
@@ -13,6 +18,7 @@ __all__ = [
     "ApplicationAsrService",
     "AsrApplicationService",
     "AsrRequestHandle",
+    "QuiescenceFence",
     "CancellationTokenSource",
     "EventCancellationToken",
     "ImportQueue",

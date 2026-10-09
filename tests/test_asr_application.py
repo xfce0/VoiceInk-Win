@@ -176,6 +176,10 @@ def test_request_scoped_admission_is_bounded_and_releases_once() -> None:
     service = AsrApplicationService(BlockingRuntime(), queue_capacity=1)
     active = service.try_admit(request())
     assert started.wait(1.0)
+    fence = active.quiescence_event
+    assert not fence.is_set()
+    with pytest.raises(AttributeError):
+        fence.set()  # type: ignore[attr-defined]
     queued = service.try_admit(request())
 
     with pytest.raises(QueueFullError):

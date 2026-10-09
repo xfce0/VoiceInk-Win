@@ -67,7 +67,7 @@ from voiceink_win.domain.imported_errors import (
     UnsupportedMediaError,
 )
 
-from .asr_service import AsrApplicationService, AsrRequestHandle
+from .asr_service import AsrApplicationService, AsrRequestHandle, QuiescenceFence
 from .cancellation import CancellationTokenSource
 from .import_queue import ImportQueue, ReservationToken
 
@@ -1476,14 +1476,14 @@ class ImportedMediaTranscriptionService:
             with self._lock:
                 self._snapshot_recovery.pop(record.job.job_id, None)
 
-    def _stage_owner_event(self, record: _Record, stage: Stage) -> Event | None:
+    def _stage_owner_event(self, record: _Record, stage: Stage) -> Event | QuiescenceFence | None:
         if stage is Stage.TRANSCRIBING and record.asr_handle is not None:
             return record.asr_handle.quiescence_event
         owner = self._normalizer if stage is Stage.NORMALIZING else self._asr
         event = getattr(owner, "stage_owner_done", None)
         if callable(event):
             event = event()
-        if isinstance(event, Event):
+        if isinstance(event, (Event, QuiescenceFence)):
             return event
         return None
 

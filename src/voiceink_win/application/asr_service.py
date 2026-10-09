@@ -80,6 +80,19 @@ class _TaskCancellation:
         return self._task.cancellation.is_set() or (token is not None and token.is_cancelled())
 
 
+class QuiescenceFence:
+    """Read-only view of the internal request completion fence."""
+
+    def __init__(self, event: Event) -> None:
+        self._event = event
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._event.wait(timeout)
+
+
 class AsrRequestHandle:
     """Own one admitted request until its worker is quiescent and released."""
 
@@ -92,9 +105,9 @@ class AsrRequestHandle:
         return self._task.generation
 
     @property
-    def quiescence_event(self) -> Event:
-        """Expose the internal fence to application workflows that own cleanup."""
-        return self._task.done
+    def quiescence_event(self) -> QuiescenceFence:
+        """Expose a read-only fence to workflows that own cleanup."""
+        return QuiescenceFence(self._task.done)
 
     @property
     def is_quiescent(self) -> bool:

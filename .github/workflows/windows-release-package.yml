@@ -1,9 +1,10 @@
 name: Windows Release Package Smoke
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+  push:
+    tags:
+      - "release-v*"
 
 permissions:
   contents: read
@@ -15,6 +16,7 @@ concurrency:
 jobs:
   package-smoke:
     name: Build and smoke-test Windows x64 release package
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: windows-2022
     timeout-minutes: 45
 

@@ -113,7 +113,7 @@ run-shell:
 
 ## clean: Remove local caches and generated build directories
 clean:
-	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist *.egg-info
+	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist release *.egg-info
 
 ## install-hooks: Install repository pre-commit and pre-push checks
 install-hooks:

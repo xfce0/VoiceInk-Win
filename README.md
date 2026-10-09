@@ -140,12 +140,13 @@ The packaged shell supports two explicit runtime modes:
   starts promptly and shows recording and Transcribe as unavailable. It never
   constructs a fake backend or shows synthetic text. The fake backend is
   reserved for focused tests and is never a production fallback.
-- **Configured imported-media mode:** when the trusted ASR and FFmpeg settings
-  below are complete, the shell starts promptly with Transcribe loading, then
-  enables the page only after backend readiness succeeds. Microphone capture,
-  WASAPI, and native audio remain unavailable in both modes.
+- **Configured imported-media mode:** when a portable package descriptor is
+  present next to the executable, or the external runtime settings below are
+  complete, the shell starts promptly with Transcribe loading, then enables the
+  page only after backend readiness succeeds. Microphone capture, WASAPI, and
+  native audio remain unavailable in both modes.
 
-Configured imported-media mode requires these runtime environment variables:
+External runtime mode requires these environment variables:
 
 ```text
 VOICEINK_RUNTIME_MANIFEST=C:\path\to\runtime.manifest.json
