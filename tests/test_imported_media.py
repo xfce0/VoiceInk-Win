@@ -850,7 +850,7 @@ def test_completed_record_is_pruned_after_fenced_cleanup_finishes(tmp_path: Path
         FakeMediaNormalizer(),
         AsrApplicationService(FakeAsrRuntime()),
         store,
-        cleanup_timeout_seconds=0.01,
+        cleanup_timeout_seconds=0.1,
         max_completed_records=1,
     )
     first_id = application.submit(str(source_file(tmp_path, b"first")))
