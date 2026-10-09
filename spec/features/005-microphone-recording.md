@@ -1,198 +1,186 @@
-# Feature: Microphone Recording
+# Feature: First Windows Microphone Capture Slice
 
 ## Status and Scope
 
-Status: draft — **implementation blocked**.
+Status: draft - implementation blocked.
 
-This specification defines the contract for one explicit local Windows
-microphone recording followed by batch transcription through the shared ASR
-application service. It covers the user-visible state machine, capture port,
-shared ASR admission/quiescence, WASAPI policy and conversion obligations, and
-the native helper/IPC/packaging evidence gate. It excludes streaming ASR,
-loopback capture, multi-device mixing, automatic device fallback, global
-hotkeys, history, text delivery, cloud transcription, disk recordings, and
-production implementation decisions not approved in
-`rfcs/microphone-recording.md`.
+This feature defines one explicit local Windows microphone recording followed
+by batch transcription through the shared ASR application service. It covers
+device enumeration/selection, one bounded start/stop/cancel session, canonical
+mono 16 kHz S16LE conversion, typed terminal outcomes, cancellation fences,
+native helper isolation, and validation evidence.
 
-**Implementation is blocked until decisions D1–D19 and the pre-implementation
-portions of G1, G2, G3a-policy, and G4a with outcome `GO` in the RFC are approved and recorded
-here.** G3b native evidence and G4b validation are required before enablement. A
-fake adapter or passing macOS test does not authorize live microphone support
-or close a Windows gate.
+This document mirrors `rfcs/microphone-recording.md`. Its concrete values are
+recommendations only. Implementation is blocked until D1-D19 and the
+pre-implementation portions of G1, G2, G3a, and G4a with outcome `GO` are
+approved and recorded in both documents. G3b and G4b are still required before
+enablement. No fake adapter, passing macOS test, or generic Windows CI run
+closes a native gate.
 
 ## User Scenarios
 
-- A user lists local input-capable devices, selects one, records, stops, and
+- A user lists active local input endpoints, selects one, records, stops, and
   receives one local transcript after asynchronous processing.
-- A user records with the approved operating-system default input policy; the
-  session binds to the endpoint selected at open and never silently retargets.
-- A user encounters a missing, busy, disconnected, unsupported, or denied
-  endpoint and receives a stable actionable error without an ASR call.
-- A user cancels during capture or processing and sees cancellation/cleanup
-  progress, no partial audio, and no late transcript.
-- A user submits microphone work while shared ASR capacity is full and receives
-  a visible bounded rejection rather than an implicit retry or unbounded PCM
-  retention.
+- A user records with the approved Windows default input role; the endpoint is
+  resolved once at open and remains bound for the session.
+- A user sees a stable actionable permission, unavailable, busy, unsupported,
+  disconnected, overflow, timeout, or cleanup error without fallback.
+- A user cancels during capture or ASR and sees cancellation/recovery progress,
+  no partial audio result, and no late transcript.
+- A user submits microphone work while shared ASR capacity is full and sees a
+  bounded `QueueFull` rejection without retry or retained PCM.
 
 ## Functional Requirements
 
-1. The application must admit at most one active microphone recording and must
-   reject a second start rather than queueing it.
-2. Device descriptors must be immutable and expose only an opaque selection ID,
-   display name, capability flags, default-role information, and approved safe
-   metadata. Application code must not parse or construct IDs.
-3. A capture session must be single-use, bound to one endpoint at open, and
-   unable to restart or retarget after capture starts.
-4. `start`, `stop`, and `cancel` commands must return without blocking the Qt
-   event thread. Native open/start/finalization/ASR calls must run off that
-   thread.
-5. A successful session must return exactly one immutable, non-empty
-   `CanonicalAudio` value: mono, 16 kHz, signed PCM16, little-endian,
-   contiguous samples.
-6. Silence with accepted frames is valid canonical audio. Zero accepted frames
-   is `EmptyCapture` and must not invoke ASR.
-7. The adapter must reject malformed/non-finite input, discontinuity, overrun,
-   unsupported format, and any buffer/duration/byte limit crossing. It must
-   never return truncated audio or silently drop/pad frames.
-8. The chosen default-role, WASAPI mode, native input format matrix, converter,
-   coefficients, rounding, clamping, and golden-vector tolerance must be
-   approved by G3a before implementation; G3b validates the implemented
-   policy before enablement.
-9. The production capture boundary must be a dedicated native helper process;
-   an in-process native binding is not an allowed production fallback. The
-   helper technology and package target decision must be approved in G4a before
-   any production implementation.
-10. Helper IPC must be local-only, bounded, generation-correlated,
-    authenticated/ACL-restricted to the current user, and versioned. Its
-    selected primitive and exact framing remain blocked decisions until G4a;
-    G4b validates the implemented choice before enablement.
-11. Capture must use the shared ASR application scheduler. A microphone-specific
-    worker pool, hidden priority, global idle fence, or second runtime is
-    forbidden.
-12. Shared ASR capacity must count pending, active, and reserved requests from
-    microphone and imported-media sources under one FIFO policy.
-13. An admitted request must expose a request-scoped cancellation and
-    quiescence handle. Audio cannot be released, cancellation published, or a
-    new microphone generation accepted until that request reaches
-    `quiescent -> released`; `recovery_owned` never satisfies this rule and
-    requires the approved process-level recovery.
-14. Every admitted recording operation must publish exactly one terminal
-    outcome after capture cleanup: transcript-ready, empty, error, cancellation,
-    or the pre-ASR-admission stage rejection `RejectedRequest(code=QueueFull)`. An admitted
-    ASR request has exactly one of success, empty, failure, or cancellation.
-    Late callbacks/results cannot overwrite a newer generation.
-15. Cancellation must discard captured audio, never publish partial text, and
-    remain visible until capture and any specific ASR request have fenced their
-    resources.
-16. Cleanup must be bounded, idempotent, and attempted on success, failure,
-    cancellation, device loss, helper crash, timeout, and application shutdown.
-17. Stable errors must preserve the distinction between permission, device,
-    format, overflow, resource, timeout, cancellation, ASR, and cleanup
-    failures. Exceptions must never become an empty success.
-18. No raw PCM, transcript text, full paths, endpoint names/IDs, secrets, or
-    raw native exception strings may be written to ordinary logs, telemetry,
-    crash reports, minidumps, or acceptance artifacts.
-19. A dump/report policy must specify disabled or filtered dumps, exact
-    application/helper locations, retention and consent, scanner/version,
-    canaries and negative controls before G4a can be approved.
+1. The application admits at most one active microphone generation and rejects
+   a second start rather than queueing it.
+2. Enumeration returns only active `eCapture` endpoints with a random,
+   process-local selection token, bounded display name, default-role flag, and
+   approved safe format metadata. The Windows adapter maps the token to the
+   native `IMMDevice::GetId` only at `open()`; Domain/Application never hold or
+   log the native ID. Tokens expire when the enumeration snapshot is replaced.
+3. An explicit selection opens exactly that endpoint. A default selection uses
+   `IMMDeviceEnumerator::GetDefaultAudioEndpoint(eCapture, eConsole)` once at
+   open. There is no silent fallback or retargeting.
+4. A session is single-use, bound to one endpoint at open, and cannot restart
+   or switch device after capture starts.
+5. Start, stop, and cancel return without blocking the Qt event thread. Native
+   open/start/finalization/ASR calls run outside Presentation.
+6. Production capture uses a separate C++17 MSVC/Windows SDK helper. Python
+   does not directly import COM, WASAPI, `ctypes`, or `pywin32` audio APIs.
+7. The proposed transport is a parent-created per-generation current-user
+   named pipe using `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`,
+   a bootstrap challenge, HKDF-derived direction-specific HMAC session key,
+   generation/sequence/deadline fields, a fixed version-1 frame, 64 KiB frame
+   bound, 32 KiB canonical chunk bound, and 4 MiB queue bound. There is no
+   reconnect. The parent owns the client end and the helper owns the inherited
+   server handle; the parent verifies the connected server PID and helper HMAC
+   before `OPEN`. G4a must approve this choice before implementation.
+8. The helper uses shared event-driven WASAPI with `IAudioCaptureClient` and
+   never captures loopback or uses exclusive mode in the proposed v1 policy.
+9. The proposed input matrix is interleaved mono/stereo PCM16 or float32 at
+   16000, 32000, 44100, 48000, or 96000 Hz with approved channel masks. Other
+   tuples return `UnsupportedFormat` before ASR.
+10. The proposed converter is a pinned static SpeexDSP wrapper. It maps PCM16
+    to float64, downmixes stereo with 0.5/0.5, starts at source phase zero,
+    emits cumulative `floor(total_input_frames * 16000 / input_rate)` samples,
+    uses the approved round-half-away/clamp rule, and emits S16LE. EOS output
+    outside the target count is a conversion failure. G3a must approve the
+    exact version, vectors, and tolerance.
+11. A successful stop returns exactly one immutable non-empty
+    `CanonicalAudio`: mono, 16 kHz, signed PCM16, little-endian, contiguous.
+12. Accepted all-zero frames are valid silence. Zero accepted frames is
+    `Empty` and invokes ASR zero times.
+13. Malformed packets, non-finite samples, later discontinuity, overrun,
+    unsupported format, converter failure, and every approved limit crossing
+    are typed failures. A discontinuity flag on the first accepted packet is
+    tolerated because no preceding packet exists. The adapter never silently
+    drops, pads, repeats, truncates, or spills to disk.
+14. The proposed limits are 32 minutes, 30,720,000 canonical samples,
+    61,440,000 canonical bytes, 4 MiB native queue, 4 MiB IPC queue, 16 MiB
+    conversion scratch, a 64 MiB helper Job Object memory limit, and a 192 MiB
+    process-tree RSS acceptance ceiling. D1/D11/D17 must approve the
+    accounting; a single runtime RSS cap across Python, ASR, and helper is not
+    claimed.
+15. Every operation receives an absolute monotonic deadline. Proposed values
+    are enumeration 2 seconds, open/handshake 5 seconds, finalization 10
+    seconds, ASR 45 minutes, and cleanup/reap 5 minutes.
+16. Capture uses the shared ASR scheduler. A microphone-specific worker pool,
+    hidden priority, global idle fence, or second runtime is forbidden.
+17. Shared ASR capacity counts pending, active, and reserved microphone and
+    imported-media requests under one FIFO policy. The proposed microphone
+    reservation occurs only at post-finalization `try_admit()`, not during
+    capture. A request-scoped handle exposes cancel and quiescence.
+18. Audio cannot be released, cancellation published, or a new microphone
+    generation accepted until the specific request reaches
+    `quiescent -> released`. `recovery_owned` is not quiescence. If release is
+    not proven after the approved 60-second escalation, a watchdog has 30
+    seconds to terminate the helper/ASR jobs and application; it publishes no
+    terminal result and the next launch keeps microphone disabled.
+19. Each admitted recording operation publishes exactly one terminal outcome:
+    `Succeeded`, `Empty`, `Failed`, `Cancelled`, or post-cleanup
+    `RejectedRequest(code=QueueFull)` when ASR admission never occurred.
+20. Late callbacks/results cannot overwrite a newer generation. Terminal
+    publication is owned by one generation CAS/orchestration owner.
+21. Cleanup is bounded, idempotent, and attempted on success, failure,
+    cancellation, device loss, helper crash, timeout, and shutdown.
+22. Windows privacy/access failures do not mutate settings or registry state.
+    Device loss discards partial audio and requires a fresh open.
+23. The helper is launched in a Job Object with kill-on-close, one active
+    process limit, bounded reap, and generation invalidation. There is no
+    in-process capture fallback.
+24. The first package claim is Windows 10 22H2 and Windows 11 23H2/24H2, x64,
+    Python 3.12-3.14, portable onedir. ARM64 and installer/MSIX claims are
+    deferred until separate evidence exists.
+25. Logs, telemetry, crash reports, dumps, and evidence contain no raw PCM,
+    transcript text, endpoint identity, full paths, secrets, or raw native
+    exception strings.
 
 ## Non-Functional Requirements
 
 - The layer direction remains `Presentation -> Application -> Domain <-
   Infrastructure`; native and Qt types do not cross into Domain.
-- Capture queues, IPC messages, conversion scratch, transport copies, and
-  diagnostics must have explicit byte ceilings. D17/G3a/G4a must approve the
-  accounting before implementation; G3b/G4b resource evidence is required
-  before enablement.
-- Capture and conversion are `O(n)` in accepted samples with bounded queue
-  space `O(b)` for configured buffer capacity. Queue admission and release are
-  `O(1)` amortized; cancellation may use tombstones and compaction.
-- The canonical PCM allocation is bounded by the approved duration/sample and
-  64 MiB payload limits. No disk spill is allowed in v1.
-- Windows policy behavior, format vectors, helper crash recovery, packaging,
-  and privacy behavior must be tested on named supported Windows/build,
-  architecture, and distribution lanes. macOS evidence is cross-platform
-  contract evidence only.
-- The helper artifact must be versioned, provenance-recorded, hash-locked,
-  and independently validated for every claimed x64/ARM64 and packaged/
-  portable mode. It must not rely on developer PATH state.
-- Presentation receives immutable snapshots/events and uses accessible labels
-  for recording, processing, cancelling, error, and recovery states.
+- The helper owns COM, WASAPI packets, native conversion state, and native
+  cleanup. Python owns typed orchestration and final canonical allocation.
+- The final canonical allocation is `O(n)` in samples. Capture/conversion are
+  `O(n)` with bounded queue space `O(b)`. Queue admission/release are `O(1)`
+  amortized; cancellation may use tombstones.
+- No audio recording is written to disk. Imported-media FFmpeg conversion and
+  live microphone conversion remain separate boundaries.
+- Portable and packaged lanes are separate claims. The helper path is relative
+  to a verified bundle root and never depends on PATH.
+- A release helper is Authenticode-signed and hash-locked. Unsigned developer
+  output is not enablement evidence.
+- Cross-platform tests run without Windows APIs, PySide6, CUDA, model weights,
+  or a physical microphone. Native claims require named Windows evidence.
 
 ## Error and Cancellation Behavior
 
 The authoritative operation state machine is:
 
 ```text
-idle --start--> starting --opened--> recording --stop--> finalizing
- |        |         |                   |                 |
- |        |         +--cancel----------> cancelling       +--cancel--> cancelling
- |        +--cancel-------------------> cancelling       +--QueueFull-> cleanup
- |        +--failure------------------> cleanup          +--failure--> cleanup
- |                                                        |
-finalizing --admitted--> asr_queued --> asr_running       +--cleanup--> RejectedRequest(code=QueueFull)
-    |                                  |       |
-    +--cancel--> cancelling            |       +--result--> cleanup
-                                       +--cancel--> cancelling
+idle -> starting -> recording -> finalizing -> asr_queued -> asr_running
+  |        |          |             |              |             |
+  |        |          |             |              +-> cancelling|
+  |        |          |             +-> cancelling               |
+  |        +-> cancelling                                          |
+  +--------------------------------------------------------------> cancelling
 
 starting/recording/finalizing/asr_queued/asr_running
-    --cancellation or failure--> cancelling/cleanup
-cleanup --success--> pending terminal outcome (transcript_ready/empty/error/cancelled)
-cleanup --failure--> recovery_owned (non-terminal)
-recovery_owned --all ownership release proven--> Failed(CleanupWarning) -> shell error
-terminal outcome --reset--> idle
+    -> cleanup -> terminal outcome
+    cleanup --deadline--> recovery_owned (non-terminal)
+    recovery_owned --release proven--> Failed(CleanupWarning)
 ```
 
-`cancelled` is a terminal operation outcome that is projected to shell `idle`
-only after cleanup. D2 decides whether the shell exposes `cancelling` as a
-state or operation status; it cannot remove the operation state or make it
-`processing`.
+Cancellation is idempotent signalling, not cleanup proof. During capture, the
+helper stops accepting frames, drains/discards bounded frames, closes the
+endpoint, and is reaped. During ASR, only the identified request handle is
+cancelled. No result, audio release, terminal cancellation, or new generation
+is published before the specific quiescence fence and cleanup succeed.
 
-The state transition/resource-owner contract is:
-
-| State | Owner | Cancellation/terminal rule |
-|---|---|---|
-| `starting` | orchestration; no canonical value or ASR handle | cancel/failure closes session; ASR invocation count remains zero |
-| `recording` | capture session owns bounded frames | cancel or device/overflow/deadline failure discards frames; ASR is not invoked |
-| `finalizing` | orchestration owns capture and canonical value until ASR admission | cancel/failure/limit enters cleanup; `QueueFullError` is retained as internal `StageAdmissionFull` until cleanup releases value exactly once, then maps to `RejectedRequest(code=QueueFull)` |
-| `asr_queued` | scheduler handle owns canonical value after atomic admission | cancellation leaves handle owning value until quiescence/recovery |
-| `asr_running` | ASR worker/service owns canonical value | result or runtime/deadline failure enters cleanup; late result is discarded if cancellation generation won |
-| `cancelling` | orchestration coordinates capture and optional ASR handle | no publication before both fences complete |
-| `cleanup` | named cleanup/recovery owner | release each resource exactly once; success publishes the pending outcome, while a deadline enters non-terminal `recovery_owned` |
-| `recovery_owned` | named supervisor/process-level recovery owner | no publication, audio release, or new generation; after `resource_release_proven` publish exactly one `Failed(CleanupWarning)` |
-| terminal outcome/rejection | no live audio owner after cleanup/release | exactly one admitted outcome or one `RejectedRequest(code=QueueFull)` stage rejection; reset may return shell to `idle` |
-
-## Shared ASR Scheduler and Quiescence Contract
-
-The microphone request uses the imported-media scheduler and this exact
-ownership sequence:
+The shared scheduler ownership sequence is:
 
 ```text
 reserved -> queued -> active -> quiescent -> released
-                         \-> recovery_owned
+                           \-> recovery_owned
 ```
 
-Before the ASR admission linearization point, orchestration owns canonical audio.
-Successful admission transfers the only canonical reference to the request
-handle/service; `QueueFull` is a pre-ASR-admission `RejectedRequest` of the
-already-admitted recording operation and leaves ownership with orchestration
-for exactly-once release. `recovery_owned` means
-that a named supervisor still owns the handle and audio after a bounded fence
-deadline. It is not quiescence: until `resource_release_proven` confirms
-`quiescent -> released` and all audio/ASR/helper/native ownership is released,
-no new microphone generation may be admitted and no terminal result may be
-published. Process-level recovery or restart is only a method to establish
-`resource_release_proven`; recovery ownership never permits publication or
-release.
+The minimum stable capture codes are `PermissionDenied`, `DeviceUnavailable`,
+`DeviceBusy`, `UnsupportedFormat`, `CaptureOverflow`, `DeviceDisconnected`,
+`ResourceLimitExceeded`, `CaptureTimeout`, `CaptureCancelled`, `CaptureFailed`,
+and `CleanupWarning`. ASR and recovery codes remain typed separately. An
+exception never becomes empty success.
 
-Quiescence requires that the identified request is absent from pending and
-active sets, cannot be consumed or publish a result, and the shared service
-retains no canonical reference. An unrelated imported-media request becoming
-idle cannot satisfy this condition. The scheduler is FIFO across sources and
-capacity counts pending, active, and reserved requests. D5 chooses the
-concrete transaction mechanism; D6 chooses the recovery supervisor/budget.
+Windows privacy denial maps to `PermissionDenied` and an actionable Windows
+privacy-settings message. `AUDCLNT_E_DEVICE_INVALIDATED`, unplug, disable,
+and removal map to `DeviceDisconnected`. No endpoint fallback or auto-switch
+is attempted. `recovery_owned` is visible and blocks new microphone work until
+resource release is proven.
 
-The request contract is:
+## Shared ASR Scheduler and Quiescence Contract
+
+The microphone uses the imported-media scheduler and no second worker pool.
+The target contract is:
 
 ```text
 try_admit(request) -> AsrRequestHandle | QueueFullError
@@ -201,203 +189,215 @@ handle.await_result(deadline) -> TranscriptResult | AsrError
 handle.await_quiescence(deadline) -> None | RuntimeRecoveryPending
 ```
 
-The existing shared scheduler returns typed `QueueFullError`. The already-admitted
-recording orchestration then closes capture, releases its canonical value, and
-publishes one recording-operation `RejectedRequest(code=QueueFull)` outcome after cleanup;
-it is not the return type of a successful ASR admission.
+Admission has one linearization point. Before it, orchestration owns the only
+canonical reference. After successful admission, the handle owns it. A queue
+full result leaves ownership with orchestration for exactly-once release and
+creates no handle. FIFO fairness and capacity reservation are shared with
+imported media. An unrelated request becoming idle cannot satisfy a microphone
+fence.
 
-## WASAPI Policy and Conversion Decision Surface
+G2 must approve the scheduler transaction, recovery supervisor, recovery
+budget, and process-level fallback before Slice 1 implementation.
 
-G3a must approve each `OPEN` field before implementation. The accepted policy
-must record exact values, not a generic “use WASAPI” statement:
+## Windows Policy and Conversion Recommendation
 
-| Field | Alternatives to evaluate | Current value |
+The proposed policy is intentionally exact but unapproved:
+
+| Field | Recommendation | Approval |
 |---|---|---|
-| Default role | console, communications, product-defined | OPEN |
-| WASAPI mode | shared, exclusive | OPEN |
-| Input formats | exact `WAVEFORMATEX`/`WAVEFORMATEXTENSIBLE` tuples | OPEN |
-| Channel mapping | coefficient matrix and channel order | OPEN |
-| Resampling | named facility or pinned converter/version | OPEN |
-| Rounding/clamping | tie rule, integer conversion, signed range | OPEN |
-| Output length | exact sample-count rule; no unapproved padding/repetition | OPEN |
-| Buffer policy | period, queue capacity, overflow action | OPEN |
-| Architecture wording | FFmpeg for imported media; adapter for live frames | OPEN |
+| Default role | `eCapture` + `eConsole`, resolve once at open | D7/G3a |
+| WASAPI | shared event-driven `IAudioClient`/`IAudioCaptureClient` | D8/G3a |
+| Input matrix | PCM16/float32, mono/stereo, 16/32/44.1/48/96 kHz | D9/G3a |
+| Channel mapping | mono identity; stereo `0.5 * L + 0.5 * R` | D10/G3a |
+| Resampler | pinned static SpeexDSP wrapper | D10/G3a |
+| Output length | floor of rate ratio; no padding/repetition | D10/G3a |
+| Buffering | 4 MiB bounded queue; overflow fails | D11/G3a |
+| Boundary | FFmpeg for imported media; helper for live frames | D12/G3a |
 
-The approval must include a corpus hash, golden-vector tolerances, highest
-format memory evidence, and the Windows lane on which the policy was probed.
+All approved formats must convert deterministically to canonical S16LE. The
+golden corpus must cover each tuple, both channel layouts, full-scale and
+clamp boundaries, non-finite input, output length, and repeated conversion.
 
-## Native Helper and Packaging Decision Surface
+PCM16 and float32 use the same decode-to-float64, downmix, resample, and final
+quantization pipeline; only the input decoder differs. The golden vectors are
+the normative byte output, including mono input with no resampling.
 
-G4a is a documentation-only feasibility and target/package decision. It must
-compare named pipe, local loopback socket, shared memory, and an explicit
-no-go alternative for boundedness, current-user ACL/authentication, crash
-containment, cancellation, packaging, and observability. It must define the
-versioned message set, maximum frame/chunk/message/queue sizes, generation and
-deadline fields, replay/forgery rejection, and error mapping before production
-code is authorized. G4b validates the selected design after implementation.
+`AUDCLNT_BUFFERFLAGS_SILENT` is valid zero-valued audio for the reported frame
+count. `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY` is accepted only on the first
+accepted packet, where no preceding packet exists, and fails the session on
+every later packet. Timestamp errors, malformed alignment, failed
+`ReleaseBuffer`, and converter output-count mismatch are typed failures. The
+helper calls `GetBuffer`/`ReleaseBuffer` exactly once per packet and drains
+until `AUDCLNT_S_BUFFER_EMPTY` on normal stop.
 
-G4a has an explicit outcome: `GO` or `NO_GO`. Only `GO`, with selected helper,
-IPC, package, and recovery alternatives, can satisfy the pre-implementation
-gate. `NO_GO` keeps `implementation_allowed: false`, keeps this feature
-blocked, and requires a new feasibility decision; closing D1–D19 alone cannot
-authorize implementation.
+The version-1 pipe header is `magic[4]`, `version:u16`, `type:u8`,
+`flags:u8`, `generation:u64`, `sequence:u64`, `deadline_ns:u64`, and
+`payload_length:u32`, followed by the payload and `hmac_sha256[32]`. Allowed
+message types are `HELLO`, `OPEN`, `START`, `AUDIO`, `STOP`, `CANCEL`,
+`STATUS`, `RESULT`, and `CLOSE`. Replay, wrong-generation, wrong-direction,
+and oversized frames fail closed before allocation.
 
-The G4a record must specify helper artifact format, signing/provenance,
-hash-lock, x64/ARM64 support, portable/packaged paths, privacy capability,
-upgrade/rollback, missing/modified artifact behavior, and Job Object/restart
-policy. No helper prototype, packaging change, or ASR service change is
-authorized while this feature is blocked.
+## Native Helper and Packaging Recommendation
 
-Capture failures include `PermissionDenied`, `DeviceUnavailable`,
-`DeviceBusy`, `UnsupportedFormat`, `CaptureOverflow`,
-`DeviceDisconnected`, `EmptyCapture`, `ResourceLimitExceeded`,
-`CaptureTimeout`, `CaptureCancelled`, and `CaptureFailed`. The final type
-hierarchy is D3. `CleanupWarning` is a recovery failure and must prevent the
-application from claiming that native resources are closed.
+G4a must compare the recommended C++17 helper/named pipe with loopback TCP,
+shared memory, and no-go alternatives for boundedness, current-user
+authentication/ACL, cancellation interruption, crash containment, packaging,
+and observability. Only an approved G4a `GO` permits production code.
 
-Cancellation rules:
+The proposed bundle is:
 
-- From `recording`, signal capture cancellation, discard bounded frames, close
-  the session, and never invoke ASR.
-- From `finalizing`, cancel capture without an ASR handle; from `asr_queued` or
-  `asr_running`, cancel the specific ASR handle. Discard late output and await
-  request-scoped quiescence before releasing any audio/native ownership or
-  publishing terminal cancellation.
-- On shutdown, reject new starts, cancel active work, fence cleanup, and close
-  the shared ASR service according to its approved recovery policy.
-- Cancellation competes with completion under a generation/terminal CAS. The
-  first committed publication wins; a result already published is not
-  rewritten.
-- Queue-full ASR admission is a visible stage rejection with no implicit retry
-  and no retained canonical payload. The admitted recording operation publishes
-  exactly one `RejectedRequest(code=QueueFull)` after capture cleanup; an admitted ASR
-  request has exactly one of `Succeeded`, `Empty`, `Failed`, or `Cancelled`.
-- `RuntimeRecoveryPending` is non-terminal. It forbids publication, audio
-  release, and a new generation until `resource_release_proven`. Recovery
-  completion publishes exactly one `Failed(CleanupWarning)` and never
-  publishes a pending outcome afterward.
+```text
+voiceink-shell.exe
+audio/voiceink-audio-helper.exe
+audio/voiceink-audio-helper.manifest.json
+README.txt
+```
+
+The manifest contains schema, version, architecture, provenance, SHA-256,
+license, and allowed relative path, but is metadata only. The expected helper
+digest and pinned publisher are in the read-only artifact lock embedded in the
+frozen Python bundle. Launch opens and hashes the package helper no-follow,
+copies it to a per-generation private no-modify directory, verifies the copy
+and `WinVerifyTrust`, starts it suspended, and compares the child image path
+and volume/file identity before resuming. Any mismatch terminates the Job
+Object before audio starts.
+Job Object kill-on-close and helper reaping are part of G4b evidence. Missing,
+changed, unsigned, crashing, or unreachable helper artifacts produce typed
+unavailable/failure states, never a Python/native fallback.
 
 ## Acceptance Criteria
 
-- **AC-001** — Given a valid selected endpoint and approved limits, when the
-  user records and stops, then one bounded canonical value reaches the shared
-  ASR path and the GUI thread remains responsive.
-- **AC-002** — Given no explicit endpoint, when recording starts, then the
-  approved default-role policy is applied once, the chosen endpoint remains
-  bound for the session, and a default-device change cannot retarget it.
-- **AC-003** — Given a missing, denied, busy, unsupported, or disconnected
-  endpoint, when the failure occurs, then the matching stable error is visible,
-  no fallback occurs, and ASR invocation count is zero.
-- **AC-004** — Given silence with accepted frames, when recording stops, then
-  valid canonical silence is submitted; given zero frames, then `EmptyCapture`
-  is published and ASR invocation count is zero.
-- **AC-005** — Given the next frame would cross an approved limit, when it is
-  offered, then capture fails with `ResourceLimitExceeded`, returns no
-  truncated audio, and releases all native resources.
-- **AC-006** — Given cancellation races with start, finalization, ASR
-  completion, reset, or shutdown, when synchronization barriers exercise the
-  race, then exactly one fenced outcome is published and no partial transcript
-  is visible.
-- **AC-007** — Given ASR is blocked and an unrelated imported-media request
-  completes, when microphone cancellation awaits quiescence, then the
-  unrelated completion cannot satisfy the microphone fence or release its
-  audio.
-- **AC-008** — Given shared ASR capacity is full, when a microphone request is
-  finalized, then the scheduler returns `QueueFullError`, cleanup and
-  canonical release complete exactly once, only then is
-  `RejectedRequest(code=QueueFull)` published, no ASR handle is created, and
-  no implicit retry occurs.
-- **AC-009** — Given a helper crash, malformed IPC, or kill-on-close timeout,
-  when cleanup runs, then the generation is invalidated, the helper is reaped,
-  partial audio is discarded, and a typed recovery error is visible only after
-  all audio/native resource ownership is released and proven, either by normal
-  quiescence or approved process-level recovery; releasing one audio reference
-  alone is insufficient. Otherwise `RuntimeRecoveryPending` remains
-  non-terminal and blocks new generations.
-- **AC-010** — Given an input in the approved format matrix, when conversion
-  runs twice on the same golden vector, then the canonical bytes are
-  deterministic and meet the approved output/tolerance.
-- **AC-011** — Given an input outside the approved format matrix, when open or
-  conversion is attempted, then `UnsupportedFormat` is returned without
-  silent fallback or ASR invocation.
-- **AC-012** — Given every claimed Windows architecture and distribution mode,
-  when a clean-machine acceptance run uses the locked helper artifact, then
-  launch, authentication, capture, cleanup, and artifact verification pass
-  without PATH assumptions.
-- **AC-013** — Given ordinary logs, crash reports, minidumps, and evidence
-  outputs, when they are byte-scanned with PCM/transcript/device canaries, then
-  no sensitive capture data is present.
-- **AC-014** — Given any decision D1–D19 is not approved, when an engineer
-  attempts to begin implementation, then the feature remains marked blocked
-  and no production code or live microphone capability may be enabled.
-- **AC-015** — Given G1, G2, G3a, and G4a has outcome `GO`, and both RFC/spec
-  documents contain the same decisions, when status is changed to approved,
-  then a separate implementation plan is required before production code
-  starts; G3b/G4b native evidence remains required before enablement.
+- **AC-001** - While any D1-D19, G1, G2, G3a, or G4a approval is absent, the
+  feature and catalog remain draft/blocked with implementation disabled.
+- **AC-002** - A valid selected endpoint and approved limits produce one
+  bounded canonical value through the shared ASR path without blocking Qt.
+- **AC-003** - Default selection applies the approved role exactly once, binds
+  the endpoint for the session, and does not retarget after a default change.
+- **AC-004** - Missing, denied, busy, unsupported, disconnected, overrun,
+  timeout, and helper failures have stable typed codes, no silent fallback,
+  and no ASR call when capture did not complete.
+- **AC-005** - Accepted silence is valid; zero accepted frames is `Empty` and
+  ASR invocation count is zero.
+- **AC-006** - A limit-crossing packet returns `ResourceLimitExceeded` with no
+  truncated success, padding, frame drop, disk spill, or leaked ownership.
+- **AC-007** - Start/stop/cancel races use barriers and publish exactly one
+  fenced result. No partial transcript or late result is visible.
+- **AC-008** - Queue full releases canonical ownership exactly once after
+  cleanup, creates no ASR handle, and publishes one `QueueFull` rejection.
+- **AC-009** - An unrelated imported-media completion cannot satisfy a blocked
+  microphone request's quiescence fence.
+- **AC-010** - Approved golden vectors produce identical canonical bytes on
+  repeated conversion and meet the approved tolerance on every claimed lane.
+- **AC-011** - Helper crash, malformed IPC, timeout, and shutdown invalidate
+  the generation, discard partial audio, reap the Job Object, and block new
+  work until release is proven.
+- **AC-012** - Clean portable/package runs verify the locked helper without
+  developer PATH, unverified artifact, or installer assumptions.
+- **AC-013** - Repeated native capture shows approved RSS, handle, thread, and
+  queue bounds and leaves no raw data in diagnostics.
+- **AC-014** - G3b and G4b evidence is required before enablement even after
+  pre-implementation approval.
+- **AC-015** - A stuck helper/runtime reaches `recovery_owned`, prevents a new
+  generation, executes the approved 60-second escalation, and either proves
+  release before `Failed(CleanupWarning)` or performs controlled application
+  shutdown without claiming a terminal result.
 
 ## Test Plan
 
-- **Domain/application unit tests:** state transitions, command admission,
-  generation fencing, typed error mapping, limits, deadline arithmetic, and
+### Cross-platform behavior tests
+
+- Domain/application state transitions, generation CAS, typed mapping, and
   exactly-once terminal publication.
-- **Fake adapter contract tests:** device selection, single-use lifecycle,
-  cancellation races, deadline expiry, buffer overflow, no truncation, no disk
-  spill, cleanup idempotence, and redaction.
-- **Shared ASR integration tests:** FIFO capacity across both sources,
-  request-scoped cancellation/quiescence, blocked runtime, unrelated request,
-  late result, reservation ownership, and shutdown.
-- **Conversion tests:** table-driven and golden-vector tests for every approved
-  format, non-finite/malformed input, downmix, resampling, rounding, clamping,
-  discontinuity, boundaries, and deterministic output.
-- **Windows native tests:** actual default-role and explicit-device policy,
-  privacy denial, device removal, busy/unsupported format, overflow,
-  cancellation latency, helper crash, Job Object cleanup, repeated
-  start/stop/close, peak RSS, handle/thread leak counters, and no retargeting.
-- **IPC/security tests:** competing local client, forged handshake, replay,
-  malformed/oversized frames, generation mismatch, version mismatch,
-  backpressure, kill/restart, and ACL behavior.
-- **Packaging tests:** clean portable and packaged x64/ARM64 lanes, locked
-  artifact verification, missing/modified artifact failures, upgrade/rollback,
-  privacy capability behavior, and no developer PATH dependency.
-- **Evidence tests:** scan diagnostics and crash/report locations for PCM,
-  transcript text, endpoint identity, full paths, secrets, and raw native
-  exception strings.
+- Device selection, single-use session lifecycle, deadlines, limits, empty
+  versus silence, and no fallback.
+- Cancellation races with start, stop, finalization, ASR completion, reset,
+  shutdown, and late callbacks.
+- Shared FIFO admission, queue-full rollback, request-scoped quiescence,
+  blocked runtime, recovery ownership, and imported-media interaction.
+- Conversion contract vectors using synthetic inputs, malformed/non-finite
+  values, clamp/round boundaries, and no-padding/output-length rules.
+- Redaction, no disk spill, helper protocol bounds, and no retained PCM after
+  terminal cleanup.
+
+### Windows native and packaging tests
+
+Run exactly 18 named lanes: runtime `R-10-*`, `R-11-23H2-*`, and
+`R-11-24H2-*` for Python 3.12/3.13/3.14, plus frozen onedir
+`P-10-*`, `P-11-23H2-*`, and `P-11-24H2-*` for the same three Python minors.
+Each report names helper/compiler/SDK/converter versions, fixture device,
+distribution mode, repetitions, and thresholds.
+Exercise enumeration, explicit/default selection, privacy denial, stale token,
+busy endpoint, unsupported format, unplug/disconnect, overrun,
+0/1/limit/limit+1 boundaries, stop, capture cancellation, ASR cancellation,
+helper crash, malformed/replayed/wrong-generation IPC, normal close, and
+repeated start/stop/close.
+
+Capture claims require a real named hardware fixture. Conversion reports contain
+only vector IDs, hashes, lengths, timings, and bounded metrics. Native reports
+contain codes/counts/RSS/handle/thread deltas and no PCM, transcript, endpoint
+identity, full path, or raw exception text. `windows-latest` without fixture
+definition and every macOS run are insufficient native evidence.
 
 ## Open Questions and Deferred Work
 
-The following exact decisions mirror the RFC. Every row must have selected and
-rejected alternatives, owner, approver, evidence path plus SHA-256, approval
-record path, and status. Current `NONE`/`OPEN` values are blocking.
+The exact choices remain blocking register entries D1-D19. In particular,
+product approval must confirm `eConsole`, security must approve named-pipe
+challenge/HMAC, G3a must approve the format/resampler matrix and license, and
+G4a must approve helper/package/recovery feasibility with `GO`.
 
-There is no separate evidence or approval artifact in this checkout.
-`APPROVAL_REQUIRED`, `OPEN`, and `WINDOWS_REQUIRED` remain blocking statuses;
-all decision records remain pending until the required approver fields and
-hashes are supplied in a future Windows review.
+Deferred beyond this slice are streaming, disk recordings, waveform
+persistence, multi-device mixing, automatic fallback/switching, ARM64 claim,
+installer/MSIX, history, hotkeys, text delivery, cloud providers, automatic
+downloads, and runtime/model changes.
 
-| ID | Decision and allowed alternatives | Selected alternative | Rejected alternatives | Owner | Approver | Evidence path | Evidence SHA-256 | Approval record | Decision date | RFC/spec/catalog commit | Status | Gate |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| D1 | Duration/sample limit: 32 min/30,720,000 samples and 64 MiB candidate from the existing imported-media contract; product approval remains required | Not evaluated | Product owner | Product owner + maintainer | the RFC decision register; `rfcs/imported-media-transcription.md`; `src/voiceink_win/domain/models.py` | `9389b32b4644cf670512c57d1b56cba4a66b9bdb730591648f4db2459320dea9`; `8770188aff26443c59981e010343ea9227acab8d937bd19f4a73cbaa6e32dc70` | PENDING | PENDING | PENDING | APPROVAL_REQUIRED | G1 |
-| D2 | `CANCELLING` operation state is normative; current shell projection remains open | Not evaluated | Application owner | Maintainer + UI owner | the RFC decision register; `src/voiceink_win/domain/shell.py`; `src/voiceink_win/application/shell_controller.py` | `258ddd1b75f2a74a973b52a1636eba28d6dc52f47414a26bfef8bf91dec583f2`; `f12c5771b6e5ec3e4672f86b2e8265383ea8c7ff4fef2a14cbfebf187ca9b7d8` | PENDING | PENDING | PENDING | APPROVAL_REQUIRED | G1 |
-| D3 | Separate capture-error family candidate; existing `AsrError` remains for shared ASR/runtime failures | Not evaluated | Application owner | Maintainer | the RFC decision register; `src/voiceink_win/domain/errors.py`; `src/voiceink_win/domain/imported_errors.py` | `50968080bf40c5e42bf666a4dc50ce8ed494979e5be1b500bb561f2b8049c75d`; `a0ff5bf6a2a0ba84d5d5ae801590005196d5cc3c836d63105a4b94d9d8c778c8` | PENDING | PENDING | PENDING | APPROVAL_REQUIRED | G1 |
-| D4 | Absolute monotonic deadlines are required; exact recording/finalization/ASR/cleanup values are unresolved | None | Application owner | Product owner + maintainer | the RFC decision register; `rfcs/imported-media-transcription.md` | `9389b32b4644cf670512c57d1b56cba4a66b9bdb730591648f4db2459320dea9` | PENDING | PENDING | PENDING | OPEN | G1/G2 |
-| D5 | Existing lock/condition FIFO reservation pattern is the candidate; shared ASR request-scoped quiescence is still missing | Actor/unbounded queue not evaluated | ASR owner | Maintainer | the RFC decision register; `src/voiceink_win/application/import_queue.py`; `src/voiceink_win/domain/imported_job.py` | `17ead2b8b57b6ebb5a236d62ee6be2e3033964aa1cd41449b0aacc51a71b09bf`; `55ad2284a86280d25a0942e17a95e70a1a4afb08ae7adf290ab46d3168b7fc8b` | PENDING | PENDING | PENDING | APPROVAL_REQUIRED | G2 |
-| D6 | Block new generations while `recovery_owned`; helper recovery budget remains open | No silent release/fallback | ASR owner | Maintainer + security owner | the RFC decision register; `src/voiceink_win/application/import_service.py` | `2af166385acf6c52f4b20fb266b218f447929dcee5c94dc697b00c566e7dfe39` | PENDING | PENDING | PENDING | OPEN | G2 |
-| D7 | NONE | Console/communications/product role not rejected | Windows owner | Product owner + maintainer | `docs/evidence/microphone/<run-id>/g3a/endpoint-role.json` | NONE | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G3a |
-| D8 | NONE; shared mode is only the candidate contract | Exclusive not rejected | Windows owner | Product owner + maintainer | `docs/evidence/microphone/<run-id>/g3a/wasapi-mode.json` | NONE | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G3a |
-| D9 | NONE | No format tuple rejected | Windows owner | Maintainer | `docs/evidence/microphone/<run-id>/g3a/format-inventory.json` | NONE | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G3a |
-| D10 | NONE | No converter alternative rejected | Audio owner | Maintainer + Windows owner | `docs/evidence/microphone/<run-id>/g3a/golden-vectors.json` | NONE | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G3a |
-| D11 | NONE | No buffer alternative rejected | Windows owner | Maintainer | `docs/evidence/microphone/<run-id>/g3a/buffer-stress.json` | NONE | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G3a |
-| D12 | Live adapter conversion for device frames; FFmpeg remains imported-media-only candidate amendment | Existing wording not rejected until approval | Architecture owner | Maintainer | `docs/microphone-gate-evidence.md#d12`; `spec/architecture/overview.md` | `3bb15b0064a01af77b4f7e0f3520941e65d7852c90c27cda15d597a2af1e9` | PENDING | PENDING | PENDING | APPROVAL_REQUIRED | G3a |
-| D13 | NONE; C++20/MSVC helper is a candidate only | Alternatives not rejected | Windows owner | Maintainer | `docs/evidence/microphone/<run-id>/g4a/helper-feasibility.json` | NONE | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G4a |
-| D14 | NONE; named pipe/current-user ACL is a candidate only | Socket/shared-memory/no-go not rejected | Security owner | Maintainer + Windows owner | `docs/microphone-gate-evidence.md#d14`; `docs/evidence/microphone/<run-id>/g4a/named-pipe-acl.json` | NONE | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G4a |
-| D15 | NONE | No package lane rejected | Release owner | Maintainer + security owner | `.github/workflows/native-smoke.yml`; `.github/native-smoke/artifact-lock.template.json` | `e56fc7e2f005eb5ac6a372b11c761da5d5bf9857ec532f0005462b974231a0cd`; `38835b09e7b35173d2b6f05e0713dcfb7b343493d5a8812d497669ed8507fc0e` | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G4a |
-| D16 | NONE; existing Job Object code is pattern evidence only | No restart policy rejected | Windows owner | Maintainer + security owner | `src/voiceink_win/infrastructure/process.py` | `4e10f55953a845f3caed03cc67876cb3e03e980b4a970c7e62eeb8e29ce4b871` | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G4a |
-| D17 | NONE; canonical and diagnostic ceilings are partial evidence only | No memory budget rejected | Performance owner | Maintainer | `src/voiceink_win/domain/models.py`; `rfcs/native-windows-runtime-startup.md` | `8770188aff26443c59981e010343ea9227acab8d937bd19f4a73cbaa6e32dc70`; `2fc51b6683e716adff85e29c7f0016c5599fa8ac6087e6d35fadba54cb1770c2` | PENDING | PENDING | PENDING | APPROVAL_REQUIRED | G3a/G4a |
-| D18 | NONE; current workflow is imported-media x64 evidence only | No microphone lane rejected | Release owner | Maintainer | `.github/workflows/native-smoke.yml`; `.github/native-smoke/artifact-lock.template.json` | `e56fc7e2f005eb5ac6a372b11c761da5d5bf9857ec532f0005462b974231a0cd`; `38835b09e7b35173d2b6f05e0713dcfb7b343493d5a8812d497669ed8507fc0e` | PENDING | PENDING | PENDING | WINDOWS_REQUIRED | G4a |
-| D19 | NONE; existing report sanitizer is reusable evidence only | Dump policy alternatives not rejected | Security/privacy owner | Maintainer + security owner | `src/voiceink_win/infrastructure/reporting.py`; `rfcs/native-windows-runtime-startup.md` | `b5fa0246529064e4191b87e945de26515a51e35bbd2425fb14a523574d90d2f4`; `2fc51b6683e716adff85e29c7f0016c5599fa8ac6087e6d35fadba54cb1770c2` | PENDING | PENDING | PENDING | APPROVAL_REQUIRED | G4a |
+## Decision Register
 
-Implementation, feature enablement, and status `approved` are blocked until
-every decision is approved with the evidence named in the RFC and the result
-is synchronized into this specification and the catalog. Streaming, disk
-spill, automatic downloads, cloud providers, history, hotkeys, installer
-rollout, and text delivery remain deferred beyond this feature.
+| ID | Recommendation (not approved) | Owner | Approval/evidence still required | Status |
+|---|---|---|---|---|
+| D1 | 32 min / 30,720,000 samples / 61,440,000 canonical bytes | Product owner | product sign-off and memory accounting | RECOMMENDED / BLOCKED |
+| D2 | normative cancelling; shell projection remains UI decision | Application owner | UI race review | RECOMMENDED / BLOCKED |
+| D3 | separate CaptureError family | Application owner | type hierarchy review | RECOMMENDED / BLOCKED |
+| D4 | 2s/5s/10s/45m/5m operation deadlines | Application owner | deadline race matrix | RECOMMENDED / BLOCKED |
+| D5 | lock-protected shared reservations and request handles | ASR owner | scheduler race evidence | RECOMMENDED / BLOCKED |
+| D6 | recovery_owned blocks new generations; 60s escalation plus 30s watchdog shutdown | ASR owner | recovery supervisor evidence | RECOMMENDED / BLOCKED |
+| D7 | eCapture/eConsole once at open | Windows owner | endpoint-role probe | RECOMMENDED / BLOCKED |
+| D8 | shared event-driven WASAPI | Windows owner | contention/format probe | RECOMMENDED / BLOCKED |
+| D9 | PCM16/float32 mono/stereo at approved rates | Windows owner | capability inventory | RECOMMENDED / BLOCKED |
+| D10 | pinned SpeexDSP and exact conversion rules | Audio owner | golden vectors and license | RECOMMENDED / BLOCKED |
+| D11 | 4 MiB bounded event queue; overflow failure | Windows owner | stress/RSS evidence | RECOMMENDED / BLOCKED |
+| D12 | FFmpeg imported; helper live conversion | Architecture owner | architecture amendment | RECOMMENDED / BLOCKED |
+| D13 | C++17 helper, one process per generation | Windows owner | build/crash feasibility | RECOMMENDED / BLOCKED |
+| D14 | named pipe with challenge/HMAC and bounds | Security owner | ACL/protocol threat review | RECOMMENDED / BLOCKED |
+| D15 | signed x64 portable onedir, sibling helper | Release owner | clean package/provenance | RECOMMENDED / BLOCKED |
+| D16 | Job Object kill-on-close and bounded reap | Windows owner | crash/timeout evidence | RECOMMENDED / BLOCKED |
+| D17 | bounded queue/scratch/canonical/ASR accounting; helper 64 MiB cap; 192 MiB RSS acceptance ceiling | Performance owner | peak RSS evidence | RECOMMENDED / BLOCKED |
+| D18 | 9 runtime plus 9 frozen lanes across Win10/11 x64 and Python 3.12/3.13/3.14; ARM64 deferred | Release owner | runner/fixture record | RECOMMENDED / BLOCKED |
+| D19 | filtered/disabled dumps and approved scanner/canaries | Security/privacy owner | dump policy | RECOMMENDED / BLOCKED |
+
+Every decision also has these currently empty approval fields:
+
+| ID | Selected alternative | Evidence path | Evidence SHA-256 | Approval record | Decision date | RFC/spec/catalog commit | Status |
+|---|---|---|---|---|---|---|---|
+| D1 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D2 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D3 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D4 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D5 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D6 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D7 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D8 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D9 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D10 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D11 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D12 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D13 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D14 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D15 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D16 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D17 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D18 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+| D19 | NONE | NONE | NONE | NONE | NONE | NONE | RECOMMENDED / BLOCKED |
+
+An approval must replace every `NONE` value before changing any status.
+Implementation, enablement, and status `approved` remain forbidden until every
+row has the full approval record and is synchronized with the RFC and catalog.

@@ -34,6 +34,7 @@ documents:
   - path: spec/features/005-microphone-recording.md
     kind: feature
     status: draft
+    recommendation_status: documented_not_approved
     gate: G1-G4 (G3a/G3b, G4a/G4b)
     blocked_by: D1-D19; G1; G2; G3a; G4a=GO; decision_sync; implementation_plan
     implementation_allowed: false
@@ -41,17 +42,13 @@ documents:
     enablement_blocked_by: G3b; G4b
     g4a_outcome: OPEN (GO required)
     decision_registers:
-      - rfcs/microphone-recording.md#open-questions
-      - spec/features/005-microphone-recording.md#open-questions-and-deferred-work
-    gate_status:
-      G1: UNREVIEWED (approval required)
-      G2: UNREVIEWED (approval required)
-      G3a: WINDOWS_REQUIRED
-      G4a: WINDOWS_REQUIRED (GO required)
+      - rfcs/microphone-recording.md#decision-register
+      - spec/features/005-microphone-recording.md#decision-register
     decision_sync: required
   - path: rfcs/microphone-recording.md
     kind: rfc
     status: draft
+    recommendation_status: documented_not_approved
     gate: G1-G4 (G3a/G3b, G4a/G4b)
     blocked_by: D1-D19; G1; G2; G3a; G4a=GO; decision_sync; implementation_plan
     implementation_allowed: false
@@ -59,13 +56,8 @@ documents:
     enablement_blocked_by: G3b; G4b
     g4a_outcome: OPEN (GO required)
     decision_registers:
-      - rfcs/microphone-recording.md#open-questions
-      - spec/features/005-microphone-recording.md#open-questions-and-deferred-work
-    gate_status:
-      G1: EVIDENCE_PARTIAL (approval required)
-      G2: EVIDENCE_PARTIAL (approval required)
-      G3a: WINDOWS_REQUIRED
-      G4a: WINDOWS_REQUIRED (GO required)
+      - rfcs/microphone-recording.md#decision-register
+      - spec/features/005-microphone-recording.md#decision-register
     decision_sync: required
   - path: rfcs/desktop-composition-boundary.md
     kind: rfc
@@ -73,22 +65,3 @@ documents:
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed
-  - path: spec/features/006-desktop-pages-transcribe.md
-    kind: feature
-    status: proposed
-    source_rfc: rfcs/desktop-pages-transcribe.md
-    implementation_allowed: false
-    blocked_by:
-      - desktop_composition_lifecycle
-      - history_schema_and_retention
-      - windows_file_picker_policy
-      - parakeet_runtime_approval
-  - path: spec/features/007-persistence-foundation.md
-    kind: feature
-    status: implemented
-  - path: rfcs/desktop-pages-transcribe.md
-    kind: rfc
-    status: proposed
-    feature_spec: spec/features/006-desktop-pages-transcribe.md
-    implementation_allowed: false
-    microphone_scope: deferred_to_later_rfc
