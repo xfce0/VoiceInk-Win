@@ -43,6 +43,12 @@ documents:
     decision_registers:
       - rfcs/microphone-recording.md#open-questions
       - spec/features/005-microphone-recording.md#open-questions-and-deferred-work
+    evidence_register: docs/microphone-gate-evidence.md
+    gate_status:
+      G1: EVIDENCE_PARTIAL (approval required)
+      G2: EVIDENCE_PARTIAL (approval required)
+      G3a: WINDOWS_REQUIRED
+      G4a: WINDOWS_REQUIRED (GO required)
     decision_sync: required
   - path: rfcs/microphone-recording.md
     kind: rfc
@@ -56,6 +62,12 @@ documents:
     decision_registers:
       - rfcs/microphone-recording.md#open-questions
       - spec/features/005-microphone-recording.md#open-questions-and-deferred-work
+    evidence_register: docs/microphone-gate-evidence.md
+    gate_status:
+      G1: EVIDENCE_PARTIAL (approval required)
+      G2: EVIDENCE_PARTIAL (approval required)
+      G3a: WINDOWS_REQUIRED
+      G4a: WINDOWS_REQUIRED (GO required)
     decision_sync: required
   - path: rfcs/desktop-composition-boundary.md
     kind: rfc
