@@ -11,7 +11,6 @@ from .authentication import (
 from .fake_asr import FakeAsrRuntime, FakeAsrScenario
 from .fake_clock import FakeClock
 from .fake_media import FakeMediaNormalizer, FakeMediaScenario, FakeSnapshotStore, make_wav
-from .fake_shell import FakeShellBackend
 from .ffmpeg import (
     BoundedPcmSink,
     FfmpegArtifactManifest,
@@ -72,7 +71,6 @@ from .windows_snapshot import (
 __all__ = [
     "FakeAsrRuntime",
     "FakeAsrScenario",
-    "FakeShellBackend",
     "ASR_NONCE_ENV",
     "ASR_NONCE_HEADER",
     "ASR_API_KEY_ENV",

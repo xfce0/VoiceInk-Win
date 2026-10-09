@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import os
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+except ImportError:
+    if os.environ.get("VOICEINK_GUI_TESTS") == "1":
+        raise
+    pytest.skip("PySide6 is required for presentation tests", allow_module_level=True)
+
+from voiceink_win.presentation.main_window import MainWindow
+
+
+@pytest.fixture(scope="module")
+def application() -> QApplication:
+    return QApplication.instance() or QApplication([])
+
+
+def test_unavailable_presentation_uses_exact_copy_and_no_active_timers(
+    application: QApplication,
+) -> None:
+    del application
+    from voiceink_win.application import ShellController
+
+    window = MainWindow(ShellController.unavailable())
+    recorder = window._recorder
+
+    assert window._state_pill.text() == "Recording unavailable"
+    assert window._page_subtext.text() == (
+        "Recording cannot start because microphone capture and ASR are not included."
+    )
+    assert window._hero_headline.text() == "Recording is unavailable in this build."
+    assert window._hero_detail.text() == "Microphone capture and ASR are not included."
+    assert window._transcript_metadata.text() == "Capability unavailable"
+    assert window._transcript_text.text() == (
+        "Transcripts are unavailable because recording and ASR are not included."
+    )
+    assert recorder._status.text() == "Unavailable"
+    assert recorder._record_button.text() == "Unavailable"
+    assert not recorder._record_button.isEnabled()
+    assert recorder._record_button.accessibleName() == "Recording unavailable"
+    assert "Microphone capture is not connected" in recorder._record_button.accessibleDescription()
+    assert recorder._waveform._timer is None
+    assert not recorder._waveform._active
+    assert recorder._timer is None
+
+    rendered_text = " ".join(
+        widget.text()
+        for widget_type in (QLabel, QPushButton)
+        for widget in window.findChildren(widget_type)
+    )
+    for forbidden in (
+        "Ready",
+        "Listening",
+        "Transcribing",
+        "Transcript ready",
+        "Start recording",
+        "Start again",
+        "Try again",
+        "Working...",
+    ):
+        assert forbidden not in rendered_text
+
+    window.close()
+
+
+def test_production_entrypoint_runs_real_composition_session(
+    application: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del application
+    import voiceink_win.presentation.app as presentation_app
+    import voiceink_win.presentation.main_window as main_window_module
+
+    events: list[str] = []
+    real_builder = presentation_app.build_desktop_composition
+
+    class CompositionSpy:
+        def __init__(self) -> None:
+            self._composition = real_builder()
+            self.controller = self._composition.controller
+
+        def close(self) -> None:
+            events.append("close")
+            self._composition.close()
+
+    def build_composition() -> CompositionSpy:
+        events.append("build")
+        return CompositionSpy()
+
+    real_window = main_window_module.MainWindow
+
+    class RecordingWindow(real_window):
+        def __init__(self, *args, **kwargs) -> None:
+            events.append("construct")
+            super().__init__(*args, **kwargs)
+
+        def show(self) -> None:
+            events.append("show")
+            super().show()
+
+    monkeypatch.setattr(presentation_app, "build_desktop_composition", build_composition)
+    monkeypatch.setattr(main_window_module, "MainWindow", RecordingWindow)
+    monkeypatch.setattr(presentation_app.sys, "argv", ["voiceink-gui-test"])
+    real_exec = QApplication.exec
+
+    def record_exec(application: QApplication) -> int:
+        events.append("exec")
+        del application
+        result = real_exec()
+        events.append("exec-return")
+        return result
+
+    monkeypatch.setattr(QApplication, "exec", record_exec)
+
+    assert presentation_app.main(smoke=True) == 0
+    assert events == ["build", "construct", "show", "exec", "exec-return", "close"]
+
+
+def test_production_entrypoint_closes_composition_on_event_loop_failure(
+    application: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del application
+    import voiceink_win.presentation.app as presentation_app
+    import voiceink_win.presentation.main_window as main_window_module
+
+    events: list[str] = []
+    real_builder = presentation_app.build_desktop_composition
+
+    class CompositionSpy:
+        def __init__(self) -> None:
+            self._composition = real_builder()
+            self.controller = self._composition.controller
+
+        def close(self) -> None:
+            events.append("close")
+            self._composition.close()
+
+    def build_composition() -> CompositionSpy:
+        events.append("build")
+        return CompositionSpy()
+
+    real_window = main_window_module.MainWindow
+
+    class RecordingWindow(real_window):
+        def __init__(self, *args, **kwargs) -> None:
+            events.append("construct")
+            super().__init__(*args, **kwargs)
+
+        def show(self) -> None:
+            events.append("show")
+            super().show()
+
+    error = RuntimeError("event loop failed")
+
+    def fail_exec(_application: QApplication) -> int:
+        events.append("exec")
+        raise error
+
+    monkeypatch.setattr(presentation_app, "build_desktop_composition", build_composition)
+    monkeypatch.setattr(main_window_module, "MainWindow", RecordingWindow)
+    monkeypatch.setattr(presentation_app.sys, "argv", ["voiceink-gui-test"])
+    monkeypatch.setattr(QApplication, "exec", fail_exec)
+
+    with pytest.raises(RuntimeError) as raised:
+        presentation_app.main()
+
+    assert raised.value is error
+    assert events == ["build", "construct", "show", "exec", "close"]

@@ -1,4 +1,4 @@
-"""Deterministic backend for the optional desktop shell demo."""
+"""Test-only deterministic backend for enabled shell controller tests."""
 
 from __future__ import annotations
 

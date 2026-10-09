@@ -7,6 +7,7 @@ from enum import StrEnum
 
 
 class ShellState(StrEnum):
+    UNAVAILABLE = "unavailable"
     IDLE = "idle"
     RECORDING = "recording"
     PROCESSING = "processing"

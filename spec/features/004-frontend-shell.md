@@ -2,9 +2,7 @@
 
 ## Status and Scope
 
-Status: proposed amendment to the implemented presentation baseline. The
-unavailable-shell composition described by
-`rfcs/desktop-composition-boundary.md` is not implemented yet.
+Status: implemented desktop presentation and no-resource composition boundary.
 
 This feature provides the first PySide6 presentation slice for VoiceInk-Win. It
 ports the macOS VoiceInk visual hierarchy into a Windows-friendly desktop shell
@@ -30,9 +28,10 @@ Windows-specific APIs.
 ## Product Intent
 
 - The main window keeps the macOS reference's quiet system surfaces, warm orange
-  progress card, and compact transcript rows. Its navigation is a 68 px
-  icon-only rail with repository-owned Lucide-style tiles; original destination
-  names remain available through tooltips and accessibility labels.
+  progress card, and compact transcript rows. Its navigation is an expanded
+  208 px sidebar with visible destination labels and repository-owned
+  Lucide-style tiles; the layout remains readable at the supported minimum
+  window size.
 - The unavailable explanation is represented by a black, compact floating panel
   with a disabled action and inactive waveform; it has no processing indicator
   or recording timer.
@@ -88,9 +87,10 @@ Presentation -> Application -> Domain <- Infrastructure
   applies semantic tokens to the window, rail, viewport, cards, controls, and
   waveform. If Qt reports an unknown scheme, the effective window palette is
   used as a fallback.
-- Sidebar destinations use repository-owned SVG-backed QIcons, retain their
-  original names through tooltips/accessibility labels, and remain disabled
-  until their destination behavior exists.
+- Sidebar destinations use repository-owned SVG-backed high-DPI QIcons, retain
+  their original names in visible labels, tooltips, and accessibility labels,
+  preserve semantic tile/icon colors across normal, hover, checked, and disabled
+  states, and remain disabled until their destination behavior exists.
 
 ## Error and Cancellation Behavior
 
@@ -121,7 +121,9 @@ codes are deferred to a shutdown-reliability RFC.
   runtime failures, invalid actions, and listener removal.
 - Existing repository tests remain the regression suite for backend contracts.
 - Non-GUI tests cover light/dark token selection, stylesheet surface coverage,
-  system-scheme fallback parsing, and sidebar registry invariants.
+  system-scheme fallback parsing, sidebar registry invariants, and navigation
+  state selectors. Offscreen GUI tests cover expanded width, visible labels,
+  Dashboard selection, vector icon rendering, and high-DPI pixmaps.
 - The Windows packaging workflow validates the frozen x64 PE and launches the
   shell through its real entrypoint with Qt's offscreen platform plugin.
 - Interactive GUI validation remains a Windows user acceptance step.
