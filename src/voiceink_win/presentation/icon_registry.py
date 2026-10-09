@@ -54,12 +54,12 @@ LUCIDE_PATHS = {
 
 SIDEBAR_ITEMS = (
     SidebarItem("Dashboard", "dashboard", "#e8892e", "#24170f", True),
-    SidebarItem("Modes", "modes", "#6256c9", "#ffffff", False),
+    SidebarItem("Modes", "modes", "#6256c9", "#ffffff", True),
     SidebarItem("Transcribe", "transcribe", "#db594b", "#ffffff", True),
-    SidebarItem("History", "history", "#df4f82", "#2a101d", False),
-    SidebarItem("Dictionary", "dictionary", "#3478d4", "#ffffff", False),
+    SidebarItem("History", "history", "#df4f82", "#2a101d", True),
+    SidebarItem("Dictionary", "dictionary", "#3478d4", "#ffffff", True),
     SidebarItem("AI Models", "models", "#986d4b", "#24150d", False),
     SidebarItem("Audio", "audio", "#0f766e", "#ffffff", False),
-    SidebarItem("Settings", "settings", "#64748b", "#ffffff", False),
+    SidebarItem("Settings", "settings", "#64748b", "#ffffff", True),
     SidebarItem("VoiceInk Pro", "license", "#4eaf6c", "#12351f", False),
 )

@@ -57,6 +57,80 @@ class TranslationKey(StrEnum):
     SIDEBAR_VOICEINK_PRO = "sidebar.voiceink_pro"
     SIDEBAR_DESTINATION = "sidebar.destination"
 
+    COMMON_LOADING = "common.loading"
+    COMMON_READY = "common.ready"
+    COMMON_SAVING = "common.saving"
+    COMMON_SAVED = "common.saved"
+    COMMON_ERROR = "common.error"
+    COMMON_PERSISTENCE_UNAVAILABLE = "common.persistence_unavailable"
+
+    MODES_TITLE = "modes.title"
+    MODES_SUBTITLE = "modes.subtitle"
+    MODE_SELECTED = "modes.selected"
+    MODE_DEFAULT = "modes.default"
+    MODE_MEETING = "modes.meeting"
+    MODE_FOCUS = "modes.focus"
+    MODE_DEFAULT_DETAIL = "modes.default_detail"
+    MODE_MEETING_DETAIL = "modes.meeting_detail"
+    MODE_FOCUS_DETAIL = "modes.focus_detail"
+    MODE_UNAVAILABLE = "modes.unavailable"
+
+    SETTINGS_TITLE = "settings.title"
+    SETTINGS_SUBTITLE = "settings.subtitle"
+    SETTINGS_LANGUAGE = "settings.language"
+    SETTINGS_ENGLISH = "settings.english"
+    SETTINGS_RUSSIAN = "settings.russian"
+    SETTINGS_AUTO_COPY = "settings.auto_copy"
+    SETTINGS_MODE = "settings.mode"
+    SETTINGS_START_STOP_HOTKEY = "settings.start_stop_hotkey"
+    SETTINGS_CANCEL_HOTKEY = "settings.cancel_hotkey"
+    SETTINGS_HOTKEY_PLACEHOLDER = "settings.hotkey_placeholder"
+    SETTINGS_MODEL = "settings.model"
+    SETTINGS_AUDIO = "settings.audio"
+    SETTINGS_BACKEND_UNAVAILABLE = "settings.backend_unavailable"
+
+    HISTORY_TITLE = "history.title"
+    HISTORY_SUBTITLE = "history.subtitle"
+    HISTORY_LOADING = "history.loading"
+    HISTORY_EMPTY = "history.empty"
+    HISTORY_EMPTY_RECORD = "history.empty_record"
+    HISTORY_SELECT = "history.select"
+    HISTORY_METADATA = "history.metadata"
+    HISTORY_SOURCE_MICROPHONE = "history.source.microphone"
+    HISTORY_SOURCE_IMPORTED = "history.source.imported"
+    HISTORY_SOURCE_PASTE = "history.source.paste"
+    HISTORY_SOURCE_OTHER = "history.source.other"
+    HISTORY_STATUS_COMPLETED = "history.status.completed"
+    HISTORY_STATUS_PENDING = "history.status.pending"
+    HISTORY_STATUS_FAILED = "history.status.failed"
+    HISTORY_COPY = "history.copy"
+    HISTORY_COPYING = "history.copying"
+    HISTORY_COPIED = "history.copied"
+    HISTORY_COPY_ERROR = "history.copy_error"
+    HISTORY_DELETE = "history.delete"
+    HISTORY_DELETE_TITLE = "history.delete_title"
+    HISTORY_DELETE_CONFIRM = "history.delete_confirm"
+    HISTORY_DELETING = "history.deleting"
+    HISTORY_DELETE_ERROR = "history.delete_error"
+    HISTORY_CLEANING = "history.cleaning"
+    HISTORY_CLEANUP_ERROR = "history.cleanup_error"
+    HISTORY_PREVIOUS = "history.previous"
+    HISTORY_NEXT = "history.next"
+
+    DICTIONARY_TITLE = "dictionary.title"
+    DICTIONARY_SUBTITLE = "dictionary.subtitle"
+    DICTIONARY_PHRASE = "dictionary.phrase"
+    DICTIONARY_REPLACEMENT = "dictionary.replacement"
+    DICTIONARY_ENABLED = "dictionary.enabled"
+    DICTIONARY_NEW = "dictionary.new"
+    DICTIONARY_SAVE = "dictionary.save"
+    DICTIONARY_DELETE = "dictionary.delete"
+    DICTIONARY_PHRASE_REQUIRED = "dictionary.phrase_required"
+    DICTIONARY_SAVE_ERROR = "dictionary.save_error"
+    DICTIONARY_DELETE_TITLE = "dictionary.delete_title"
+    DICTIONARY_DELETE_CONFIRM = "dictionary.delete_confirm"
+    DICTIONARY_DELETE_ERROR = "dictionary.delete_error"
+
     GREETING_MORNING = "dashboard.greeting.morning"
     GREETING_AFTERNOON = "dashboard.greeting.afternoon"
     GREETING_EVENING = "dashboard.greeting.evening"
@@ -249,6 +323,137 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.SIDEBAR_VOICEINK_PRO: _entry("VoiceInk Pro", "VoiceInk Pro"),
     TranslationKey.SIDEBAR_DESTINATION: _entry(
         "{label} navigation destination", "Переход: {label}"
+    ),
+    TranslationKey.COMMON_LOADING: _entry("Loading...", "Загрузка..."),
+    TranslationKey.COMMON_READY: _entry("Ready", "Готово"),
+    TranslationKey.COMMON_SAVING: _entry("Saving...", "Сохранение..."),
+    TranslationKey.COMMON_SAVED: _entry("Saved", "Сохранено"),
+    TranslationKey.COMMON_ERROR: _entry(
+        "Could not complete the operation.", "Не удалось выполнить операцию."
+    ),
+    TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE: _entry(
+        "Local storage is unavailable.", "Локальное хранилище недоступно."
+    ),
+    TranslationKey.MODES_TITLE: _entry("Modes", "Режимы"),
+    TranslationKey.MODES_SUBTITLE: _entry(
+        "Choose the mode to use when transcription is available. The selection is stored locally.",
+        "Выберите режим для расшифровки, когда она станет доступна. Выбор сохраняется локально.",
+    ),
+    TranslationKey.MODE_SELECTED: _entry("Selected mode", "Выбранный режим"),
+    TranslationKey.MODE_DEFAULT: _entry("Default", "По умолчанию"),
+    TranslationKey.MODE_MEETING: _entry("Meeting", "Встреча"),
+    TranslationKey.MODE_FOCUS: _entry("Focus", "Фокус"),
+    TranslationKey.MODE_DEFAULT_DETAIL: _entry(
+        "Balanced transcription mode. Runtime-specific behavior is not connected in this build.",
+        "Сбалансированный режим расшифровки. Поведение среды не подключено в этой сборке.",
+    ),
+    TranslationKey.MODE_MEETING_DETAIL: _entry(
+        "Meeting mode is stored as a preference; audio capture and runtime tuning are unavailable.",
+        "Режим встречи сохраняется как настройка; захват аудио и настройка среды недоступны.",
+    ),
+    TranslationKey.MODE_FOCUS_DETAIL: _entry(
+        "Focus mode is stored as a preference; audio capture and runtime tuning are unavailable.",
+        "Режим фокуса сохраняется как настройка; захват аудио и настройка среды недоступны.",
+    ),
+    TranslationKey.MODE_UNAVAILABLE: _entry(
+        "Transcription runtime features are unavailable in this build.",
+        "Функции среды расшифровки недоступны в этой сборке.",
+    ),
+    TranslationKey.SETTINGS_TITLE: _entry("Settings", "Настройки"),
+    TranslationKey.SETTINGS_SUBTITLE: _entry(
+        "Preferences are stored locally and applied when the corresponding "
+        "runtime feature is available.",
+        "Настройки сохраняются локально и применяются, когда соответствующая "
+        "функция среды доступна.",
+    ),
+    TranslationKey.SETTINGS_LANGUAGE: _entry("Language", "Язык"),
+    TranslationKey.SETTINGS_ENGLISH: _entry("English", "Английский"),
+    TranslationKey.SETTINGS_RUSSIAN: _entry("Russian", "Русский"),
+    TranslationKey.SETTINGS_AUTO_COPY: _entry(
+        "Copy transcript automatically", "Копировать текст автоматически"
+    ),
+    TranslationKey.SETTINGS_MODE: _entry("Transcription mode", "Режим расшифровки"),
+    TranslationKey.SETTINGS_START_STOP_HOTKEY: _entry(
+        "Start/stop hotkey", "Горячая клавиша старта/остановки"
+    ),
+    TranslationKey.SETTINGS_CANCEL_HOTKEY: _entry("Cancel hotkey", "Горячая клавиша отмены"),
+    TranslationKey.SETTINGS_HOTKEY_PLACEHOLDER: _entry(
+        "Configuration placeholder", "Поле настройки"
+    ),
+    TranslationKey.SETTINGS_MODEL: _entry("Model preference", "Настройка модели"),
+    TranslationKey.SETTINGS_AUDIO: _entry("Audio preference", "Настройка аудио"),
+    TranslationKey.SETTINGS_BACKEND_UNAVAILABLE: _entry(
+        "Backend is not configured yet.", "Среда выполнения пока не настроена."
+    ),
+    TranslationKey.HISTORY_TITLE: _entry("History", "История"),
+    TranslationKey.HISTORY_SUBTITLE: _entry(
+        "Saved transcripts are loaded from local SQLite storage, newest first.",
+        "Сохранённые расшифровки загружаются из локального SQLite, сначала новые.",
+    ),
+    TranslationKey.HISTORY_LOADING: _entry("Loading history...", "Загрузка истории..."),
+    TranslationKey.HISTORY_EMPTY: _entry("No transcripts yet.", "Расшифровок пока нет."),
+    TranslationKey.HISTORY_EMPTY_RECORD: _entry("Empty transcript", "Пустая расшифровка"),
+    TranslationKey.HISTORY_SELECT: _entry(
+        "Select a transcript to open it.", "Выберите расшифровку, чтобы открыть её."
+    ),
+    TranslationKey.HISTORY_METADATA: _entry(
+        "{date} · {source} · {duration}s · {status}", "{date} · {source} · {duration} с · {status}"
+    ),
+    TranslationKey.HISTORY_SOURCE_MICROPHONE: _entry("Microphone", "Микрофон"),
+    TranslationKey.HISTORY_SOURCE_IMPORTED: _entry("Imported file", "Импортированный файл"),
+    TranslationKey.HISTORY_SOURCE_PASTE: _entry("Paste", "Вставка"),
+    TranslationKey.HISTORY_SOURCE_OTHER: _entry("Other", "Другое"),
+    TranslationKey.HISTORY_STATUS_COMPLETED: _entry("Completed", "Завершено"),
+    TranslationKey.HISTORY_STATUS_PENDING: _entry("Pending", "Ожидание"),
+    TranslationKey.HISTORY_STATUS_FAILED: _entry("Failed", "Ошибка"),
+    TranslationKey.HISTORY_COPY: _entry("Copy", "Копировать"),
+    TranslationKey.HISTORY_COPYING: _entry("Copying...", "Копирование..."),
+    TranslationKey.HISTORY_COPIED: _entry("Copied", "Скопировано"),
+    TranslationKey.HISTORY_COPY_ERROR: _entry(
+        "Could not copy the transcript.", "Не удалось скопировать расшифровку."
+    ),
+    TranslationKey.HISTORY_DELETE: _entry("Delete", "Удалить"),
+    TranslationKey.HISTORY_DELETE_TITLE: _entry("Delete transcript", "Удалить расшифровку"),
+    TranslationKey.HISTORY_DELETE_CONFIRM: _entry(
+        "Delete the selected transcript and its linked audio artifact?",
+        "Удалить выбранную расшифровку и связанный аудиоартефакт?",
+    ),
+    TranslationKey.HISTORY_DELETING: _entry("Deleting...", "Удаление..."),
+    TranslationKey.HISTORY_DELETE_ERROR: _entry(
+        "Could not delete the transcript.", "Не удалось удалить расшифровку."
+    ),
+    TranslationKey.HISTORY_CLEANING: _entry(
+        "Cleaning linked artifact...", "Очистка связанного артефакта..."
+    ),
+    TranslationKey.HISTORY_CLEANUP_ERROR: _entry(
+        "The linked artifact could not be removed.", "Не удалось удалить связанный артефакт."
+    ),
+    TranslationKey.HISTORY_PREVIOUS: _entry("Previous", "Назад"),
+    TranslationKey.HISTORY_NEXT: _entry("Next", "Далее"),
+    TranslationKey.DICTIONARY_TITLE: _entry("Dictionary", "Словарь"),
+    TranslationKey.DICTIONARY_SUBTITLE: _entry(
+        "Store replacement rules now. Applying them to transcription is not enabled in this build.",
+        "Сохраняйте правила замен. Применение к расшифровке в этой сборке не включено.",
+    ),
+    TranslationKey.DICTIONARY_PHRASE: _entry("Phrase", "Фраза"),
+    TranslationKey.DICTIONARY_REPLACEMENT: _entry("Replacement", "Замена"),
+    TranslationKey.DICTIONARY_ENABLED: _entry("Rule enabled", "Правило включено"),
+    TranslationKey.DICTIONARY_NEW: _entry("New", "Новое"),
+    TranslationKey.DICTIONARY_SAVE: _entry("Save", "Сохранить"),
+    TranslationKey.DICTIONARY_DELETE: _entry("Delete", "Удалить"),
+    TranslationKey.DICTIONARY_PHRASE_REQUIRED: _entry("Enter a phrase.", "Введите фразу."),
+    TranslationKey.DICTIONARY_SAVE_ERROR: _entry(
+        "Could not save this rule. The phrase may already exist.",
+        "Не удалось сохранить правило. Возможно, фраза уже существует.",
+    ),
+    TranslationKey.DICTIONARY_DELETE_TITLE: _entry(
+        "Delete dictionary rule", "Удалить правило словаря"
+    ),
+    TranslationKey.DICTIONARY_DELETE_CONFIRM: _entry(
+        "Delete the selected replacement rule?", "Удалить выбранное правило замены?"
+    ),
+    TranslationKey.DICTIONARY_DELETE_ERROR: _entry(
+        "Could not delete this rule.", "Не удалось удалить правило."
     ),
     TranslationKey.GREETING_MORNING: _entry("Good morning.", "Доброе утро."),
     TranslationKey.GREETING_AFTERNOON: _entry("Good afternoon.", "Добрый день."),

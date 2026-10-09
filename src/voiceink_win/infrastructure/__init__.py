@@ -1,5 +1,7 @@
 """Infrastructure adapters for the ASR foundation."""
 
+from importlib import import_module
+
 from .authentication import (
     ASR_API_KEY_ENV,
     ASR_AUTHORIZATION_HEADER,
@@ -8,9 +10,6 @@ from .authentication import (
     generate_nonce,
     validate_nonce,
 )
-from .fake_asr import FakeAsrRuntime, FakeAsrScenario
-from .fake_clock import FakeClock
-from .fake_media import FakeMediaNormalizer, FakeMediaScenario, FakeSnapshotStore, make_wav
 from .ffmpeg import (
     BoundedPcmSink,
     FfmpegArtifactManifest,
@@ -74,6 +73,25 @@ from .windows_snapshot import (
     WindowsMediaSnapshotStore,
     create_media_snapshot_store,
 )
+
+_TEST_ONLY_EXPORTS = {
+    "FakeAsrRuntime": "fake_asr",
+    "FakeAsrScenario": "fake_asr",
+    "FakeClock": "fake_clock",
+    "FakeMediaNormalizer": "fake_media",
+    "FakeMediaScenario": "fake_media",
+    "FakeSnapshotStore": "fake_media",
+    "make_wav": "fake_media",
+}
+
+
+def __getattr__(name: str):
+    module_name = _TEST_ONLY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    module = import_module(f"{__name__}.{module_name}")
+    return getattr(module, name)
+
 
 __all__ = [
     "FakeAsrRuntime",
