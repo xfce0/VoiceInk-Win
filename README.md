@@ -147,8 +147,8 @@ VOICEINK_IMPORT_ROOTS=C:\path\to\allowed\media;D:\another\allowed\root
 The runtime manifest and artifact lock must describe the approved model and
 sidecar executable. FFmpeg must be an approved absolute path whose metadata and
 SHA-256 pass verification. `VOICEINK_IMPORT_ROOTS` is a semicolon-separated
-list on Windows. Global hotkeys, system tray, and history persistence are not
-part of this Transcribe-only slice.
+list on Windows. Global hotkeys, system tray, active-application text injection,
+and native audio behavior are not part of this imported-media slice.
 
 ## Windows Diagnostic Build
 

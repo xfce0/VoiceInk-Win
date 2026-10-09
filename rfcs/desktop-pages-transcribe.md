@@ -2,11 +2,12 @@
 
 ## Status
 
-Status: Proposed. Documentation only; this RFC authorizes no production code.
-Implementation remains blocked until the feature specification, imported-media
-dependency, persistence decisions, and the relevant runtime/file-system
-adapters are approved. Microphone capture and native audio are explicitly a
-later dependency and are not part of this RFC.
+Status: Proposed. The current branch contains local slices for imported media,
+persistence, and enabled desktop pages, but this RFC's full route-complete
+contract remains unapproved and does not authorize additional production
+implementation. AI Models, native Audio behavior, production runtime wiring,
+and microphone capture remain deferred. Native Windows smoke evidence is still
+required and is not claimed by macOS tests.
 
 ## Summary
 
