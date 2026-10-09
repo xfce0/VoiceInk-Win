@@ -264,7 +264,7 @@ class NativeWindowsMediaSecurityAdapter:
         ):
             self._close(handle)
             raise InvalidSourceError("source is not a regular file")
-        return int(handle.value)
+        return int(getattr(handle, "value", handle))
 
     def _assert_directory(self, path: Path) -> None:
         handle = self._open(path, is_directory=True)

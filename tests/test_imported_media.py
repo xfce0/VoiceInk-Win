@@ -2009,6 +2009,28 @@ def test_windows_snapshot_admission_rejects_device_and_pipe_handles(file_type: i
         adapter._open(Path("C:/input"), is_directory=False)
 
 
+def test_native_windows_adapter_accepts_integer_win32_handles() -> None:
+    class FakeDll:
+        def CreateFileW(self, *args):
+            del args
+            return 17
+
+        def GetFileInformationByHandle(self, handle, pointer):
+            del handle
+            pointer = ctypes.cast(pointer, ctypes.POINTER(windows_snapshot._WindowsFileInformation))
+            pointer.contents.attributes = 0
+            return True
+
+        def GetFileType(self, handle):
+            del handle
+            return 1
+
+    adapter = object.__new__(NativeWindowsMediaSecurityAdapter)
+    adapter._kernel32 = FakeDll()
+
+    assert adapter._open(Path("C:/input"), is_directory=False) == 17
+
+
 def test_windows_job_object_binding_and_lifecycle_are_injectable() -> None:
     class Function:
         def __init__(self, value=True) -> None:
