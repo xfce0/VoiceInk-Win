@@ -73,6 +73,9 @@ documents:
       - history_schema_and_retention
       - windows_file_picker_policy
       - parakeet_runtime_approval
+  - path: spec/features/007-persistence-foundation.md
+    kind: feature
+    status: implemented
   - path: rfcs/desktop-pages-transcribe.md
     kind: rfc
     status: proposed

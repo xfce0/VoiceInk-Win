@@ -60,7 +60,14 @@ from .runtime_manifest import (
     load_runtime_manifest,
 )
 from .sidecar import NeMoSidecarRuntime, ProcessSupervisor, SidecarConfig, SidecarTransport
+from .sqlite_persistence import SQLitePersistence
 from .startup_diagnostics import PrimaryFailure, StartupDiagnostics
+from .storage_paths import (
+    AudioArtifactStore,
+    VoiceInkPaths,
+    default_app_data_root,
+    normalise_relative_audio_path,
+)
 from .transport import TransportResponse, UrllibLoopbackTransport
 from .windows_snapshot import (
     WindowsKernel32,
@@ -104,6 +111,11 @@ __all__ = [
     "SidecarTransport",
     "PrimaryFailure",
     "StartupDiagnostics",
+    "SQLitePersistence",
+    "AudioArtifactStore",
+    "VoiceInkPaths",
+    "default_app_data_root",
+    "normalise_relative_audio_path",
     "TransportResponse",
     "UrllibLoopbackTransport",
     "FakeMediaNormalizer",
