@@ -488,8 +488,16 @@ class SubprocessSupervisor:
             kwargs = {
                 "shell": False,
                 "stdin": subprocess.DEVNULL,
-                "stdout": subprocess.DEVNULL,
-                "stderr": subprocess.DEVNULL,
+                "stdout": (
+                    None
+                    if os.environ.get("VOICEINK_SIDECAR_STDERR") == "inherit"
+                    else subprocess.DEVNULL
+                ),
+                "stderr": (
+                    None
+                    if os.environ.get("VOICEINK_SIDECAR_STDERR") == "inherit"
+                    else subprocess.DEVNULL
+                ),
                 "env": sidecar_environment,
             }
             if os.name != "nt":
