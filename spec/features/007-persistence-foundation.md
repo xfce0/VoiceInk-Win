@@ -4,8 +4,10 @@
 
 Status: implemented.
 
-This slice provides the durable local storage boundary without wiring
-recording, WASAPI, global hotkeys, or presentation pages.
+This slice provides the durable local storage boundary used by the desktop
+composition without wiring recording, WASAPI, or global hotkeys. The desktop
+composition configures SQLite and the audio-artifact root even when the
+imported-media runtime is unavailable.
 
 ## User Scenarios
 
@@ -19,11 +21,14 @@ history row retains only its relative reference.
 1. SQLite access is serialized on a dedicated background worker and public
    operations return futures.
 2. Versioned SQL migrations create history, dictionary, settings, and migration
-   metadata tables at startup.
-3. History supports atomic upsert, newest-first pagination, and deletion.
+   metadata tables at startup; packaged migrations are required and checksummed
+   for drift detection.
+3. History supports atomic upsert, stable cursor/newest-first pagination,
+   search, selected variants, and durable tombstone deletion.
 4. Dictionary rules support atomic upsert, deterministic ordering, and deletion.
 5. Settings round-trip language, mode, hotkeys, auto-copy, and model/audio
-   preferences.
+   preferences, with field-level atomic updates so pages cannot overwrite one
+   another's changes.
 6. Audio references are relative and traversal-safe; audio bytes are not stored
    in SQLite.
 
@@ -50,13 +55,16 @@ individual SQLite operations; callers can ignore their future.
 - Given history records, when a page is requested, then records are ordered by
   newest timestamp and deterministic ID tie-breaker.
 - Given an unsafe audio path, when it is resolved or persisted, then the
-  operation raises a typed path error and leaves the root untouched.
+  operation completes its Future with a typed path error and leaves the root
+  untouched.
 
 ## Test Plan
 
-Behavior tests use temporary SQLite files and cover migrations, settings,
-dictionary CRUD/order, history pagination/deletion, concurrent submissions,
-rollback on reconciliation failure, and path traversal rejection.
+Behavior tests use temporary SQLite files and cover the frozen/package migration
+contract, checksum drift, migration rollback, settings field updates,
+dictionary CRUD/order and Unicode canonical uniqueness, cursor history
+pagination/search, tombstone deletion, concurrent submissions, and path
+traversal rejection.
 
 ## Open Questions and Deferred Work
 

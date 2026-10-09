@@ -12,6 +12,9 @@ from voiceink_win.domain import (
     HistoryRecord,
     HistoryStatus,
     InvalidAudioArtifactPathError,
+    InvalidInputError,
+    PersistenceClosedError,
+    PersistenceError,
     Settings,
     TranscriptionSource,
     TranscriptVariant,
@@ -53,7 +56,11 @@ def test_startup_applies_migrations_and_enables_wal(tmp_path: Path) -> None:
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         assert {"schema_migrations", "history", "dictionary_entries", "settings"} <= tables
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+        assert all(
+            len(row[0]) == 64
+            for row in connection.execute("SELECT checksum FROM schema_migrations")
+        )
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
@@ -110,7 +117,7 @@ def test_history_pagination_is_newest_first_and_delete_is_atomic(
         store.upsert_history(record).result(timeout=2)
 
     first_page = store.list_history(limit=2).result(timeout=2)
-    second_page = store.list_history(offset=2, limit=2).result(timeout=2)
+    second_page = store.list_history(cursor=first_page.next_cursor, limit=2).result(timeout=2)
     assert [record.id for record in first_page.records] == ["newest", "middle"]
     assert first_page.has_more is True
     assert [record.id for record in second_page.records] == ["older"]
@@ -169,9 +176,106 @@ def test_audio_paths_reject_traversal_and_writes_are_atomic(
         normalise_relative_audio_path("C:/outside.wav")
     with pytest.raises(InvalidAudioArtifactPathError):
         artifacts.resolve("nested\\outside.wav")
+    invalid = store.upsert_history(HistoryRecord(audio_artifact_path="../outside.wav"))
     with pytest.raises(InvalidAudioArtifactPathError):
-        store.upsert_history(HistoryRecord(audio_artifact_path="../outside.wav"))
+        invalid.result(timeout=2)
 
     target = artifacts.write("history/sample.wav", b"new audio")
     assert target.read_bytes() == b"new audio"
     assert target.parent == paths.audio / "history"
+
+
+def test_migration_checksums_detect_drift_and_missing_package_files(tmp_path: Path) -> None:
+    migration_dir = tmp_path / "migrations"
+    migration_dir.mkdir()
+    source_dir = (
+        Path(__file__).parents[1] / "src" / "voiceink_win" / "infrastructure" / "migrations"
+    )
+    for path in source_dir.glob("*.sql"):
+        (migration_dir / path.name).write_bytes(path.read_bytes())
+
+    database = tmp_path / "drift.sqlite3"
+    first = SQLitePersistence(database, migration_dir=migration_dir)
+    first.ready().result(timeout=2)
+    first.close().result(timeout=2)
+    (migration_dir / "001_initial.sql").write_text(
+        (migration_dir / "001_initial.sql").read_text(encoding="utf-8") + "\n-- drift\n",
+        encoding="utf-8",
+    )
+    drifted = SQLitePersistence(database, migration_dir=migration_dir)
+    with pytest.raises(PersistenceError, match="drift"):
+        drifted.ready().result(timeout=2)
+    drifted.close().result(timeout=2)
+
+    missing = SQLitePersistence(tmp_path / "missing.sqlite3", migration_dir=tmp_path / "absent")
+    with pytest.raises(PersistenceError, match="migrations are missing"):
+        missing.ready().result(timeout=2)
+    missing.close().result(timeout=2)
+
+
+def test_migration_failure_rolls_back_the_failed_migration(tmp_path: Path) -> None:
+    migration_dir = tmp_path / "migrations"
+    migration_dir.mkdir()
+    (migration_dir / "001_base.sql").write_text(
+        "CREATE TABLE base (id INTEGER PRIMARY KEY);", encoding="utf-8"
+    )
+    (migration_dir / "002_broken.sql").write_text(
+        "CREATE TABLE transient (id INTEGER PRIMARY KEY);\nINVALID SQL;",
+        encoding="utf-8",
+    )
+    persistence = SQLitePersistence(tmp_path / "rollback.sqlite3", migration_dir=migration_dir)
+    with pytest.raises(PersistenceError, match="002_broken.sql"):
+        persistence.ready().result(timeout=2)
+    persistence.close().result(timeout=2)
+
+    with sqlite3.connect(tmp_path / "rollback.sqlite3") as connection:
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transient'"
+            ).fetchone()
+            is None
+        )
+        assert connection.execute("SELECT version FROM schema_migrations").fetchall() == [(1,)]
+
+
+def test_dictionary_uniqueness_uses_unicode_canonical_key_but_keeps_display_phrase(
+    store: SQLitePersistence,
+) -> None:
+    first = DictionaryEntry(id="first", phrase="Café", replacement="one")
+    store.upsert_dictionary(first).result(timeout=2)
+    duplicate = store.upsert_dictionary(
+        DictionaryEntry(id="second", phrase="CAFE\u0301", replacement="two")
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        duplicate.result(timeout=2)
+    assert store.list_dictionary().result(timeout=2)[0].phrase == "Café"
+
+
+def test_persistence_validation_completes_future_with_error(store: SQLitePersistence) -> None:
+    invalid_page = store.list_history(limit=0)
+    with pytest.raises(InvalidInputError):
+        invalid_page.result(timeout=2)
+
+
+def test_history_tombstone_survives_database_failure_until_finalized(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "tombstone.sqlite3"
+    persistence = SQLitePersistence(database)
+    persistence.ready().result(timeout=2)
+    persistence.upsert_history(_record("tombstone", datetime.now(UTC), "keep")).result(timeout=2)
+    persistence.mark_history_deleting("tombstone").result(timeout=2)
+    persistence.close().result(timeout=2)
+
+    failed_finalize = persistence.finalize_history_deletion("tombstone")
+    with pytest.raises(PersistenceClosedError):
+        failed_finalize.result(timeout=2)
+
+    reopened = SQLitePersistence(database)
+    reopened.ready().result(timeout=2)
+    assert [record.id for record in reopened.list_history().result(timeout=2).records] == [
+        "tombstone"
+    ]
+    reopened.finalize_history_deletion("tombstone").result(timeout=2)
+    assert reopened.list_history().result(timeout=2).records == ()
+    reopened.close().result(timeout=2)

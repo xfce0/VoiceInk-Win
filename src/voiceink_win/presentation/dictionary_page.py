@@ -47,6 +47,8 @@ class DictionaryPage(QWidget):
         self._bridge = FutureBridge(self)
         self._entries: tuple[DictionaryEntry, ...] = ()
         self._editing_id: str | None = None
+        self._generation = 0
+        self._disposed = False
         self._build_ui()
         self.refresh()
 
@@ -71,12 +73,15 @@ class DictionaryPage(QWidget):
         self._phrase_label = QLabel(self)
         self._phrase_label.setObjectName("metadata")
         self._phrase = QLineEdit(self)
+        self._phrase.setAccessibleName("Dictionary phrase")
         form.addRow(self._phrase_label, self._phrase)
         self._replacement_label = QLabel(self)
         self._replacement_label.setObjectName("metadata")
         self._replacement = QLineEdit(self)
+        self._replacement.setAccessibleName("Dictionary replacement")
         form.addRow(self._replacement_label, self._replacement)
         self._enabled = QCheckBox(self)
+        self._enabled.setAccessibleName("Enable dictionary entry")
         form.addRow(self._enabled)
         editor.addLayout(form)
         buttons = QHBoxLayout()
@@ -106,15 +111,27 @@ class DictionaryPage(QWidget):
         self.apply_locale()
 
     def refresh(self) -> None:
+        if self._disposed:
+            return
+        self._generation += 1
+        generation = self._generation
         if self._persistence is None:
             self._render_entries((), unavailable=True)
             return
         self._set_loading(True)
-        self._bridge.watch(self._persistence.list_dictionary(), self._loaded)
+        self._bridge.watch(
+            self._persistence.list_dictionary(),
+            lambda entries, error: self._loaded(generation, entries, error),
+        )
 
     def _loaded(
-        self, entries: tuple[DictionaryEntry, ...] | None, error: BaseException | None
+        self,
+        generation: int,
+        entries: tuple[DictionaryEntry, ...] | None,
+        error: BaseException | None,
     ) -> None:
+        if self._disposed or generation != self._generation:
+            return
         if error or entries is None:
             self._set_loading(False)
             self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
@@ -199,9 +216,15 @@ class DictionaryPage(QWidget):
         )
         self._set_editor_enabled(False)
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
-        self._bridge.watch(self._persistence.upsert_dictionary(entry), self._saved)
+        generation = self._generation
+        self._bridge.watch(
+            self._persistence.upsert_dictionary(entry),
+            lambda result, error: self._saved(generation, result, error),
+        )
 
-    def _saved(self, _result: None, error: BaseException | None) -> None:
+    def _saved(self, generation: int, _result: None, error: BaseException | None) -> None:
+        if self._disposed or generation != self._generation:
+            return
         self._set_editor_enabled(True)
         if error:
             self._status.setText(self._t(TranslationKey.COMMON_ERROR))
@@ -224,9 +247,15 @@ class DictionaryPage(QWidget):
             return
         self._set_editor_enabled(False)
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
-        self._bridge.watch(self._persistence.delete_dictionary(self._editing_id), self._deleted)
+        generation = self._generation
+        self._bridge.watch(
+            self._persistence.delete_dictionary(self._editing_id),
+            lambda result, error: self._deleted(generation, result, error),
+        )
 
-    def _deleted(self, _result: None, error: BaseException | None) -> None:
+    def _deleted(self, generation: int, _result: None, error: BaseException | None) -> None:
+        if self._disposed or generation != self._generation:
+            return
         self._set_editor_enabled(True)
         if error:
             self._status.setText(self._t(TranslationKey.COMMON_ERROR))
@@ -261,6 +290,8 @@ class DictionaryPage(QWidget):
         return translate(key, self._locale_config.locale, **values)
 
     def dispose(self) -> None:
+        self._disposed = True
+        self._generation += 1
         try:
             self._locale_config.locale_changed.disconnect(self._locale_callback)
         except (RuntimeError, TypeError):

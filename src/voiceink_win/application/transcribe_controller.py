@@ -17,6 +17,7 @@ from voiceink_win.domain import (
     EndOfStream,
     ErrorCode,
     Failed,
+    HistoryPort,
     ImportFailure,
     ImportObservation,
     ImportOptions,
@@ -74,6 +75,7 @@ class _Item:
     result: TranscriptDocument | None = None
     failure: ImportFailure | None = None
     subscription: ObservationSubscription | None = None
+    terminal_applied: bool = False
 
 
 class TranscribePageController:
@@ -85,12 +87,14 @@ class TranscribePageController:
         *,
         clipboard: ClipboardPort | None = None,
         text_files: TextFilePort | None = None,
+        history_port: HistoryPort | None = None,
         unavailable_message: str = "Imported media transcription is unavailable in this build.",
         availability: TranscribeAvailability | None = None,
     ) -> None:
         self._imported_media = imported_media
         self._clipboard = clipboard
         self._text_files = text_files
+        self._history_port = history_port
         self._availability = availability or (
             TranscribeAvailability.AVAILABLE
             if imported_media is not None
@@ -268,6 +272,7 @@ class TranscribePageController:
             item.progress = ProgressSnapshot(Stage.ACCEPTED)
             item.result = None
             item.failure = None
+            item.terminal_applied = False
             self._publish_locked()
         with self._lock:
             current_admission = self._admission_thread
@@ -302,6 +307,11 @@ class TranscribePageController:
                 and not item.result.has_enhanced
             ):
                 item.result = replace(item.result, selected_variant=TranscriptVariant.ORIGINAL)
+            if self._history_port is not None and item.job_id is not None:
+                future = self._history_port.update_history_variant(
+                    item.job_id.value, item.result.selected_variant
+                )
+                future.add_done_callback(self._history_update_finished)
             self._publish_locked()
             return True
 
@@ -544,6 +554,9 @@ class TranscribePageController:
             self._publish_locked()
 
     def _apply_terminal(self, item: _Item, terminal) -> None:
+        if item.terminal_applied:
+            return
+        item.terminal_applied = True
         if isinstance(terminal, Success):
             transcript = terminal.transcription.transcription
             if transcript.text.strip():
@@ -564,7 +577,6 @@ class TranscribePageController:
                 False,
             )
             item.state = QueueState.FAILED
-            return
         if isinstance(terminal, Cancelled):
             item.failure = ImportFailure(
                 ErrorCode.CANCELLED, "Processing was cancelled.", "cleanup", False
@@ -579,6 +591,13 @@ class TranscribePageController:
                 terminal.retryable,
             )
             item.state = QueueState.FAILED
+
+    @staticmethod
+    def _history_update_finished(future) -> None:
+        try:
+            future.result()
+        except BaseException:
+            logger.exception("history selected-variant update failed")
 
     def _cancel_job(self, item_id: str, job_id: JobId, media: ImportedMediaPort) -> None:
         try:

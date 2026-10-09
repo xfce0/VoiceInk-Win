@@ -19,6 +19,8 @@ ICON_OUTPUT = ICON_BUILD_DIR / "voiceink-shell.ico"
 PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
 VALIDATOR = ROOT / "scripts" / "frontend_package_smoke.py"
 ENTRYPOINT = ROOT / "scripts" / "frontend_entrypoint.py"
+MIGRATION_SOURCE = ROOT / "src" / "voiceink_win" / "infrastructure" / "migrations"
+MIGRATION_DESTINATION = "voiceink_win/infrastructure/migrations"
 EXPECTED_OUTPUTS = {
     "README.txt",
     "voiceink-shell.exe",
@@ -90,6 +92,11 @@ def _prepare_outputs() -> None:
 
 
 def _build_executable(name: str, mode: str, python: str) -> None:
+    if not MIGRATION_SOURCE.is_dir() or not all(
+        (MIGRATION_SOURCE / name).is_file()
+        for name in ("001_initial.sql", "002_persistence_hardening.sql")
+    ):
+        raise FrontendBuildError(f"SQLite migration package is incomplete: {MIGRATION_SOURCE}")
     workpath = WORK / name
     specpath = WORK / "specs"
     command = [
@@ -105,6 +112,8 @@ def _build_executable(name: str, mode: str, python: str) -> None:
         "PySide6",
         "--collect-all",
         "shiboken6",
+        "--add-data",
+        f"{MIGRATION_SOURCE};{MIGRATION_DESTINATION}",
         "--distpath",
         str(DIST),
         "--workpath",

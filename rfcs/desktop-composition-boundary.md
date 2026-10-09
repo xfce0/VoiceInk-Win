@@ -6,10 +6,11 @@ Draft. This document is architecture-only and authorizes no production code.
 The implementation, if approved, must be a separate change from this
 documentation and catalog update.
 
-This RFC is deliberately limited to a no-resource desktop shell. It defines
-the production composition boundary and the unavailable capability state; it
-does not define microphone capture, ASR runtime startup, packaging inspection,
-or multi-resource shutdown policy.
+This RFC defines the production composition boundary, configured local
+persistence, the imported-media bootstrap path, and the unavailable fallback
+when runtime resources are not configured. It does not define microphone
+capture, WASAPI, hotkeys, packaging inspection, or multi-resource shutdown
+policy.
 
 ## Summary
 
@@ -21,15 +22,16 @@ flow.
 The smallest safe correction is:
 
 1. add an explicit `UNAVAILABLE` controller state;
-2. make the default desktop composition own an unavailable controller and no
-   external resources;
+2. make the default desktop composition own persistence and an unavailable
+   imported-media controller until its configured backend is ready;
 3. make the entrypoint own that composition for the event-loop lifetime; and
 4. keep `FakeShellBackend` out of production composition while retaining it for
    focused tests; an optional developer demo remains outside this RFC.
 
-The boundary must be useful without pretending that recording exists. It must
-not create a microphone, timer, process, sidecar, model, network endpoint, or
-runtime configuration object.
+The boundary must be useful without pretending that recording exists. It
+creates the configured SQLite database and audio-artifact root, and starts the
+imported-media bootstrap only when its environment is complete. It never
+creates a microphone, WASAPI path, or global hotkey.
 
 ## Problem and Evidence
 
@@ -105,6 +107,9 @@ class DesktopComposition(Protocol):
     @property
     def controller(self) -> ShellController: ...
 
+    @property
+    def persistence(self) -> PersistenceService: ...
+
     def close(self) -> None: ...
 
 
@@ -116,8 +121,10 @@ The API is intentionally exact and minimal:
 - `build_desktop_composition()` takes no arguments and has no environment,
   command-line, factory, backend, or runtime override.
 - `controller` returns the composition-owned unavailable controller.
-- `close()` is synchronous, idempotent, returns `None`, owns no resources in
-  this RFC, and must not raise for this no-resource implementation.
+- `persistence` is the composition-owned SQLite boundary backed by the
+  configured VoiceInk application-data path.
+- `close()` is synchronous and idempotent; it closes imported-media workers,
+  artifact work, and SQLite after queued operations have drained.
 - There is no `CleanupResult`, async close, context-manager API, resource list,
   rollback callback, or public test factory in this slice.
 - The composition remains the owner of the controller even though the
@@ -193,6 +200,20 @@ The unavailable state must not render `Ready`, `Listening`, `Transcribing`,
 `Start recording`, `Start again`, `Try again`, `Working...`, a success
 timestamp, or synthetic transcript text.
 
+### Configured persistence and imported-media lifecycle
+
+`build_desktop_composition()` resolves `VoiceInkPaths.default()`, opens
+`voiceink.sqlite3` through `SQLitePersistence`, and uses the sibling `audio/`
+directory for optional relative artifact references. Imported-media terminal
+results use the same `HistoryPort` and are recorded once after the cleanup
+fence, including source metadata and failure status.
+
+If the runtime manifest, artifact lock, FFmpeg metadata, import roots, or
+verified binaries are unavailable, persistence remains configured while the
+Transcribe page is explicitly unavailable. This is an unavailable
+no-resource fallback for imported media, not a fake transcript or fake
+production backend.
+
 ### Exact lifecycle and exit semantics
 
 The entrypoint owns the composition from successful construction until the Qt
@@ -219,22 +240,26 @@ Therefore:
   exit code, aggregate exceptions, or log raw exception text; and
 - there is no exception handler that substitutes a fake backend.
 
-This guarantee covers the composition only. The window's existing presentation
-cleanup remains a presentation concern; this RFC does not promise transactional
-window disposal or define what happens if a future window cleanup operation
-fails. A future shutdown-reliability RFC may define how window and composition
-cleanup failures are combined once the composition owns real resources. That
-policy is intentionally not part of this API.
+This guarantee covers composition-owned resources. The window's presentation
+cleanup remains a presentation concern; shutdown failures are logged at the
+composition boundary and never substitute a fake backend. A future
+shutdown-reliability RFC may define aggregate exit-code policy.
 
 ### Resource prohibition
 
 The default builder and unavailable controller must not:
 
-- read environment variables, runtime manifests, model files, or credentials;
-- inspect audio devices or initialize microphone/recording timers;
-- import the ASR composition root or native runtime modules;
-- start a process, sidecar, HTTP server/client, or network endpoint; or
-- create a worker, native handle, or runtime-owned object.
+- read runtime manifests, model files, or credentials unless the imported-media
+  bootstrap is explicitly configured;
+- inspect audio devices or initialize microphone/WASAPI/recording timers;
+- import the ASR composition root or native runtime modules when the runtime is
+  unavailable;
+- start a process, sidecar, HTTP server/client, or network endpoint when the
+  imported-media configuration is incomplete; or
+- create global hotkeys or recording workers.
+
+SQLite persistence and the audio artifact root are intentionally initialized
+independently of imported-media availability.
 
 Qt objects used only to render the unavailable view are allowed. No recording,
 processing, or waveform animation timer is allowed.
@@ -309,8 +334,9 @@ The following work is intentionally moved out of this boundary:
 | Microphone-capture RFC | WASAPI, permissions, devices, capture workers, and audio lifecycle |
 | `rfcs/parakeet-runtime-integration.md` | ASR runtime, model, sidecar, transport, and runtime failure policy |
 
-Imported-media transcription remains governed by its existing RFC and is not
-part of the production desktop composition defined here.
+Imported-media transcription remains governed by its existing RFC, but its
+configured application service and shared `HistoryPort` are part of the
+production desktop composition. Microphone capture remains excluded.
 
 ## Migration and Rollback
 

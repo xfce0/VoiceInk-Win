@@ -53,7 +53,6 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
         "_run",
         fake_run,
     )
-
     frontend_build._generate_icon("python")
     frontend_build._build_executable("voiceink-shell", "--windowed", "python")
     frontend_build._build_executable("voiceink-shell-smoke", "--console", "python")
@@ -73,6 +72,18 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
     assert 'd="M3 12h2l1.5-5L9 19l2-14 2.5 11 1.5-4H21"' in frontend_build.ICON_SOURCE.read_text(
         encoding="utf-8"
     )
+
+
+def test_frontend_build_packages_the_complete_sqlite_migration_contract() -> None:
+    source = frontend_build.MIGRATION_SOURCE
+    assert {path.name for path in source.glob("*.sql")} >= {
+        "001_initial.sql",
+        "002_persistence_hardening.sql",
+    }
+    assert frontend_build.MIGRATION_DESTINATION == "voiceink_win/infrastructure/migrations"
+    build_source = (ROOT / "scripts" / "frontend_build.py").read_text(encoding="utf-8")
+    assert '"--add-data"' in build_source
+    assert "MIGRATION_DESTINATION" in build_source
 
 
 def test_frontend_build_refuses_unrelated_dist_entries(tmp_path: Path, monkeypatch) -> None:
