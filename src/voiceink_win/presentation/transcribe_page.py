@@ -32,6 +32,15 @@ from voiceink_win.domain import (
     TranscriptVariant,
 )
 
+from .localization import (
+    Locale,
+    LocaleConfig,
+    TranslationKey,
+    error_code_text,
+    translate,
+    translate_message,
+)
+
 
 class _SnapshotBridge(QObject):
     changed = Signal(object)
@@ -63,10 +72,20 @@ class _DropZone(QFrame):
 class TranscribePage(QWidget):
     """A non-blocking queue view backed by ``TranscribePageController``."""
 
-    def __init__(self, controller: TranscribePageController, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        controller: TranscribePageController,
+        parent: QWidget | None = None,
+        locale_config: LocaleConfig | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("transcribePage")
         self._controller = controller
+        self._locale_config = locale_config or LocaleConfig(parent=self)
+        self._locale_signal = self._locale_config.locale_changed
+        self._locale_callback = self.apply_locale
+        self._locale_signal.connect(self._locale_callback, Qt.ConnectionType.AutoConnection)
+        self._locale_connected = True
         self._bridge = _SnapshotBridge(self)
         self._bridge.changed.connect(self._render)
         self._queue_layout: QVBoxLayout
@@ -79,16 +98,13 @@ class TranscribePage(QWidget):
         root.setContentsMargins(30, 28, 30, 24)
         root.setSpacing(16)
 
-        title = QLabel("Transcribe", self)
-        title.setObjectName("pageGreeting")
-        root.addWidget(title)
-        subtitle = QLabel(
-            "Import local audio or video and send it through the existing transcription service.",
-            self,
-        )
-        subtitle.setObjectName("heroSubtext")
-        subtitle.setWordWrap(True)
-        root.addWidget(subtitle)
+        self._title = QLabel(self._t(TranslationKey.TRANSCRIBE_TITLE), self)
+        self._title.setObjectName("pageGreeting")
+        root.addWidget(self._title)
+        self._subtitle = QLabel(self._t(TranslationKey.TRANSCRIBE_SUBTITLE), self)
+        self._subtitle.setObjectName("heroSubtext")
+        self._subtitle.setWordWrap(True)
+        root.addWidget(self._subtitle)
 
         self._drop_zone = _DropZone(self)
         self._drop_zone.paths_dropped.connect(self._controller.add_paths)
@@ -96,50 +112,58 @@ class TranscribePage(QWidget):
         drop_layout.setContentsMargins(24, 24, 24, 24)
         drop_layout.setSpacing(8)
         drop_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        prompt = QLabel("Drop audio or video files here", self._drop_zone)
-        prompt.setObjectName("sectionTitle")
-        prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        drop_layout.addWidget(prompt)
-        or_label = QLabel("or", self._drop_zone)
-        or_label.setObjectName("muted")
-        or_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        drop_layout.addWidget(or_label)
-        self._choose_button = QPushButton("Choose Files", self._drop_zone)
+        self._drop_prompt = QLabel(self._t(TranslationKey.TRANSCRIBE_DROP_PROMPT), self._drop_zone)
+        self._drop_prompt.setObjectName("sectionTitle")
+        self._drop_prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        drop_layout.addWidget(self._drop_prompt)
+        self._or_label = QLabel(self._t(TranslationKey.TRANSCRIBE_OR), self._drop_zone)
+        self._or_label.setObjectName("muted")
+        self._or_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        drop_layout.addWidget(self._or_label)
+        self._choose_button = QPushButton(
+            self._t(TranslationKey.TRANSCRIBE_CHOOSE_FILES), self._drop_zone
+        )
         self._choose_button.setObjectName("primaryButton")
-        self._choose_button.setAccessibleName("Choose files for transcription")
+        self._choose_button.setAccessibleName(
+            self._t(TranslationKey.TRANSCRIBE_CHOOSE_FILES_ACCESSIBLE)
+        )
         self._choose_button.clicked.connect(self._choose_files)
         drop_layout.addWidget(self._choose_button, 0, Qt.AlignmentFlag.AlignCenter)
         self._drop_zone.setMinimumHeight(150)
         root.addWidget(self._drop_zone)
 
-        formats = QLabel(
-            "Supports " + ", ".join(format.value for format in SUPPORTED_MEDIA_FORMATS), self
+        self._formats_label = QLabel(self._formats_text(), self)
+        self._formats_label.setObjectName("muted")
+        self._formats_label.setWordWrap(True)
+        self._formats_label.setAccessibleName(
+            self._t(TranslationKey.TRANSCRIBE_SUPPORTED_FORMATS_ACCESSIBLE)
         )
-        formats.setObjectName("muted")
-        formats.setWordWrap(True)
-        formats.setAccessibleName("Supported media formats")
-        root.addWidget(formats)
+        root.addWidget(self._formats_label)
 
         controls = QHBoxLayout()
         controls.setSpacing(8)
-        self._add_button = QPushButton("Add Files", self)
+        self._add_button = QPushButton(self._t(TranslationKey.TRANSCRIBE_ADD_FILES), self)
         self._add_button.setObjectName("secondaryButton")
-        self._add_button.setAccessibleName("Add files to transcription queue")
+        self._add_button.setAccessibleName(self._t(TranslationKey.TRANSCRIBE_ADD_FILES_ACCESSIBLE))
         self._add_button.clicked.connect(self._choose_files)
         controls.addWidget(self._add_button)
-        self._start_button = QPushButton("Start", self)
+        self._start_button = QPushButton(self._t(TranslationKey.TRANSCRIBE_START), self)
         self._start_button.setObjectName("primaryButton")
-        self._start_button.setAccessibleName("Start transcription queue")
+        self._start_button.setAccessibleName(self._t(TranslationKey.TRANSCRIBE_START_ACCESSIBLE))
         self._start_button.clicked.connect(self._controller.start_queue)
         controls.addWidget(self._start_button)
-        self._cancel_button = QPushButton("Cancel All", self)
+        self._cancel_button = QPushButton(self._t(TranslationKey.TRANSCRIBE_CANCEL_ALL), self)
         self._cancel_button.setObjectName("secondaryButton")
-        self._cancel_button.setAccessibleName("Cancel all transcription jobs")
+        self._cancel_button.setAccessibleName(
+            self._t(TranslationKey.TRANSCRIBE_CANCEL_ALL_ACCESSIBLE)
+        )
         self._cancel_button.clicked.connect(self._controller.cancel_all)
         controls.addWidget(self._cancel_button)
-        self._clear_button = QPushButton("Clear Finished", self)
+        self._clear_button = QPushButton(self._t(TranslationKey.TRANSCRIBE_CLEAR_FINISHED), self)
         self._clear_button.setObjectName("secondaryButton")
-        self._clear_button.setAccessibleName("Clear finished transcription items")
+        self._clear_button.setAccessibleName(
+            self._t(TranslationKey.TRANSCRIBE_CLEAR_FINISHED_ACCESSIBLE)
+        )
         self._clear_button.clicked.connect(self._controller.clear_terminal_items)
         controls.addWidget(self._clear_button)
         controls.addStretch(1)
@@ -175,9 +199,10 @@ class TranscribePage(QWidget):
         extensions = " ".join(f"*.{extension}" for extension in sorted(SUPPORTED_MEDIA_EXTENSIONS))
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Choose files for transcription",
+            self._t(TranslationKey.TRANSCRIBE_FILE_DIALOG_TITLE),
             "",
-            f"Supported media ({extensions});;All files (*)",
+            f"{self._t(TranslationKey.TRANSCRIBE_SUPPORTED_MEDIA_FILTER, extensions=extensions)};;"
+            f"{self._t(TranslationKey.TRANSCRIBE_ALL_FILES_FILTER)}",
         )
         if paths:
             self._controller.add_paths(paths)
@@ -198,10 +223,16 @@ class TranscribePage(QWidget):
                 + snapshot.aggregate.rejected
             )
         )
-        self._count_label.setText(f"{snapshot.aggregate.total} files")
-        self._error_label.setText(snapshot.page_error or "")
+        self._count_label.setText(
+            self._t(TranslationKey.TRANSCRIBE_FILE_COUNT, count=snapshot.aggregate.total)
+        )
+        self._error_label.setText(
+            translate_message(snapshot.page_error, self._locale_config.locale)
+        )
         self._error_label.setVisible(bool(snapshot.page_error))
-        self._output_label.setText(snapshot.output_status.message)
+        self._output_label.setText(
+            translate_message(snapshot.output_status.message, self._locale_config.locale)
+        )
         self._output_label.setVisible(snapshot.output_status.state is not OutputState.IDLE)
         self._output_label.setProperty("failed", snapshot.output_status.state is OutputState.FAILED)
         self._output_label.style().unpolish(self._output_label)
@@ -229,11 +260,15 @@ class TranscribePage(QWidget):
         name.setToolTip(item.source_name)
         name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header.addWidget(name)
-        hint = item.source_format_hint.value if item.source_format_hint else "Unknown format"
+        hint = (
+            item.source_format_hint.value
+            if item.source_format_hint
+            else self._t(TranslationKey.TRANSCRIBE_UNKNOWN_FORMAT)
+        )
         format_label = QLabel(hint, frame)
         format_label.setObjectName("muted")
         header.addWidget(format_label)
-        status = QLabel(_status_text(item.state), frame)
+        status = QLabel(_status_text(item.state, self._locale_config.locale), frame)
         status.setObjectName("statePill")
         header.addWidget(status)
         layout.addLayout(header)
@@ -256,7 +291,11 @@ class TranscribePage(QWidget):
             layout.addWidget(progress)
 
         if item.failure is not None:
-            failure = QLabel(f"{item.failure.code.value}: {item.failure.message}", frame)
+            failure = QLabel(
+                f"{error_code_text(item.failure.code.value, self._locale_config.locale)}: "
+                f"{translate_message(item.failure.message, self._locale_config.locale)}",
+                frame,
+            )
             failure.setObjectName("pageError")
             failure.setWordWrap(True)
             layout.addWidget(failure)
@@ -264,7 +303,7 @@ class TranscribePage(QWidget):
         actions = QHBoxLayout()
         actions.addStretch(1)
         if item.can_remove:
-            remove = QPushButton("Remove", frame)
+            remove = QPushButton(self._t(TranslationKey.TRANSCRIBE_REMOVE), frame)
             remove.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.remove_pending(
                     item_id
@@ -272,29 +311,29 @@ class TranscribePage(QWidget):
             )
             actions.addWidget(remove)
         if item.can_cancel:
-            cancel = QPushButton("Cancel", frame)
+            cancel = QPushButton(self._t(TranslationKey.TRANSCRIBE_CANCEL), frame)
             cancel.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.cancel_item(item_id)
             )
             actions.addWidget(cancel)
         if item.can_retry:
-            retry = QPushButton("Retry", frame)
+            retry = QPushButton(self._t(TranslationKey.TRANSCRIBE_RETRY), frame)
             retry.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.retry_item(item_id)
             )
             actions.addWidget(retry)
         if item.result is not None:
-            copy = QPushButton("Copy", frame)
+            copy = QPushButton(self._t(TranslationKey.TRANSCRIBE_COPY), frame)
             copy.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.copy(item_id)
             )
             actions.addWidget(copy)
-            save_txt = QPushButton("TXT", frame)
+            save_txt = QPushButton(self._t(TranslationKey.TRANSCRIBE_TXT), frame)
             save_txt.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._save(item_id, "txt")
             )
             actions.addWidget(save_txt)
-            save_md = QPushButton("Markdown", frame)
+            save_md = QPushButton(self._t(TranslationKey.TRANSCRIBE_MARKDOWN), frame)
             save_md.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._save(item_id, "md")
             )
@@ -304,16 +343,18 @@ class TranscribePage(QWidget):
 
         if item.result is not None:
             tabs = QTabWidget(frame)
-            tabs.setAccessibleName(f"Transcript variants for {item.source_name}")
+            tabs.setAccessibleName(
+                self._t(TranslationKey.TRANSCRIBE_VARIANTS, name=item.source_name)
+            )
             original = QTextEdit(tabs)
             original.setReadOnly(True)
             original.setPlainText(item.result.original_text)
-            tabs.addTab(original, "Original")
+            tabs.addTab(original, self._t(TranslationKey.TRANSCRIBE_ORIGINAL))
             if item.result.enhanced_text:
                 enhanced = QTextEdit(tabs)
                 enhanced.setReadOnly(True)
                 enhanced.setPlainText(item.result.enhanced_text)
-                tabs.addTab(enhanced, "Enhanced")
+                tabs.addTab(enhanced, self._t(TranslationKey.TRANSCRIBE_ENHANCED))
             tabs.setCurrentIndex(1 if item.selected_variant is TranscriptVariant.ENHANCED else 0)
             tabs.currentChanged.connect(
                 lambda index, item_id=item.item_id: self._controller.select_variant(
@@ -331,9 +372,13 @@ class TranscribePage(QWidget):
         if item is None:
             return
         suffix = ".txt" if format_name == "txt" else ".md"
-        title = "Save transcript as TXT" if format_name == "txt" else "Save transcript as Markdown"
+        title_key = (
+            TranslationKey.TRANSCRIBE_SAVE_TXT
+            if format_name == "txt"
+            else TranslationKey.TRANSCRIBE_SAVE_MARKDOWN
+        )
         target, _ = QFileDialog.getSaveFileName(
-            self, title, f"{Path(item.source_name).stem}{suffix}"
+            self, self._t(title_key), f"{Path(item.source_name).stem}{suffix}"
         )
         if not target:
             return
@@ -347,22 +392,78 @@ class TranscribePage(QWidget):
         event.accept()
 
     def dispose(self) -> None:
+        if self._locale_connected:
+            try:
+                self._locale_signal.disconnect(self._locale_callback)
+            except (RuntimeError, TypeError):
+                pass
+            self._locale_connected = False
         if self._unsubscribe is not None:
             self._unsubscribe()
             self._unsubscribe = None
 
+    def apply_locale(self, _locale: str | None = None) -> None:
+        del _locale
+        self._title.setText(self._t(TranslationKey.TRANSCRIBE_TITLE))
+        self._subtitle.setText(self._t(TranslationKey.TRANSCRIBE_SUBTITLE))
+        self._drop_prompt.setText(self._t(TranslationKey.TRANSCRIBE_DROP_PROMPT))
+        self._or_label.setText(self._t(TranslationKey.TRANSCRIBE_OR))
+        self._choose_button.setText(self._t(TranslationKey.TRANSCRIBE_CHOOSE_FILES))
+        self._choose_button.setAccessibleName(
+            self._t(TranslationKey.TRANSCRIBE_CHOOSE_FILES_ACCESSIBLE)
+        )
+        self._formats_label.setText(self._formats_text())
+        self._formats_label.setAccessibleName(
+            self._t(TranslationKey.TRANSCRIBE_SUPPORTED_FORMATS_ACCESSIBLE)
+        )
+        for button, text_key, accessible_key in (
+            (
+                self._add_button,
+                TranslationKey.TRANSCRIBE_ADD_FILES,
+                TranslationKey.TRANSCRIBE_ADD_FILES_ACCESSIBLE,
+            ),
+            (
+                self._start_button,
+                TranslationKey.TRANSCRIBE_START,
+                TranslationKey.TRANSCRIBE_START_ACCESSIBLE,
+            ),
+            (
+                self._cancel_button,
+                TranslationKey.TRANSCRIBE_CANCEL_ALL,
+                TranslationKey.TRANSCRIBE_CANCEL_ALL_ACCESSIBLE,
+            ),
+            (
+                self._clear_button,
+                TranslationKey.TRANSCRIBE_CLEAR_FINISHED,
+                TranslationKey.TRANSCRIBE_CLEAR_FINISHED_ACCESSIBLE,
+            ),
+        ):
+            button.setText(self._t(text_key))
+            button.setAccessibleName(self._t(accessible_key))
+        self._render(self._controller.snapshot)
 
-def _status_text(state: QueueState) -> str:
-    return {
-        QueueState.PENDING: "Waiting",
-        QueueState.VALIDATING: "Checking media",
-        QueueState.QUEUED: "Queued",
-        QueueState.NORMALIZING: "Converting audio",
-        QueueState.TRANSCRIBING: "Transcribing",
-        QueueState.RETRY_WAITING: "Retrying",
-        QueueState.CLEANING_UP: "Finishing",
-        QueueState.SUCCEEDED: "Completed",
-        QueueState.FAILED: "Failed",
-        QueueState.CANCELLED: "Cancelled",
-        QueueState.REJECTED: "Rejected",
-    }[state]
+    def _formats_text(self) -> str:
+        formats = ", ".join(format.value for format in SUPPORTED_MEDIA_FORMATS)
+        return self._t(TranslationKey.TRANSCRIBE_SUPPORTED_FORMATS, formats=formats)
+
+    def _t(self, key: TranslationKey, **values: object) -> str:
+        return translate(key, self._locale_config.locale, **values)
+
+
+def _status_text(state: QueueState, locale: Locale | str | None) -> str:
+    return translate(
+        {
+            QueueState.PENDING: TranslationKey.QUEUE_WAITING,
+            QueueState.VALIDATING: TranslationKey.QUEUE_CHECKING_MEDIA,
+            QueueState.QUEUED: TranslationKey.QUEUE_QUEUED,
+            QueueState.NORMALIZING: TranslationKey.QUEUE_CONVERTING_AUDIO,
+            QueueState.TRANSCRIBING: TranslationKey.QUEUE_TRANSCRIBING,
+            QueueState.RETRY_WAITING: TranslationKey.QUEUE_RETRYING,
+            QueueState.CLEANING_UP: TranslationKey.QUEUE_FINISHING,
+            QueueState.SUCCEEDED: TranslationKey.QUEUE_COMPLETED,
+            QueueState.FAILED: TranslationKey.QUEUE_FAILED,
+            QueueState.CANCELLED: TranslationKey.QUEUE_CANCELLED,
+            QueueState.REJECTED: TranslationKey.QUEUE_REJECTED,
+        }[state],
+        locale,
+    )
