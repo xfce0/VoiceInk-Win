@@ -1092,6 +1092,7 @@ def test_late_asr_result_is_fenced_after_cancellation(tmp_path: Path) -> None:
     assert record.normalized is None
     assert record.transcript is None
     assert record.asr_handle_released is True
+    assert record.asr_handle is None
     assert application._asr.admitted_count == 0
 
 

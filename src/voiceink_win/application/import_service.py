@@ -1493,6 +1493,7 @@ class ImportedMediaTranscriptionService:
             return
         handle.release()
         record.asr_handle_released = True
+        record.asr_handle = None
 
     def _raise_if_interrupted(self, record: _Record, stage: Stage) -> None:
         if self._is_cancelled(record):

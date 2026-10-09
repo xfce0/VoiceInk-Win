@@ -4,6 +4,7 @@ PROJECT := voiceink-win
 VENV := .venv
 PIP_VERSION := 26.2.1
 BUILD_CONSTRAINTS := packaging/windows-build-constraints.txt
+WINDOWS_RELEASE_LOCK ?= .github/native-smoke/artifact-lock.template.json
 
 ifeq ($(OS),Windows_NT)
 PYTHON ?= python
@@ -82,7 +83,7 @@ portable-package: require-windows require-portable-artifacts build
 
 ## windows-release-smoke: Download tracked pins, build, relocate, smoke-test, and bundle the Windows release package
 windows-release-smoke: build
-	$(VENV_PYTHON) scripts/windows_release_package.py --lock .github/native-smoke/artifact-lock.template.json --shell-dist dist --output release/voiceink-shell-windows-x64 --bundle release/voiceink-shell-windows-x64.zip --report release/windows-release-smoke.json
+	$(VENV_PYTHON) scripts/windows_release_package.py --lock "$(WINDOWS_RELEASE_LOCK)" --shell-dist dist --output release/voiceink-shell-windows-x64 --bundle release/voiceink-shell-windows-x64.zip --report release/windows-release-smoke.json
 
 ## require-portable-artifacts: Verify portable package inputs before the Windows build
 require-portable-artifacts:
