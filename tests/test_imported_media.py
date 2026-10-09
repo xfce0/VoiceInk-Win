@@ -126,6 +126,23 @@ class _HistoryRecorder:
         return future
 
 
+class _RetryingHistoryRecorder(_HistoryRecorder):
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.attempts = 0
+
+    def upsert_history(self, record) -> Future[None]:
+        self.records.append(record)
+        self.attempts += 1
+        future: Future[None] = Future()
+        if self.attempts <= self.failures:
+            future.set_exception(OSError("history unavailable"))
+        else:
+            future.set_result(None)
+        return future
+
+
 def test_terminal_import_results_persist_once_after_cleanup_for_all_outcomes(
     tmp_path: Path,
 ) -> None:
@@ -189,6 +206,56 @@ def test_terminal_import_results_persist_once_after_cleanup_for_all_outcomes(
     record = application._record(success_id)
     application._persist_history_once(record, success)
     assert len(history.records) == 2
+
+
+def test_terminal_history_waits_for_future_retry_before_publishing_success(tmp_path: Path) -> None:
+    history = _RetryingHistoryRecorder(failures=1)
+    application = service(
+        tmp_path,
+        history_port=history,
+        history_persist_retries=2,
+        retry_backoff=lambda _: 0,
+    )
+
+    result = application.submit_and_wait(str(source_file(tmp_path)), timeout=2.0)
+
+    assert result.status == "succeeded"
+    assert result.warnings == ()
+    assert history.attempts == 2
+    assert application._record(result.job_id).history_persisted is True
+    application.close()
+
+
+def test_terminal_history_reports_bounded_persistence_failure(tmp_path: Path) -> None:
+    history = _RetryingHistoryRecorder(failures=5)
+    application = service(
+        tmp_path,
+        history_port=history,
+        history_persist_retries=2,
+        retry_backoff=lambda _: 0,
+    )
+
+    result = application.submit_and_wait(str(source_file(tmp_path)), timeout=2.0)
+
+    assert result.status == "succeeded"
+    assert result.warnings == (WarningCode.HISTORY_PERSISTENCE_WARNING,)
+    assert history.attempts == 2
+    assert application._record(result.job_id).history_persisted is False
+    application.close()
+
+
+def test_history_source_metadata_contains_no_full_source_path(tmp_path: Path) -> None:
+    history = _HistoryRecorder()
+    application = service(tmp_path, history_port=history)
+    source = source_file(tmp_path)
+
+    application.submit_and_wait(str(source), timeout=2.0)
+    application.close()
+
+    metadata = history.records[0].source_metadata
+    assert "source_path" not in metadata
+    assert metadata["source_name"] == source.name
+    assert metadata["source_reference"].startswith("sha256:")
 
 
 def test_normalization_uses_one_stage_deadline_and_does_not_retry_after_processing_expiry(

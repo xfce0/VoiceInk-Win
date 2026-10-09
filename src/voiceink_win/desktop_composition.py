@@ -10,7 +10,12 @@ from inspect import Parameter, signature
 from threading import Lock, Thread, current_thread
 from typing import Protocol
 
-from voiceink_win.application import PersistenceService, ShellController, TranscribePageController
+from voiceink_win.application import (
+    HistoryDeletionService,
+    PersistenceService,
+    ShellController,
+    TranscribePageController,
+)
 from voiceink_win.domain import TranscribeAvailability
 from voiceink_win.infrastructure import AudioArtifactStore, SQLitePersistence, VoiceInkPaths
 
@@ -30,6 +35,9 @@ class DesktopComposition(Protocol):
     @property
     def artifact_cleanup(self) -> Callable[[str], None]: ...
 
+    @property
+    def history_deletion(self) -> HistoryDeletionService: ...
+
     def close(self) -> None: ...
 
 
@@ -39,6 +47,7 @@ class _DesktopComposition:
     transcribe_controller: TranscribePageController
     persistence: PersistenceService
     artifact_cleanup: Callable[[str], None]
+    history_deletion: HistoryDeletionService
     _backend: object | None = field(default=None, init=False, repr=False)
     _bootstrap_thread: Thread | None = field(default=None, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
@@ -72,6 +81,10 @@ class _DesktopComposition:
             self._backend = None
         if backend is not None:
             self._close_backend_safely(backend)
+        try:
+            self.history_deletion.close()
+        except Exception:
+            logger.exception("failed to drain history artifact cleanup")
         try:
             self.persistence.close().result(timeout=3.0)
         except Exception:
@@ -156,7 +169,14 @@ def build_desktop_composition() -> DesktopComposition:
     paths = VoiceInkPaths.default()
     sqlite = SQLitePersistence(paths.database)
     persistence = PersistenceService(sqlite)
-    artifacts = AudioArtifactStore(paths.audio)
+    windows_adapter = None
+    if os.name == "nt":
+        from voiceink_win.infrastructure import NativeWindowsMediaSecurityAdapter
+
+        windows_adapter = NativeWindowsMediaSecurityAdapter()
+    artifacts = AudioArtifactStore(paths.audio, windows_adapter=windows_adapter)
+    history_deletion = HistoryDeletionService(persistence, artifacts.delete)
+    history_deletion.start()
     transcribe_controller = TranscribePageController(
         None,
         history_port=persistence,
@@ -168,6 +188,7 @@ def build_desktop_composition() -> DesktopComposition:
         transcribe_controller=transcribe_controller,
         persistence=persistence,
         artifact_cleanup=artifacts.delete,
+        history_deletion=history_deletion,
     )
     if not _imported_media_environment_present():
         transcribe_controller.mark_unavailable("Imported media runtime is not configured.")

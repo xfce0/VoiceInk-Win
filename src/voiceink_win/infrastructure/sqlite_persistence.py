@@ -21,6 +21,7 @@ from voiceink_win.domain.persistence import (
     HistoryPage,
     HistoryRecord,
     HistoryStatus,
+    PendingHistoryDeletion,
     PersistenceError,
     PersistencePort,
     Settings,
@@ -151,15 +152,17 @@ class SQLitePersistence(PersistencePort):
                 raise InvalidInputError("history search must be text or None")
             clauses: list[str] = []
             parameters: list[object] = []
+            clauses.append("deletion_state = 'active'")
             if cursor is not None:
                 created_at, record_id = _decode_cursor(cursor)
                 clauses.append("(created_at < ? OR (created_at = ? AND id < ?))")
                 parameters.extend((created_at, created_at, record_id))
             if search and search.strip():
-                pattern = f"%{search.strip()}%"
+                pattern = _like_pattern(search.strip())
                 clauses.append(
-                    "(source LIKE ? OR original_text LIKE ? OR enhanced_text LIKE ? "
-                    "OR source_metadata_json LIKE ?)"
+                    "(source LIKE ? ESCAPE '\\' OR original_text LIKE ? ESCAPE '\\' "
+                    "OR enhanced_text LIKE ? ESCAPE '\\' "
+                    "OR source_metadata_json LIKE ? ESCAPE '\\')"
                 )
                 parameters.extend((pattern, pattern, pattern, pattern))
             rows = connection.execute(
@@ -180,6 +183,16 @@ class SQLitePersistence(PersistencePort):
                 last = records[-1]
                 next_cursor = _cursor_value(_timestamp(last.created_at), last.id)
             return HistoryPage(records, offset, limit, len(rows) > limit, next_cursor)
+
+        return self._executor.submit(read)
+
+    def list_pending_history_deletions(self) -> Future[tuple[PendingHistoryDeletion, ...]]:
+        def read(connection: sqlite3.Connection) -> tuple[PendingHistoryDeletion, ...]:
+            rows = connection.execute(
+                "SELECT id, audio_artifact_path FROM history "
+                "WHERE deletion_state = 'pending' ORDER BY created_at ASC, id ASC"
+            ).fetchall()
+            return tuple(PendingHistoryDeletion(row[0], row[1]) for row in rows)
 
         return self._executor.submit(read)
 
@@ -402,13 +415,12 @@ def _apply_migrations(
     for version, path in migrations:
         checksum = hashlib.sha256(path.read_bytes()).hexdigest()
         if version in applied:
-            if applied[version] not in (None, checksum):
-                raise PersistenceError(f"SQLite migration drift detected for {path.name}")
             if applied[version] is None:
-                connection.execute(
-                    "UPDATE schema_migrations SET checksum = ? WHERE version = ?",
-                    (checksum, version),
+                raise PersistenceError(
+                    f"SQLite migration checksum is NULL for {path.name}; re-baselining is forbidden"
                 )
+            if applied[version] != checksum:
+                raise PersistenceError(f"SQLite migration drift detected for {path.name}")
             continue
         script = path.read_text(encoding="utf-8")
         transaction = (
@@ -529,3 +541,8 @@ def _decode_mapping(value: str, name: str) -> dict[str, object]:
     if not isinstance(decoded, dict):
         raise PersistenceError(f"stored {name} are not a JSON object")
     return decoded
+
+
+def _like_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"

@@ -37,6 +37,7 @@ from voiceink_win.domain import (
     TranscriptDocument,
     TranscriptionQueueItemSnapshot,
     TranscriptVariant,
+    WarningCode,
     media_format_hint,
     safe_basename,
 )
@@ -557,6 +558,11 @@ class TranscribePageController:
         if item.terminal_applied:
             return
         item.terminal_applied = True
+        if WarningCode.HISTORY_PERSISTENCE_WARNING in getattr(terminal, "warnings", ()):
+            self._snapshot = replace(
+                self._snapshot,
+                page_error="History could not be durably saved after bounded retries.",
+            )
         if isinstance(terminal, Success):
             transcript = terminal.transcription.transcription
             if transcript.text.strip():

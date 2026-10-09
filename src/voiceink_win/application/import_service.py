@@ -120,6 +120,7 @@ class _Record:
     cleanup_thread: Thread | None = None
     history_persisted: bool = False
     history_persist_lock: Lock = field(default_factory=Lock)
+    history_persistence_warning: bool = False
     stage_owner_done: Event = field(default_factory=_set_event)
     cleanup_fenced: bool = False
     deadline_stage: Stage | None = None
@@ -195,6 +196,8 @@ class ImportedMediaTranscriptionService:
         max_completed_records: int = 256,
         retry_backoff: Callable[[int], float] | None = None,
         history_port: HistoryPort | None = None,
+        history_persist_retries: int = 3,
+        history_persist_timeout_seconds: float = 5.0,
     ) -> None:
         self._normalizer = normalizer
         self._asr = asr
@@ -212,6 +215,12 @@ class ImportedMediaTranscriptionService:
             lambda attempt: min(30.0, 0.1 * (2 ** (attempt - 1)))
         )
         self._history_port = history_port
+        if history_persist_retries < 1:
+            raise ValueError("history persistence retries must be positive")
+        if history_persist_timeout_seconds <= 0:
+            raise ValueError("history persistence timeout must be positive")
+        self._history_persist_retries = history_persist_retries
+        self._history_persist_timeout = history_persist_timeout_seconds
         self._records: dict[JobId, _Record] = {}
         self._completed: deque[JobId] = deque()
         self._recovery_workspaces: set[JobWorkspace] = set()
@@ -843,6 +852,7 @@ class ImportedMediaTranscriptionService:
         job = record.job
         result = self._make_terminal_result(record)
         self._persist_history_once(record, result)
+        result = self._make_terminal_result(record)
         if job.complete(job.attempt, Stage.CLEANING_UP, result):
             record.normalized = None
             record.transcript = None
@@ -942,6 +952,7 @@ class ImportedMediaTranscriptionService:
         record.job.force_cleanup(record.job.attempt)
         result = self._make_terminal_result(record)
         self._persist_history_once(record, result)
+        result = self._make_terminal_result(record)
         if record.job.complete(record.job.attempt, Stage.CLEANING_UP, result):
             self._release_terminal_reservation(record)
             self._retain_completed(record)
@@ -1065,19 +1076,43 @@ class ImportedMediaTranscriptionService:
             metadata,
             self._runtime_diagnostics(record),
         )
-        return Success("succeeded", job.job_id, job.attempt, transcription, ())
+        return Success(
+            "succeeded",
+            job.job_id,
+            job.attempt,
+            transcription,
+            self._result_warnings(record),
+        )
 
     def _persist_history_once(self, record: _Record, result: TerminalResult) -> None:
-        """Submit one durable history upsert after the cleanup fence is reached."""
+        """Confirm durable history before terminal publication, with bounded retries."""
         if self._history_port is None:
             return
         with record.history_persist_lock:
             if record.history_persisted:
                 return
-            record.history_persisted = True
+            history = self._history_record(record, result)
+            for attempt in range(1, self._history_persist_retries + 1):
+                try:
+                    self._history_port.upsert_history(history).result(
+                        timeout=self._history_persist_timeout
+                    )
+                except BaseException:
+                    logger.exception(
+                        "history terminal persistence attempt failed",
+                        extra={"job_id": str(record.job.job_id), "attempt": attempt},
+                    )
+                    if attempt < self._history_persist_retries:
+                        self._clock.sleep(self._retry_backoff(attempt))
+                else:
+                    record.history_persisted = True
+                    return
+            record.history_persistence_warning = True
+
+    def _history_record(self, record: _Record, result: TerminalResult) -> HistoryRecord:
         if isinstance(result, Success):
             transcript = result.transcription.transcription
-            history = HistoryRecord(
+            return HistoryRecord(
                 id=record.job.job_id.value,
                 source=TranscriptionSource.IMPORTED_FILE,
                 duration=result.transcription.processing.normalized_duration or transcript.duration,
@@ -1087,8 +1122,8 @@ class ImportedMediaTranscriptionService:
                 status=HistoryStatus.COMPLETED,
                 source_metadata=self._history_source_metadata(record),
             )
-        elif isinstance(result, Failed):
-            history = HistoryRecord(
+        if isinstance(result, Failed):
+            return HistoryRecord(
                 id=record.job.job_id.value,
                 source=TranscriptionSource.IMPORTED_FILE,
                 duration=record.normalized_duration or 0.0,
@@ -1097,45 +1132,34 @@ class ImportedMediaTranscriptionService:
                 failure_code=result.code.value,
                 source_metadata=self._history_source_metadata(record),
             )
-        else:
-            history = HistoryRecord(
-                id=record.job.job_id.value,
-                source=TranscriptionSource.IMPORTED_FILE,
-                duration=record.normalized_duration or 0.0,
-                status=HistoryStatus.CANCELLED,
-                error="Processing was cancelled.",
-                failure_code=ErrorCode.CANCELLED.value,
-                source_metadata=self._history_source_metadata(record),
-            )
-        try:
-            future = self._history_port.upsert_history(history)
-            future.add_done_callback(self._history_persisted)
-        except BaseException:
-            logger.exception(
-                "history terminal persistence submission failed",
-                extra={"job_id": str(record.job.job_id)},
-            )
+        return HistoryRecord(
+            id=record.job.job_id.value,
+            source=TranscriptionSource.IMPORTED_FILE,
+            duration=record.normalized_duration or 0.0,
+            status=HistoryStatus.CANCELLED,
+            error="Processing was cancelled.",
+            failure_code=ErrorCode.CANCELLED.value,
+            source_metadata=self._history_source_metadata(record),
+        )
 
     @staticmethod
     def _history_source_metadata(record: _Record) -> dict[str, object]:
         return {
             "job_id": record.job.job_id.value,
-            "source_name": record.source.display_name,
-            "source_path": str(record.source.path),
+            "source_name": Path(record.source.display_name).name,
+            "source_reference": f"sha256:{record.source.sha256}",
             "source_size": record.source.size,
             "source_sha256": record.source.sha256,
         }
 
     @staticmethod
-    def _history_persisted(future) -> None:
-        try:
-            future.result()
-        except BaseException:
-            logger.exception("history terminal persistence failed")
-
-    @staticmethod
     def _result_warnings(record: _Record) -> tuple[WarningCode, ...]:
-        return (WarningCode.CLEANUP_WARNING,) if record.cleanup_warning else ()
+        warnings: list[WarningCode] = []
+        if record.cleanup_warning:
+            warnings.append(WarningCode.CLEANUP_WARNING)
+        if record.history_persistence_warning:
+            warnings.append(WarningCode.HISTORY_PERSISTENCE_WARNING)
+        return tuple(warnings)
 
     @contextmanager
     def _workspace_processing_lock(self, workspace: JobWorkspace):
@@ -1262,6 +1286,7 @@ class ImportedMediaTranscriptionService:
         record.job.force_cleanup(record.job.attempt)
         result = self._make_terminal_result(record)
         self._persist_history_once(record, result)
+        result = self._make_terminal_result(record)
         if record.job.complete(record.job.attempt, Stage.CLEANING_UP, result):
             record.normalized = None
             record.transcript = None

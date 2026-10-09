@@ -126,6 +126,12 @@ class HistoryPage:
     next_cursor: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PendingHistoryDeletion:
+    record_id: str
+    audio_artifact_path: str | None
+
+
 def canonical_dictionary_key(phrase: str) -> str:
     """Return the stable comparison key while retaining the display phrase."""
     return unicodedata.normalize("NFKC", phrase).casefold()
@@ -203,6 +209,8 @@ class HistoryPort(Protocol):
     def update_history_variant(
         self, record_id: str, selected_variant: TranscriptVariant
     ) -> Future[None]: ...
+
+    def list_pending_history_deletions(self) -> Future[tuple[PendingHistoryDeletion, ...]]: ...
 
 
 class DictionaryPort(Protocol):

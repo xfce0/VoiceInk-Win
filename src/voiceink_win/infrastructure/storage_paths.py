@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from voiceink_win.domain.persistence import InvalidAudioArtifactPathError
+
+from .media_snapshot import WindowsAdapterRequiredError
 
 
 def default_app_data_root(environ: dict[str, str] | None = None) -> Path:
@@ -51,12 +54,25 @@ def normalise_relative_audio_path(value: str) -> str:
 class AudioArtifactStore:
     """Store optional audio outside SQLite using atomic replacement."""
 
-    def __init__(self, audio_root: Path) -> None:
-        self._root = Path(audio_root).expanduser().resolve(strict=False)
+    def __init__(self, audio_root: Path, *, windows_adapter=None) -> None:
+        requested = Path(audio_root).expanduser().absolute()
+        if os.name == "nt" and windows_adapter is None:
+            raise WindowsAdapterRequiredError(
+                "safe Windows artifact deletion requires a native security adapter"
+            )
+        _reject_symlink_components(requested)
+        requested.mkdir(parents=True, exist_ok=True)
+        _reject_symlink_components(requested)
+        if os.name != "nt":
+            requested.chmod(0o700)
+        self._root = requested.resolve(strict=True)
+        self._windows_adapter = windows_adapter
 
     def resolve(self, relative_path: str) -> Path:
         safe_path = normalise_relative_audio_path(relative_path)
-        candidate = (self._root / Path(*safe_path.split("/"))).resolve(strict=False)
+        lexical = self._root / Path(*safe_path.split("/"))
+        _reject_symlink_components(lexical)
+        candidate = lexical.resolve(strict=False)
         try:
             candidate.relative_to(self._root)
         except ValueError as error:
@@ -82,4 +98,52 @@ class AudioArtifactStore:
 
     def delete(self, relative_path: str) -> None:
         """Remove one validated artifact without following paths outside the store."""
-        self.resolve(relative_path).unlink(missing_ok=True)
+        safe_path = normalise_relative_audio_path(relative_path)
+        if self._windows_adapter is not None:
+            self._windows_adapter.delete_artifact(self._root, safe_path)
+            return
+        self._delete_posix(safe_path)
+
+    def _delete_posix(self, relative_path: str) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        root_fd = os.open(self._root, flags)
+        parent_fd = root_fd
+        opened: list[int] = []
+        try:
+            parts = relative_path.split("/")
+            for part in parts[:-1]:
+                child_fd = os.open(part, flags, dir_fd=parent_fd)
+                opened.append(child_fd)
+                parent_fd = child_fd
+            target = parts[-1]
+            before = os.stat(target, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise InvalidAudioArtifactPathError(
+                    "audio artifact must be a single-link regular file"
+                )
+            descriptor = os.open(
+                target,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_fd,
+            )
+            try:
+                after = os.fstat(descriptor)
+                if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                    raise InvalidAudioArtifactPathError("audio artifact identity changed")
+            finally:
+                os.close(descriptor)
+            os.unlink(target, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return
+        finally:
+            for descriptor in reversed(opened):
+                os.close(descriptor)
+            os.close(root_fd)
+
+
+def _reject_symlink_components(path: Path) -> None:
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise InvalidAudioArtifactPathError("audio storage path contains a symlink")

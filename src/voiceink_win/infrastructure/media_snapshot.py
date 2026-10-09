@@ -97,6 +97,8 @@ class WindowsMediaSecurityAdapter(Protocol):
 
     def cleanup_workspace(self, path: Path) -> None: ...
 
+    def delete_artifact(self, root: Path, relative_path: str) -> None: ...
+
 
 class WindowsAdapterRequiredError(RuntimeError):
     """Raised instead of silently claiming Windows reparse-point safety."""
@@ -206,6 +208,19 @@ class NativeWindowsMediaSecurityAdapter:
                     self._delete_handle(handle)
                 finally:
                     self._close(handle)
+
+    def delete_artifact(self, root: Path, relative_path: str) -> None:
+        """Delete a regular artifact through a validated no-reparse handle."""
+        if not root.is_absolute() or self._is_unc(str(root)):
+            raise WindowsAdapterRequiredError("artifact root is not local and absolute")
+        target = root.joinpath(*relative_path.split("/"))
+        self._assert_no_reparse_components(root)
+        self._assert_no_reparse_components(target.parent)
+        handle = self._open(target, is_directory=False)
+        try:
+            self._delete_handle(handle)
+        finally:
+            self._close(handle)
 
     def _open(
         self,

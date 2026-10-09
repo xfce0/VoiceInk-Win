@@ -81,6 +81,7 @@ def main(*, smoke: bool = False) -> int:
             transcribe_controller=composition.transcribe_controller,
             persistence=getattr(composition, "persistence", None),
             artifact_cleanup=getattr(composition, "artifact_cleanup", None),
+            history_deletion=getattr(composition, "history_deletion", None),
         )
         if color_scheme_changed is not None:
             window.connect_theme_signal(

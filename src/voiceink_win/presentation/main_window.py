@@ -19,7 +19,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from voiceink_win.application import PersistenceService, ShellController, TranscribePageController
+from voiceink_win.application import (
+    HistoryDeletionService,
+    PersistenceService,
+    ShellController,
+    TranscribePageController,
+)
 from voiceink_win.application.transcribe_output import LocalTextFilePort
 from voiceink_win.domain import ShellSnapshot, ShellState
 
@@ -243,6 +248,7 @@ class MainWindow(QMainWindow):
         locale_config: LocaleConfig | None = None,
         persistence: PersistenceService | None = None,
         artifact_cleanup=None,
+        history_deletion: HistoryDeletionService | None = None,
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
@@ -257,6 +263,16 @@ class MainWindow(QMainWindow):
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
         self._persistence = persistence
         self._artifact_cleanup = artifact_cleanup
+        self._history_deletion = history_deletion or (
+            HistoryDeletionService(persistence, artifact_cleanup)
+            if persistence is not None
+            else None
+        )
+        self._owns_history_deletion = history_deletion is None and (
+            self._history_deletion is not None
+        )
+        if self._owns_history_deletion:
+            self._history_deletion.start()
         self._transcribe_controller.set_output_ports(
             clipboard=QtClipboardPort(self),
             text_files=LocalTextFilePort(),
@@ -298,6 +314,7 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             artifact_cleanup=self._artifact_cleanup,
+            history_deletion=self._history_deletion,
         )
         self._pages.addWidget(self._history_page)
         self._dictionary_page = DictionaryPage(
@@ -644,4 +661,6 @@ class MainWindow(QMainWindow):
         self._history_page.dispose()
         self._dictionary_page.dispose()
         self._settings_page.dispose()
+        if self._owns_history_deletion and self._history_deletion is not None:
+            self._history_deletion.close()
         self._unsubscribe()

@@ -48,6 +48,7 @@ class DictionaryPage(QWidget):
         self._entries: tuple[DictionaryEntry, ...] = ()
         self._editing_id: str | None = None
         self._generation = 0
+        self._operation = 0
         self._disposed = False
         self._build_ui()
         self.refresh()
@@ -114,6 +115,7 @@ class DictionaryPage(QWidget):
         if self._disposed:
             return
         self._generation += 1
+        self._operation += 1
         generation = self._generation
         if self._persistence is None:
             self._render_entries((), unavailable=True)
@@ -143,8 +145,7 @@ class DictionaryPage(QWidget):
 
     def _set_loading(self, loading: bool) -> None:
         self._list.setEnabled(not loading)
-        for control in (self._new, self._save, self._delete):
-            control.setEnabled(not loading)
+        self._set_editor_enabled(not loading)
         if loading:
             self._status.setText(self._t(TranslationKey.COMMON_LOADING))
 
@@ -217,13 +218,20 @@ class DictionaryPage(QWidget):
         self._set_editor_enabled(False)
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
         generation = self._generation
+        operation = self._next_operation()
         self._bridge.watch(
             self._persistence.upsert_dictionary(entry),
-            lambda result, error: self._saved(generation, result, error),
+            lambda result, error: self._saved(generation, operation, result, error),
         )
 
-    def _saved(self, generation: int, _result: None, error: BaseException | None) -> None:
-        if self._disposed or generation != self._generation:
+    def _saved(
+        self,
+        generation: int,
+        operation: int,
+        _result: None,
+        error: BaseException | None,
+    ) -> None:
+        if self._disposed or generation != self._generation or operation != self._operation:
             return
         self._set_editor_enabled(True)
         if error:
@@ -248,13 +256,20 @@ class DictionaryPage(QWidget):
         self._set_editor_enabled(False)
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
         generation = self._generation
+        operation = self._next_operation()
         self._bridge.watch(
             self._persistence.delete_dictionary(self._editing_id),
-            lambda result, error: self._deleted(generation, result, error),
+            lambda result, error: self._deleted(generation, operation, result, error),
         )
 
-    def _deleted(self, generation: int, _result: None, error: BaseException | None) -> None:
-        if self._disposed or generation != self._generation:
+    def _deleted(
+        self,
+        generation: int,
+        operation: int,
+        _result: None,
+        error: BaseException | None,
+    ) -> None:
+        if self._disposed or generation != self._generation or operation != self._operation:
             return
         self._set_editor_enabled(True)
         if error:
@@ -289,9 +304,14 @@ class DictionaryPage(QWidget):
     def _t(self, key: TranslationKey, **values: object) -> str:
         return translate(key, self._locale_config.locale, **values)
 
+    def _next_operation(self) -> int:
+        self._operation += 1
+        return self._operation
+
     def dispose(self) -> None:
         self._disposed = True
         self._generation += 1
+        self._operation += 1
         try:
             self._locale_config.locale_changed.disconnect(self._locale_callback)
         except (RuntimeError, TypeError):
