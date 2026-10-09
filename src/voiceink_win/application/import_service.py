@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import deque
 from collections.abc import Callable
@@ -21,6 +22,9 @@ from voiceink_win.domain import (
     EndOfStream,
     ErrorCode,
     Failed,
+    HistoryPort,
+    HistoryRecord,
+    HistoryStatus,
     ImportedDeadlineExceededError,
     ImportedProcessingError,
     ImportedTranscriptionResult,
@@ -46,7 +50,9 @@ from voiceink_win.domain import (
     StageTiming,
     Success,
     TerminalResult,
+    TranscriptionSource,
     TranscriptResult,
+    TranscriptVariant,
     WarningCode,
     safe_message,
 )
@@ -64,6 +70,8 @@ from voiceink_win.domain.imported_errors import (
 from .asr_service import AsrApplicationService
 from .cancellation import CancellationTokenSource
 from .import_queue import ImportQueue, ReservationToken
+
+logger = logging.getLogger(__name__)
 
 
 def _set_event() -> Event:
@@ -110,6 +118,8 @@ class _Record:
     cleanup_result: bool | None = None
     cleanup_completed_at: float | None = None
     cleanup_thread: Thread | None = None
+    history_persisted: bool = False
+    history_persist_lock: Lock = field(default_factory=Lock)
     stage_owner_done: Event = field(default_factory=_set_event)
     cleanup_fenced: bool = False
     deadline_stage: Stage | None = None
@@ -184,6 +194,7 @@ class ImportedMediaTranscriptionService:
         max_source_bytes: int = 2 * 1024**3,
         max_completed_records: int = 256,
         retry_backoff: Callable[[int], float] | None = None,
+        history_port: HistoryPort | None = None,
     ) -> None:
         self._normalizer = normalizer
         self._asr = asr
@@ -200,6 +211,7 @@ class ImportedMediaTranscriptionService:
         self._retry_backoff = retry_backoff or (
             lambda attempt: min(30.0, 0.1 * (2 ** (attempt - 1)))
         )
+        self._history_port = history_port
         self._records: dict[JobId, _Record] = {}
         self._completed: deque[JobId] = deque()
         self._recovery_workspaces: set[JobWorkspace] = set()
@@ -830,6 +842,7 @@ class ImportedMediaTranscriptionService:
                 self._recovery_workspaces.discard(workspace)
         job = record.job
         result = self._make_terminal_result(record)
+        self._persist_history_once(record, result)
         if job.complete(job.attempt, Stage.CLEANING_UP, result):
             record.normalized = None
             record.transcript = None
@@ -928,6 +941,7 @@ class ImportedMediaTranscriptionService:
                 record.failure = CleanupWarningError("source handle cleanup failed", cause=error)
         record.job.force_cleanup(record.job.attempt)
         result = self._make_terminal_result(record)
+        self._persist_history_once(record, result)
         if record.job.complete(record.job.attempt, Stage.CLEANING_UP, result):
             self._release_terminal_reservation(record)
             self._retain_completed(record)
@@ -1052,6 +1066,72 @@ class ImportedMediaTranscriptionService:
             self._runtime_diagnostics(record),
         )
         return Success("succeeded", job.job_id, job.attempt, transcription, ())
+
+    def _persist_history_once(self, record: _Record, result: TerminalResult) -> None:
+        """Submit one durable history upsert after the cleanup fence is reached."""
+        if self._history_port is None:
+            return
+        with record.history_persist_lock:
+            if record.history_persisted:
+                return
+            record.history_persisted = True
+        if isinstance(result, Success):
+            transcript = result.transcription.transcription
+            history = HistoryRecord(
+                id=record.job.job_id.value,
+                source=TranscriptionSource.IMPORTED_FILE,
+                duration=result.transcription.processing.normalized_duration or transcript.duration,
+                original_text=transcript.text,
+                enhanced_text=getattr(transcript, "enhanced_text", None),
+                selected_variant=TranscriptVariant.ORIGINAL,
+                status=HistoryStatus.COMPLETED,
+                source_metadata=self._history_source_metadata(record),
+            )
+        elif isinstance(result, Failed):
+            history = HistoryRecord(
+                id=record.job.job_id.value,
+                source=TranscriptionSource.IMPORTED_FILE,
+                duration=record.normalized_duration or 0.0,
+                status=HistoryStatus.FAILED,
+                error=result.safe_message,
+                failure_code=result.code.value,
+                source_metadata=self._history_source_metadata(record),
+            )
+        else:
+            history = HistoryRecord(
+                id=record.job.job_id.value,
+                source=TranscriptionSource.IMPORTED_FILE,
+                duration=record.normalized_duration or 0.0,
+                status=HistoryStatus.CANCELLED,
+                error="Processing was cancelled.",
+                failure_code=ErrorCode.CANCELLED.value,
+                source_metadata=self._history_source_metadata(record),
+            )
+        try:
+            future = self._history_port.upsert_history(history)
+            future.add_done_callback(self._history_persisted)
+        except BaseException:
+            logger.exception(
+                "history terminal persistence submission failed",
+                extra={"job_id": str(record.job.job_id)},
+            )
+
+    @staticmethod
+    def _history_source_metadata(record: _Record) -> dict[str, object]:
+        return {
+            "job_id": record.job.job_id.value,
+            "source_name": record.source.display_name,
+            "source_path": str(record.source.path),
+            "source_size": record.source.size,
+            "source_sha256": record.source.sha256,
+        }
+
+    @staticmethod
+    def _history_persisted(future) -> None:
+        try:
+            future.result()
+        except BaseException:
+            logger.exception("history terminal persistence failed")
 
     @staticmethod
     def _result_warnings(record: _Record) -> tuple[WarningCode, ...]:
@@ -1181,6 +1261,7 @@ class ImportedMediaTranscriptionService:
             return
         record.job.force_cleanup(record.job.attempt)
         result = self._make_terminal_result(record)
+        self._persist_history_once(record, result)
         if record.job.complete(record.job.attempt, Stage.CLEANING_UP, result):
             record.normalized = None
             record.transcript = None

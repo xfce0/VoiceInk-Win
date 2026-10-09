@@ -6,6 +6,8 @@ from threading import Event, Thread
 
 import pytest
 
+pytest.importorskip("PySide6", reason="PySide6 is not installed")
+
 from tests.support.fake_shell import FakeShellBackend
 from voiceink_win.application import ShellController, TranscribePageController
 from voiceink_win.presentation.clipboard import QtClipboardPort

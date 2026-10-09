@@ -107,6 +107,7 @@ class TranscriptResult:
     duration: float
     segments: tuple[TranscriptSegment, ...] = ()
     detected_language: str | None = None
+    enhanced_text: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.text, str):
@@ -140,6 +141,8 @@ class TranscriptResult:
             previous_segment_end = segment.timestamp.end
         if self.detected_language is not None and not isinstance(self.detected_language, str):
             raise InvalidInputError("detected language must be a string or None")
+        if self.enhanced_text is not None and not isinstance(self.enhanced_text, str):
+            raise InvalidInputError("enhanced transcript must be a string or None")
         object.__setattr__(self, "duration", duration)
 
 

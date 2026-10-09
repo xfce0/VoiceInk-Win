@@ -13,6 +13,7 @@ from voiceink_win.domain import (
     AsrCapabilities,
     AsrRequest,
     ConfigurationError,
+    HistoryPort,
     ImportOptions,
     JobId,
     RuntimeHealth,
@@ -330,6 +331,7 @@ def build_application(
     endpoint: str | None = None,
     readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
     imported_media: ImportedMediaConfiguration | None = None,
+    history_port: HistoryPort | None = None,
 ) -> BackendApplication:
     """Load trusted configuration and build the production ASR object graph."""
     configuration = load_runtime_configuration(
@@ -342,6 +344,7 @@ def build_application(
         endpoint=endpoint,
         readiness_timeout=readiness_timeout,
         imported_media=imported_media,
+        history_port=history_port,
     )
 
 
@@ -351,6 +354,7 @@ def build_application_from_configuration(
     endpoint: str | None = None,
     readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
     imported_media: ImportedMediaConfiguration | None = None,
+    history_port: HistoryPort | None = None,
 ) -> BackendApplication:
     """Build the ASR object graph from one already validated runtime configuration."""
     sidecar_endpoint = allocate_loopback_endpoint()
@@ -388,7 +392,11 @@ def build_application_from_configuration(
         )
         asr = AsrApplicationService(runtime)
         if imported_media is not None:
-            imported_service = _build_imported_media_service(imported_media, asr)
+            imported_service = (
+                _build_imported_media_service(imported_media, asr)
+                if history_port is None
+                else _build_imported_media_service(imported_media, asr, history_port)
+            )
         return BackendApplication(asr, runtime, proxy, imported_service)
     except BaseException as error:
         cleanup_errors: list[BaseException] = []
@@ -416,6 +424,7 @@ def build_application_from_configuration(
 def _build_imported_media_service(
     configuration: ImportedMediaConfiguration,
     asr: AsrApplicationService,
+    history_port: HistoryPort | None = None,
 ) -> ImportedMediaTranscriptionService:
     try:
         artifact = VerifiedFfmpegArtifact.verify(
@@ -426,7 +435,9 @@ def _build_imported_media_service(
             configuration.workspace_root,
             import_roots=configuration.import_roots,
         )
-        return ImportedMediaTranscriptionService(normalizer, asr, store)
+        if history_port is None:
+            return ImportedMediaTranscriptionService(normalizer, asr, store)
+        return ImportedMediaTranscriptionService(normalizer, asr, store, history_port=history_port)
     except ConfigurationError:
         raise
     except (OSError, ValueError) as error:
@@ -440,6 +451,7 @@ def build_application_from_environment(
     endpoint: str | None = None,
     readiness_timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
     environ: dict[str, str] | None = None,
+    history_port: HistoryPort | None = None,
 ) -> BackendApplication:
     paths = RuntimePaths.from_environment(environ)
     imported_media = ImportedMediaConfiguration.from_environment(environ)
@@ -450,4 +462,5 @@ def build_application_from_environment(
         endpoint=endpoint,
         readiness_timeout=readiness_timeout,
         imported_media=imported_media,
+        history_port=history_port,
     )

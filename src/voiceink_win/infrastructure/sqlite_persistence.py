@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from voiceink_win.domain import TranscriptVariant
+from voiceink_win.domain import TranscriptVariant, canonical_dictionary_key
 from voiceink_win.domain.errors import InvalidInputError
 from voiceink_win.domain.persistence import (
     DictionaryEntry,
@@ -27,6 +30,8 @@ from .sqlite_executor import SerializedSQLiteExecutor
 from .storage_paths import normalise_relative_audio_path
 
 _MIGRATION_NAME = re.compile(r"^(\d+)_([a-z0-9_]+)\.sql$")
+REQUIRED_MIGRATIONS = ("001_initial.sql", "002_persistence_hardening.sql")
+EXPECTED_TABLES = {"schema_migrations", "history", "dictionary_entries", "settings"}
 ReconciliationHook = Callable[[sqlite3.Connection], None]
 
 
@@ -45,8 +50,27 @@ def _validate_page(offset: int, limit: int) -> None:
         raise InvalidInputError("history limit must be between 1 and 500")
 
 
+def _cursor_value(created_at: str, record_id: str) -> str:
+    payload = json.dumps((created_at, record_id), separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii")
+
+
+def _decode_cursor(cursor: str) -> tuple[str, str]:
+    try:
+        value = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
+    except (ValueError, UnicodeError, binascii.Error) as error:
+        raise InvalidInputError("history cursor is invalid") from error
+    if (
+        not isinstance(value, list | tuple)
+        or len(value) != 2
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise InvalidInputError("history cursor is invalid")
+    return value[0], value[1]
+
+
 class SQLitePersistence(PersistencePort):
-    """Asynchronous local store; callers receive futures and never own a DB connection."""
+    """Asynchronous local store; callers never own a DB connection."""
 
     def __init__(
         self,
@@ -56,31 +80,29 @@ class SQLitePersistence(PersistencePort):
         reconciliation_hooks: Sequence[ReconciliationHook] = (),
         busy_timeout_ms: int = 5_000,
     ) -> None:
-        migrations = (
+        self._migration_dir = (
             Path(migration_dir) if migration_dir else Path(__file__).with_name("migrations")
         )
-        self._migration_dir = migrations
+        self._require_package_contract = migration_dir is None
         self._reconciliation_hooks = tuple(reconciliation_hooks)
         self._executor = SerializedSQLiteExecutor(
-            Path(database_path),
-            self._startup,
-            busy_timeout_ms=busy_timeout_ms,
+            Path(database_path), self._startup, busy_timeout_ms=busy_timeout_ms
         )
 
     def ready(self) -> Future[None]:
         return self._executor.ready()
 
     def upsert_history(self, record: HistoryRecord) -> Future[None]:
-        if record.audio_artifact_path is not None:
-            normalise_relative_audio_path(record.audio_artifact_path)
-
         def write(connection: sqlite3.Connection) -> None:
+            if record.audio_artifact_path is not None:
+                normalise_relative_audio_path(record.audio_artifact_path)
             connection.execute(
                 """
                 INSERT INTO history (
                     id, source, created_at, duration, original_text, enhanced_text,
-                    selected_variant, status, error, audio_artifact_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    selected_variant, status, error, failure_code, source_metadata_json,
+                    audio_artifact_path, deletion_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
                 ON CONFLICT(id) DO UPDATE SET
                     source = excluded.source,
                     created_at = excluded.created_at,
@@ -90,7 +112,10 @@ class SQLitePersistence(PersistencePort):
                     selected_variant = excluded.selected_variant,
                     status = excluded.status,
                     error = excluded.error,
-                    audio_artifact_path = excluded.audio_artifact_path
+                    failure_code = excluded.failure_code,
+                    source_metadata_json = excluded.source_metadata_json,
+                    audio_artifact_path = excluded.audio_artifact_path,
+                    deletion_state = 'active'
                 """,
                 (
                     record.id,
@@ -102,49 +127,112 @@ class SQLitePersistence(PersistencePort):
                     record.selected_variant.value,
                     record.status.value,
                     record.error,
+                    record.failure_code,
+                    json.dumps(record.source_metadata, sort_keys=True, separators=(",", ":")),
                     record.audio_artifact_path,
                 ),
             )
 
         return self._executor.submit(write, transaction=True)
 
-    def list_history(self, *, offset: int = 0, limit: int = 50) -> Future[HistoryPage]:
-        _validate_page(offset, limit)
-
+    def list_history(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        search: str | None = None,
+        offset: int = 0,
+    ) -> Future[HistoryPage]:
         def read(connection: sqlite3.Connection) -> HistoryPage:
+            _validate_page(offset, limit)
+            if cursor is not None and not isinstance(cursor, str):
+                raise InvalidInputError("history cursor must be text or None")
+            if search is not None and not isinstance(search, str):
+                raise InvalidInputError("history search must be text or None")
+            clauses: list[str] = []
+            parameters: list[object] = []
+            if cursor is not None:
+                created_at, record_id = _decode_cursor(cursor)
+                clauses.append("(created_at < ? OR (created_at = ? AND id < ?))")
+                parameters.extend((created_at, created_at, record_id))
+            if search and search.strip():
+                pattern = f"%{search.strip()}%"
+                clauses.append(
+                    "(source LIKE ? OR original_text LIKE ? OR enhanced_text LIKE ? "
+                    "OR source_metadata_json LIKE ?)"
+                )
+                parameters.extend((pattern, pattern, pattern, pattern))
             rows = connection.execute(
-                """
+                f"""
                 SELECT id, source, created_at, duration, original_text, enhanced_text,
-                       selected_variant, status, error, audio_artifact_path
+                       selected_variant, status, error, failure_code,
+                       source_metadata_json, audio_artifact_path
                 FROM history
+                {"WHERE " + " AND ".join(clauses) if clauses else ""}
                 ORDER BY created_at DESC, id DESC
                 LIMIT ? OFFSET ?
                 """,
-                (limit + 1, offset),
+                (*parameters, limit + 1, offset if cursor is None else 0),
             ).fetchall()
             records = tuple(_history_from_row(row) for row in rows[:limit])
-            return HistoryPage(records, offset, limit, len(rows) > limit)
+            next_cursor = None
+            if len(rows) > limit and records:
+                last = records[-1]
+                next_cursor = _cursor_value(_timestamp(last.created_at), last.id)
+            return HistoryPage(records, offset, limit, len(rows) > limit, next_cursor)
 
         return self._executor.submit(read)
 
     def delete_history(self, record_id: str) -> Future[None]:
-        if not isinstance(record_id, str) or not record_id.strip():
-            raise InvalidInputError("history ID must not be empty")
-
         def delete(connection: sqlite3.Connection) -> None:
+            _require_record_id(record_id)
             connection.execute("DELETE FROM history WHERE id = ?", (record_id,))
 
         return self._executor.submit(delete, transaction=True)
+
+    def mark_history_deleting(self, record_id: str) -> Future[None]:
+        def mark(connection: sqlite3.Connection) -> None:
+            _require_record_id(record_id)
+            connection.execute(
+                "UPDATE history SET deletion_state = 'pending' WHERE id = ?", (record_id,)
+            )
+
+        return self._executor.submit(mark, transaction=True)
+
+    def finalize_history_deletion(self, record_id: str) -> Future[None]:
+        def finalize(connection: sqlite3.Connection) -> None:
+            _require_record_id(record_id)
+            connection.execute(
+                "DELETE FROM history WHERE id = ? AND deletion_state = 'pending'",
+                (record_id,),
+            )
+
+        return self._executor.submit(finalize, transaction=True)
+
+    def update_history_variant(
+        self, record_id: str, selected_variant: TranscriptVariant
+    ) -> Future[None]:
+        def update(connection: sqlite3.Connection) -> None:
+            _require_record_id(record_id)
+            if not isinstance(selected_variant, TranscriptVariant):
+                raise InvalidInputError("selected variant must be a TranscriptVariant")
+            connection.execute(
+                "UPDATE history SET selected_variant = ? WHERE id = ?",
+                (selected_variant.value, record_id),
+            )
+
+        return self._executor.submit(update, transaction=True)
 
     def upsert_dictionary(self, entry: DictionaryEntry) -> Future[None]:
         def write(connection: sqlite3.Connection) -> None:
             connection.execute(
                 """
                 INSERT INTO dictionary_entries (
-                    id, phrase, replacement, created_at, updated_at, enabled
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    id, phrase, canonical_key, replacement, created_at, updated_at, enabled
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     phrase = excluded.phrase,
+                    canonical_key = excluded.canonical_key,
                     replacement = excluded.replacement,
                     created_at = excluded.created_at,
                     updated_at = excluded.updated_at,
@@ -153,6 +241,7 @@ class SQLitePersistence(PersistencePort):
                 (
                     entry.id,
                     entry.phrase,
+                    canonical_dictionary_key(entry.phrase),
                     entry.replacement,
                     _timestamp(entry.created_at),
                     _timestamp(entry.updated_at),
@@ -176,10 +265,9 @@ class SQLitePersistence(PersistencePort):
         return self._executor.submit(read)
 
     def delete_dictionary(self, entry_id: str) -> Future[None]:
-        if not isinstance(entry_id, str) or not entry_id.strip():
-            raise InvalidInputError("dictionary ID must not be empty")
-
         def delete(connection: sqlite3.Connection) -> None:
+            if not isinstance(entry_id, str) or not entry_id.strip():
+                raise InvalidInputError("dictionary ID must not be empty")
             connection.execute("DELETE FROM dictionary_entries WHERE id = ?", (entry_id,))
 
         return self._executor.submit(delete, transaction=True)
@@ -193,97 +281,215 @@ class SQLitePersistence(PersistencePort):
                 FROM settings WHERE singleton = 1
                 """
             ).fetchone()
-            if row is None:
-                return None
-            return Settings(
-                language=row[0],
-                selected_mode=row[1],
-                hotkeys=_decode_mapping(row[2], "hotkeys"),
-                auto_copy=bool(row[3]),
-                model_preferences=_decode_mapping(row[4], "model preferences"),
-                audio_preferences=_decode_mapping(row[5], "audio preferences"),
-            )
+            return _settings_from_row(row) if row is not None else None
 
         return self._executor.submit(read)
 
     def save_settings(self, settings: Settings) -> Future[None]:
-        payload = (
-            settings.language,
-            settings.selected_mode,
-            json.dumps(settings.hotkeys, sort_keys=True, separators=(",", ":")),
-            int(settings.auto_copy),
-            json.dumps(settings.model_preferences, sort_keys=True, separators=(",", ":")),
-            json.dumps(settings.audio_preferences, sort_keys=True, separators=(",", ":")),
-        )
-
         def write(connection: sqlite3.Connection) -> None:
-            connection.execute(
-                """
-                INSERT INTO settings (
-                    singleton, language, selected_mode, hotkeys_json, auto_copy,
-                    model_preferences_json, audio_preferences_json
-                ) VALUES (1, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(singleton) DO UPDATE SET
-                    language = excluded.language,
-                    selected_mode = excluded.selected_mode,
-                    hotkeys_json = excluded.hotkeys_json,
-                    auto_copy = excluded.auto_copy,
-                    model_preferences_json = excluded.model_preferences_json,
-                    audio_preferences_json = excluded.audio_preferences_json
-                """,
-                payload,
-            )
+            _write_settings(connection, settings)
 
         return self._executor.submit(write, transaction=True)
+
+    def update_settings(self, changes: Mapping[str, object]) -> Future[Settings]:
+        def update(connection: sqlite3.Connection) -> Settings:
+            if not isinstance(changes, Mapping) or not changes:
+                raise InvalidInputError("settings changes must not be empty")
+            allowed = {
+                "language",
+                "selected_mode",
+                "auto_copy",
+                "hotkeys.start_stop",
+                "hotkeys.cancel",
+            }
+            unknown = set(changes) - allowed
+            if unknown:
+                raise InvalidInputError(
+                    f"unsupported settings fields: {', '.join(sorted(unknown))}"
+                )
+            row = connection.execute(
+                "SELECT language, selected_mode, hotkeys_json, auto_copy, "
+                "model_preferences_json, audio_preferences_json FROM settings WHERE singleton = 1"
+            ).fetchone()
+            current = _settings_from_row(row) if row is not None else Settings()
+            hotkeys = dict(current.hotkeys)
+            values: dict[str, object] = {
+                "language": current.language,
+                "selected_mode": current.selected_mode,
+                "hotkeys": hotkeys,
+                "auto_copy": current.auto_copy,
+                "model_preferences": current.model_preferences,
+                "audio_preferences": current.audio_preferences,
+            }
+            for key, value in changes.items():
+                if key.startswith("hotkeys."):
+                    hotkeys[key.removeprefix("hotkeys.")] = value
+                else:
+                    values[key] = value
+            updated = Settings(**values)
+            _write_settings(connection, updated)
+            return updated
+
+        return self._executor.submit(update, transaction=True)
 
     def close(self) -> Future[None]:
         return self._executor.close()
 
     def _startup(self, connection: sqlite3.Connection) -> None:
-        _apply_migrations(connection, self._migration_dir)
-        for hook in self._reconciliation_hooks:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
+        _apply_migrations(
+            connection,
+            self._migration_dir,
+            required=REQUIRED_MIGRATIONS if self._require_package_contract else (),
+        )
+        if self._require_package_contract:
+            _validate_schema_contract(connection)
+        connection.commit()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            _hydrate_dictionary_keys(connection)
+            for hook in self._reconciliation_hooks:
                 hook(connection)
-                connection.commit()
-            except BaseException:
-                connection.rollback()
-                raise
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
-def _apply_migrations(connection: sqlite3.Connection, migration_dir: Path) -> None:
+def _require_record_id(record_id: str) -> None:
+    if not isinstance(record_id, str) or not record_id.strip():
+        raise InvalidInputError("history ID must not be empty")
+
+
+def _apply_migrations(
+    connection: sqlite3.Connection, migration_dir: Path, *, required: Sequence[str] = ()
+) -> None:
+    if not migration_dir.is_dir():
+        raise PersistenceError(f"SQLite migrations are missing: {migration_dir}")
+    missing = [name for name in required if not (migration_dir / name).is_file()]
+    if missing:
+        raise PersistenceError("SQLite migrations are missing: " + ", ".join(missing))
     connection.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations "
-        "(version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL)"
+        "(version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL, checksum TEXT)"
     )
-    applied = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(schema_migrations)")}
+    if "checksum" not in columns:
+        connection.execute("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT")
+    applied = {
+        row[0]: row[1]
+        for row in connection.execute("SELECT version, checksum FROM schema_migrations")
+    }
     migrations: list[tuple[int, Path]] = []
     for path in migration_dir.glob("*.sql"):
         match = _MIGRATION_NAME.match(path.name)
         if match is None:
             raise PersistenceError(f"invalid migration filename: {path.name}")
         migrations.append((int(match.group(1)), path))
-    versions = [version for version, _ in sorted(migrations)]
+    migrations.sort()
+    versions = [version for version, _ in migrations]
+    if not migrations:
+        raise PersistenceError(f"SQLite migrations are missing: {migration_dir}")
     if len(versions) != len(set(versions)):
         raise PersistenceError("duplicate SQLite migration version")
-    for version, path in sorted(migrations):
+    available = dict(migrations)
+    unknown = sorted(version for version in applied if version not in available)
+    if unknown:
+        raise PersistenceError(
+            "SQLite migration files are missing for applied versions: "
+            + ", ".join(map(str, unknown))
+        )
+    for version, path in migrations:
+        checksum = hashlib.sha256(path.read_bytes()).hexdigest()
         if version in applied:
+            if applied[version] not in (None, checksum):
+                raise PersistenceError(f"SQLite migration drift detected for {path.name}")
+            if applied[version] is None:
+                connection.execute(
+                    "UPDATE schema_migrations SET checksum = ? WHERE version = ?",
+                    (checksum, version),
+                )
             continue
         script = path.read_text(encoding="utf-8")
         transaction = (
             "BEGIN IMMEDIATE;\n"
             + script
-            + "\nINSERT INTO schema_migrations(version, applied_at) VALUES ("
+            + "\nINSERT INTO schema_migrations(version, applied_at, checksum) VALUES ("
             + str(version)
             + ", '"
             + _timestamp(datetime.now(UTC))
+            + "', '"
+            + checksum
             + "');\nCOMMIT;"
         )
         try:
             connection.executescript(transaction)
-        except BaseException:
+        except BaseException as error:
             connection.rollback()
-            raise
+            raise PersistenceError(f"SQLite migration {path.name} failed: {error}") from error
+
+
+def _validate_schema_contract(connection: sqlite3.Connection) -> None:
+    tables = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    missing = EXPECTED_TABLES - tables
+    if missing:
+        raise PersistenceError(
+            "SQLite schema contract is missing tables: " + ", ".join(sorted(missing))
+        )
+    expected_versions = {int(name.split("_", 1)[0]) for name in REQUIRED_MIGRATIONS}
+    applied = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
+    if applied != expected_versions:
+        raise PersistenceError("SQLite schema contract has an incomplete migration set")
+
+
+def _hydrate_dictionary_keys(connection: sqlite3.Connection) -> None:
+    for entry_id, phrase in connection.execute("SELECT id, phrase FROM dictionary_entries"):
+        connection.execute(
+            "UPDATE dictionary_entries SET canonical_key = ? WHERE id = ?",
+            (canonical_dictionary_key(phrase), entry_id),
+        )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS dictionary_canonical_key_idx "
+        "ON dictionary_entries(canonical_key)"
+    )
+
+
+def _write_settings(connection: sqlite3.Connection, settings: Settings) -> None:
+    connection.execute(
+        """
+        INSERT INTO settings (
+            singleton, language, selected_mode, hotkeys_json, auto_copy,
+            model_preferences_json, audio_preferences_json
+        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET
+            language = excluded.language,
+            selected_mode = excluded.selected_mode,
+            hotkeys_json = excluded.hotkeys_json,
+            auto_copy = excluded.auto_copy,
+            model_preferences_json = excluded.model_preferences_json,
+            audio_preferences_json = excluded.audio_preferences_json
+        """,
+        (
+            settings.language,
+            settings.selected_mode,
+            json.dumps(settings.hotkeys, sort_keys=True, separators=(",", ":")),
+            int(settings.auto_copy),
+            json.dumps(settings.model_preferences, sort_keys=True, separators=(",", ":")),
+            json.dumps(settings.audio_preferences, sort_keys=True, separators=(",", ":")),
+        ),
+    )
+
+
+def _settings_from_row(row: sqlite3.Row | tuple[Any, ...]) -> Settings:
+    return Settings(
+        language=row[0],
+        selected_mode=row[1],
+        hotkeys=_decode_mapping(row[2], "hotkeys"),
+        auto_copy=bool(row[3]),
+        model_preferences=_decode_mapping(row[4], "model preferences"),
+        audio_preferences=_decode_mapping(row[5], "audio preferences"),
+    )
 
 
 def _history_from_row(row: sqlite3.Row | tuple[Any, ...]) -> HistoryRecord:
@@ -297,7 +503,9 @@ def _history_from_row(row: sqlite3.Row | tuple[Any, ...]) -> HistoryRecord:
         selected_variant=TranscriptVariant(row[6]),
         status=HistoryStatus(row[7]),
         error=row[8],
-        audio_artifact_path=row[9],
+        failure_code=row[9],
+        source_metadata=_decode_mapping(row[10], "history source metadata"),
+        audio_artifact_path=row[11],
     )
 
 

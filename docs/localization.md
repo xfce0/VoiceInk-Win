@@ -11,16 +11,16 @@ Translation keys in `voiceink_win.presentation.localization` are stable API
 within the presentation layer. New UI text should be added to the catalog and
 looked up by key rather than embedded in a widget.
 
-## Future Settings Persistence
+## SQLite Locale Hydration
 
-The Settings page should persist only the locale value, for example under the
-`language` key in the application's `QSettings` namespace. At application
-startup, read that value, pass it through `resolve_locale`, and initialize
-`LocaleConfig` before constructing the windows. When the Settings control
-changes language on the GUI thread, call `LocaleConfig.set_locale`; after the
-change succeeds, write `LocaleConfig.locale.value` back to `QSettings`.
-Worker-thread calls are asynchronous requests and return whether a different
-locale was queued.
+The desktop composition hydrates the shared `LocaleConfig` from the persisted
+SQLite `settings.language` field through the asynchronous Settings page flow.
+The value is normalized through `resolve_locale` before widget text is
+rendered. A language change updates only the `language` field through the
+field-level settings controller, so concurrent mode/auto-copy/hotkey updates
+are not lost. Worker-thread persistence calls return Futures; queued Qt
+callbacks apply the locale only while the page generation is current.
 
-Persistence is intentionally not part of this foundation. Until Settings owns
-that read/write flow, every launch defaults deterministically to English.
+Missing or invalid persistence leaves the presentation in deterministic English
+and shows the persistence-unavailable state rather than raising synchronously
+from a widget callback.

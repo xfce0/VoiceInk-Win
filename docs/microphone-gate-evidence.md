@@ -4,9 +4,11 @@
 
 This register is evidence and decision bookkeeping for
 `rfcs/microphone-recording.md` and `spec/features/005-microphone-recording.md`.
-It does not approve production implementation. At repository HEAD
-`751f88ca130dc10fcc424a352ad169ee8f1b5bdb`, microphone implementation and
-enablement remain blocked:
+It does not approve production implementation. The reviewed evidence baseline
+is `751f88ca130dc10fcc424a352ad169ee8f1b5bdb`; the current reviewed commit is
+`0c4fa20e41627a0b843bc418d1b9c47ff994f6bf`. The current commit changes
+persistence/UI hardening only. Microphone implementation and enablement remain
+blocked:
 
 ```text
 implementation_allowed: false
@@ -23,7 +25,9 @@ and no SHA-256 value is estimated.
 
 ## Evidence Baseline
 
-The baseline is the immutable repository commit `751f88ca130dc10fcc424a352ad169ee8f1b5bdb`.
+The evidence baseline remains the immutable repository commit
+`751f88ca130dc10fcc424a352ad169ee8f1b5bdb`; current-commit wording above does
+not replace baseline hashes.
 The earlier documentation branches reviewed were:
 
 | Ref | Use in this register |

@@ -98,6 +98,7 @@ from .persistence import (
     Settings,
     SettingsPort,
     TranscriptionSource,
+    canonical_dictionary_key,
 )
 from .ports import AsrRuntime
 from .shell import ShellSnapshot, ShellState
@@ -142,6 +143,7 @@ __all__ = [
     "Settings",
     "SettingsPort",
     "TranscriptionSource",
+    "canonical_dictionary_key",
     "ShellSnapshot",
     "ShellState",
     "AsrTimeoutError",

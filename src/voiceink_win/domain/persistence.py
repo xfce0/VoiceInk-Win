@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import unicodedata
 from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -51,6 +52,7 @@ class HistoryStatus(StrEnum):
     PENDING = "pending"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class PersistenceError(RuntimeError):
@@ -76,6 +78,8 @@ class HistoryRecord:
     selected_variant: TranscriptVariant = TranscriptVariant.ORIGINAL
     status: HistoryStatus = HistoryStatus.COMPLETED
     error: str | None = None
+    failure_code: str | None = None
+    source_metadata: Mapping[str, object] = field(default_factory=dict)
     audio_artifact_path: str | None = None
 
     def __post_init__(self) -> None:
@@ -100,6 +104,13 @@ class HistoryRecord:
             raise InvalidInputError("history status must be a HistoryStatus")
         if self.error is not None and not isinstance(self.error, str):
             raise InvalidInputError("history error must be a string or None")
+        if self.failure_code is not None and not isinstance(self.failure_code, str):
+            raise InvalidInputError("history failure code must be a string or None")
+        object.__setattr__(
+            self,
+            "source_metadata",
+            _json_mapping(self.source_metadata, "history source metadata"),
+        )
         if self.audio_artifact_path is not None and not isinstance(self.audio_artifact_path, str):
             raise InvalidInputError("audio artifact path must be a string or None")
         object.__setattr__(self, "created_at", _normalise_datetime(self.created_at, "created_at"))
@@ -112,6 +123,12 @@ class HistoryPage:
     offset: int
     limit: int
     has_more: bool
+    next_cursor: str | None = None
+
+
+def canonical_dictionary_key(phrase: str) -> str:
+    """Return the stable comparison key while retaining the display phrase."""
+    return unicodedata.normalize("NFKC", phrase).casefold()
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,9 +185,24 @@ class Settings:
 class HistoryPort(Protocol):
     def upsert_history(self, record: HistoryRecord) -> Future[None]: ...
 
-    def list_history(self, *, offset: int = 0, limit: int = 50) -> Future[HistoryPage]: ...
+    def list_history(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        search: str | None = None,
+        offset: int = 0,
+    ) -> Future[HistoryPage]: ...
 
     def delete_history(self, record_id: str) -> Future[None]: ...
+
+    def mark_history_deleting(self, record_id: str) -> Future[None]: ...
+
+    def finalize_history_deletion(self, record_id: str) -> Future[None]: ...
+
+    def update_history_variant(
+        self, record_id: str, selected_variant: TranscriptVariant
+    ) -> Future[None]: ...
 
 
 class DictionaryPort(Protocol):
@@ -185,6 +217,8 @@ class SettingsPort(Protocol):
     def get_settings(self) -> Future[Settings | None]: ...
 
     def save_settings(self, settings: Settings) -> Future[None]: ...
+
+    def update_settings(self, changes: Mapping[str, object]) -> Future[Settings]: ...
 
 
 class PersistencePort(HistoryPort, DictionaryPort, SettingsPort, Protocol):

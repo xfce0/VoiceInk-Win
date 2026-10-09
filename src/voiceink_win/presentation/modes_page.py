@@ -44,6 +44,9 @@ class ModesPage(QWidget):
         self._bridge = FutureBridge(self)
         self._settings = Settings()
         self._loading = False
+        self._generation = 0
+        self._save_sequence = 0
+        self._disposed = False
         self._build_ui()
         self.refresh()
 
@@ -61,6 +64,7 @@ class ModesPage(QWidget):
 
         form = QFormLayout()
         self._mode_combo = QComboBox(self)
+        self._mode_combo.setAccessibleName("Selected transcription mode")
         for mode_id in MODE_IDS:
             self._mode_combo.addItem(mode_id, mode_id)
         self._mode_combo.currentIndexChanged.connect(self._mode_changed)
@@ -87,15 +91,26 @@ class ModesPage(QWidget):
         return label
 
     def refresh(self) -> None:
+        if self._disposed:
+            return
+        self._generation += 1
+        generation = self._generation
         if self._persistence is None:
             self._apply_settings(Settings(), unavailable=True)
             return
         self._loading = True
         self._mode_combo.setEnabled(False)
         self._status.setText(self._t(TranslationKey.COMMON_LOADING))
-        self._bridge.watch(self._persistence.get_settings(), self._loaded)
+        self._bridge.watch(
+            self._persistence.get_settings(),
+            lambda settings, error: self._loaded(generation, settings, error),
+        )
 
-    def _loaded(self, settings: Settings | None, error: BaseException | None) -> None:
+    def _loaded(
+        self, generation: int, settings: Settings | None, error: BaseException | None
+    ) -> None:
+        if self._disposed or generation != self._generation:
+            return
         self._loading = False
         if error is not None:
             self._mode_combo.setEnabled(False)
@@ -123,22 +138,23 @@ class ModesPage(QWidget):
         self._render_detail()
 
     def _mode_changed(self, index: int) -> None:
-        if self._loading or self._persistence is None or index < 0:
+        if self._loading or self._disposed or self._persistence is None or index < 0:
             return
         selected_mode = self._mode_combo.itemData(index)
-        self._settings = Settings(
-            language=self._settings.language,
-            selected_mode=selected_mode,
-            hotkeys=self._settings.hotkeys,
-            auto_copy=self._settings.auto_copy,
-            model_preferences=self._settings.model_preferences,
-            audio_preferences=self._settings.audio_preferences,
-        )
+        self._save_sequence += 1
+        sequence = self._save_sequence
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
-        self._bridge.watch(self._persistence.save_settings(self._settings), self._saved)
+        self._bridge.watch(
+            self._persistence.update_settings({"selected_mode": selected_mode}),
+            lambda result, error: self._saved(sequence, result, error),
+        )
         self._render_detail()
 
-    def _saved(self, _result: None, error: BaseException | None) -> None:
+    def _saved(self, sequence: int, result: Settings | None, error: BaseException | None) -> None:
+        if self._disposed or sequence != self._save_sequence:
+            return
+        if result is not None:
+            self._settings = result
         self._status.setText(
             self._t(TranslationKey.COMMON_ERROR if error else TranslationKey.COMMON_SAVED)
         )
@@ -164,6 +180,8 @@ class ModesPage(QWidget):
         return translate(key, self._locale_config.locale, **values)
 
     def dispose(self) -> None:
+        self._disposed = True
+        self._generation += 1
         try:
             self._locale_config.locale_changed.disconnect(self._locale_callback)
         except (RuntimeError, TypeError):

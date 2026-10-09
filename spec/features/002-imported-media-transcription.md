@@ -4,7 +4,7 @@
 
 Status: implemented.
 
-This feature accepts local audio/video files, normalizes them to the canonical audio contract, transcribes them through the foundation ASR port, and returns typed results. It excludes the PySide6 UI, microphone recording, streaming, history, and AI enhancement. The local implementation is intentional and covered by fake/injected behavior tests; native Windows smoke evidence is still pending and is not claimed by local macOS runs.
+This feature accepts local audio/video files, normalizes them to the canonical audio contract, transcribes them through the foundation ASR port, and returns typed results. It excludes microphone recording, streaming, and AI enhancement. The desktop composition may attach a HistoryPort; terminal results are persisted once after the cleanup fence. The local implementation is intentional and covered by fake/injected behavior tests; native Windows smoke evidence is still pending and is not claimed by local macOS runs.
 
 ## User Scenarios
 
@@ -74,6 +74,7 @@ Minimum terminal failure codes are `SourceChanged`, `ResourceLimitExceeded`, `No
 - Given a permanent input error, when processing ends, then the job is not retried.
 - Given any terminal state or a simulated process crash, when cleanup/sweep completes, then no-follow cleanup removes the workspace and partial artifacts within the 24-hour retention policy, fails closed on an external junction/symlink, and leaves the source file hash unchanged.
 - Given macOS without Windows APIs, CUDA, model weights, or a real runtime, when the fake-adapter suite runs, then all application tests pass.
+- Given an attached HistoryPort, when success, failure, or cancellation reaches the cleanup fence, then exactly one history record is submitted with source metadata, text variants, duration, status, and failure code where applicable; duplicate terminal observations do not duplicate the record.
 - Given a Windows runner with pinned FFmpeg, Parakeet CPU artifacts, and a licensed fixture, when the native smoke command runs, then normalization, non-empty transcription, diagnostics, immutable snapshot checks, and cleanup all pass. Missing runtime, model, endpoint, or fixture configuration fails the smoke with a required-environment error and never reports a synthetic-only pass.
 
 ## Test Plan

@@ -44,6 +44,8 @@ class SettingsPage(QWidget):
         self._settings = Settings()
         self._loading = False
         self._save_sequence = 0
+        self._generation = 0
+        self._disposed = False
         self._build_ui()
         self.refresh()
 
@@ -67,6 +69,7 @@ class SettingsPage(QWidget):
         form = QFormLayout()
         self._language_label = self._form_label(form, TranslationKey.SETTINGS_LANGUAGE)
         self._language_combo = QComboBox(content)
+        self._language_combo.setAccessibleName("Interface language")
         for locale in SUPPORTED_LOCALES:
             self._language_combo.addItem(locale.value, locale.value)
         self._language_combo.currentIndexChanged.connect(self._language_changed)
@@ -76,27 +79,37 @@ class SettingsPage(QWidget):
         self._auto_copy_label = QLabel(content)
         self._auto_copy_label.setObjectName("metadata")
         self._auto_copy = QCheckBox(content)
-        self._auto_copy.toggled.connect(lambda _checked: self._save_current())
+        self._auto_copy.setAccessibleName("Copy completed transcripts automatically")
+        self._auto_copy.toggled.connect(lambda checked: self._save_field("auto_copy", checked))
         form.addRow(self._auto_copy_label, self._auto_copy)
 
         self._mode_label = QLabel(content)
         self._mode_label.setObjectName("metadata")
         self._mode_combo = QComboBox(content)
+        self._mode_combo.setAccessibleName("Selected transcription mode")
         for mode_id in MODE_IDS:
             self._mode_combo.addItem(mode_id, mode_id)
-        self._mode_combo.currentIndexChanged.connect(lambda _index: self._save_current())
+        self._mode_combo.currentIndexChanged.connect(
+            lambda index: self._save_field("selected_mode", self._mode_combo.itemData(index))
+        )
         form.addRow(self._mode_label, self._mode_combo)
 
         self._start_hotkey_label = QLabel(content)
         self._start_hotkey_label.setObjectName("metadata")
         self._start_hotkey = QLineEdit(content)
-        self._start_hotkey.editingFinished.connect(self._save_current)
+        self._start_hotkey.setAccessibleName("Start and stop hotkey")
+        self._start_hotkey.editingFinished.connect(
+            lambda: self._save_field("hotkeys.start_stop", self._start_hotkey.text().strip())
+        )
         form.addRow(self._start_hotkey_label, self._start_hotkey)
 
         self._cancel_hotkey_label = QLabel(content)
         self._cancel_hotkey_label.setObjectName("metadata")
         self._cancel_hotkey = QLineEdit(content)
-        self._cancel_hotkey.editingFinished.connect(self._save_current)
+        self._cancel_hotkey.setAccessibleName("Cancel hotkey")
+        self._cancel_hotkey.editingFinished.connect(
+            lambda: self._save_field("hotkeys.cancel", self._cancel_hotkey.text().strip())
+        )
         form.addRow(self._cancel_hotkey_label, self._cancel_hotkey)
         root.addLayout(form)
 
@@ -133,15 +146,26 @@ class SettingsPage(QWidget):
         return label
 
     def refresh(self) -> None:
+        if self._disposed:
+            return
+        self._generation += 1
+        generation = self._generation
         if self._persistence is None:
             self._apply_settings(Settings(), unavailable=True)
             return
         self._loading = True
         self._set_controls_enabled(False)
         self._status.setText(self._t(TranslationKey.COMMON_LOADING))
-        self._bridge.watch(self._persistence.get_settings(), self._loaded)
+        self._bridge.watch(
+            self._persistence.get_settings(),
+            lambda settings, error: self._loaded(generation, settings, error),
+        )
 
-    def _loaded(self, settings: Settings | None, error: BaseException | None) -> None:
+    def _loaded(
+        self, generation: int, settings: Settings | None, error: BaseException | None
+    ) -> None:
+        if self._disposed or generation != self._generation:
+            return
         self._loading = False
         if error is not None:
             self._set_controls_enabled(False)
@@ -195,42 +219,36 @@ class SettingsPage(QWidget):
             control.setEnabled(enabled)
 
     def _language_changed(self, index: int) -> None:
-        if self._loading or index < 0:
+        if self._loading or self._disposed or index < 0:
             return
         self._locale_config.set_locale(self._language_combo.itemData(index))
-        self._save_current()
+        self._save_field("language", self._language_combo.itemData(index))
 
     def _save_current(self) -> None:
-        if self._loading or self._persistence is None or not self._language_combo.isEnabled():
+        if self._loading or self._disposed or self._persistence is None:
             return
-        language = str(self._language_combo.currentData())
-        selected_mode = self._mode_combo.currentData()
-        self._settings = Settings(
-            language=language,
-            selected_mode=selected_mode,
-            hotkeys={
-                "start_stop": self._start_hotkey.text().strip(),
-                "cancel": self._cancel_hotkey.text().strip(),
-            },
-            auto_copy=self._auto_copy.isChecked(),
-            model_preferences=self._settings.model_preferences,
-            audio_preferences=self._settings.audio_preferences,
-        )
+        self._save_field("language", self._language_combo.currentData())
+
+    def _save_field(self, field: str, value: object) -> None:
+        if self._loading or self._disposed or self._persistence is None:
+            return
         self._save_sequence += 1
         sequence = self._save_sequence
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
         self._bridge.watch(
-            self._persistence.save_settings(self._settings),
+            self._persistence.update_settings({field: value}),
             lambda result, error: self._saved(sequence, result, error),
         )
 
-    def _saved(self, sequence: int, _result: None, error: BaseException | None) -> None:
-        if sequence != self._save_sequence:
+    def _saved(self, sequence: int, result: Settings | None, error: BaseException | None) -> None:
+        if self._disposed or sequence != self._save_sequence:
             return
         if error is not None:
             self._status.setText(self._t(TranslationKey.COMMON_ERROR))
             self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
         else:
+            if result is not None:
+                self._settings = result
             self._status.setText(self._t(TranslationKey.COMMON_SAVED))
 
     def _preference_text(self, preferences: dict[str, object]) -> str:
@@ -269,6 +287,8 @@ class SettingsPage(QWidget):
         return translate(key, self._locale_config.locale, **values)
 
     def dispose(self) -> None:
+        self._disposed = True
+        self._generation += 1
         try:
             self._locale_config.locale_changed.disconnect(self._locale_callback)
         except (RuntimeError, TypeError):

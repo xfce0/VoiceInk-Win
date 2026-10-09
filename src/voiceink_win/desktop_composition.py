@@ -87,7 +87,7 @@ class _DesktopComposition:
             )
             from voiceink_win.infrastructure import WindowsAdapterRequiredError
 
-            backend = build_application_from_environment()
+            backend = build_application_from_environment(history_port=self.persistence)
             backend.start()
         except (
             ConfigurationError,
@@ -146,6 +146,7 @@ def build_desktop_composition() -> DesktopComposition:
     artifacts = AudioArtifactStore(paths.audio)
     transcribe_controller = TranscribePageController(
         None,
+        history_port=persistence,
         availability=TranscribeAvailability.LOADING,
         unavailable_message="Loading imported-media transcription runtime...",
     )

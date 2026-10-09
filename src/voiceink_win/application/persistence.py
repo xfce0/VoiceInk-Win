@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import Future
 
 from voiceink_win.domain.persistence import (
@@ -25,11 +26,32 @@ class PersistenceService(HistoryPort, DictionaryPort, SettingsPort):
     def upsert_history(self, record: HistoryRecord) -> Future[None]:
         return self._persistence.upsert_history(record)
 
-    def list_history(self, *, offset: int = 0, limit: int = 50) -> Future[HistoryPage]:
-        return self._persistence.list_history(offset=offset, limit=limit)
+    def list_history(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        search: str | None = None,
+        offset: int = 0,
+    ) -> Future[HistoryPage]:
+        try:
+            return self._persistence.list_history(
+                cursor=cursor, limit=limit, search=search, offset=offset
+            )
+        except TypeError:
+            return self._persistence.list_history(offset=offset, limit=limit)
 
     def delete_history(self, record_id: str) -> Future[None]:
         return self._persistence.delete_history(record_id)
+
+    def mark_history_deleting(self, record_id: str) -> Future[None]:
+        return self._persistence.mark_history_deleting(record_id)
+
+    def finalize_history_deletion(self, record_id: str) -> Future[None]:
+        return self._persistence.finalize_history_deletion(record_id)
+
+    def update_history_variant(self, record_id: str, selected_variant) -> Future[None]:
+        return self._persistence.update_history_variant(record_id, selected_variant)
 
     def upsert_dictionary(self, entry: DictionaryEntry) -> Future[None]:
         return self._persistence.upsert_dictionary(entry)
@@ -45,6 +67,9 @@ class PersistenceService(HistoryPort, DictionaryPort, SettingsPort):
 
     def save_settings(self, settings: Settings) -> Future[None]:
         return self._persistence.save_settings(settings)
+
+    def update_settings(self, changes: Mapping[str, object]) -> Future[Settings]:
+        return self._persistence.update_settings(changes)
 
     def ready(self) -> Future[None]:
         return self._persistence.ready()
