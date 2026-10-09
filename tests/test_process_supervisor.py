@@ -192,33 +192,6 @@ def test_supervisor_rechecks_artifact_identity_immediately_before_popen(tmp_path
         SubprocessSupervisor(config, verifier=ChangingVerifier()).start()
 
 
-def test_subprocess_config_adds_no_warmup_only_for_packaged_smoke(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    executable = tmp_path / "sidecar"
-    model = tmp_path / "model.gguf"
-    executable_hash = write_artifact(executable, b"executable")
-    model_hash = write_artifact(model, b"model")
-    config = SubprocessConfig(
-        executable=executable,
-        model=model,
-        executable_sha256=executable_hash,
-        model_sha256=model_hash,
-        executable_manifest=manifest(executable, executable_hash),
-        model_manifest=manifest(model, model_hash),
-        endpoint="http://127.0.0.1:8123",
-    )
-
-    monkeypatch.delenv("VOICEINK_SIDECAR_NO_WARMUP", raising=False)
-    assert "--no-warmup" not in config.argv()
-
-    monkeypatch.setenv("VOICEINK_SIDECAR_NO_WARMUP", "1")
-    assert config.argv()[-1] == "--no-warmup"
-
-    monkeypatch.setenv("VOICEINK_SIDECAR_VERBOSE", "1")
-    assert config.argv()[1] == "--verbose"
-
-
 def test_supervisor_credential_setup_failure_is_primary_and_clears_probe(tmp_path: Path) -> None:
     executable = tmp_path / "sidecar"
     model = tmp_path / "model.gguf"

@@ -318,10 +318,6 @@ class SubprocessConfig:
             "--device",
             self.backend,
         ]
-        if os.environ.get("VOICEINK_SIDECAR_VERBOSE") == "1":
-            args.insert(1, "--verbose")
-        if os.environ.get("VOICEINK_SIDECAR_NO_WARMUP") == "1":
-            args.append("--no-warmup")
         args.extend(self.extra_args)
         return args
 
@@ -378,7 +374,7 @@ class UrllibReadinessProbe:
                     isinstance(payload, dict)
                     and payload.get("ready") is True
                     and isinstance(payload.get("capabilities"), list)
-                    and "transcription" in payload["capabilities"]
+                    and "asr" in payload["capabilities"]
                     and _ready_device_matches_backend(payload.get("device"), self._expected_backend)
                 )
         except (HTTPError, URLError, OSError, TimeoutError, ValueError, UnicodeDecodeError):
@@ -492,16 +488,8 @@ class SubprocessSupervisor:
             kwargs = {
                 "shell": False,
                 "stdin": subprocess.DEVNULL,
-                "stdout": (
-                    None
-                    if os.environ.get("VOICEINK_SIDECAR_STDERR") == "inherit"
-                    else subprocess.DEVNULL
-                ),
-                "stderr": (
-                    None
-                    if os.environ.get("VOICEINK_SIDECAR_STDERR") == "inherit"
-                    else subprocess.DEVNULL
-                ),
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
                 "env": sidecar_environment,
             }
             if os.name != "nt":

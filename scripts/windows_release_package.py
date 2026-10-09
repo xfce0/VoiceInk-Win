@@ -29,7 +29,7 @@ DEFAULT_REPORT = ROOT / "release" / "windows-release-smoke.json"
 SIDECAR_ID = "nemo-speech-cpp-windows-amd64"
 MODEL_ID = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
 DOWNLOAD_TIMEOUT_SECONDS = 300
-SMOKE_TIMEOUT_SECONDS = 1380
+SMOKE_TIMEOUT_SECONDS = 360
 
 
 class WindowsReleasePackageError(RuntimeError):
@@ -153,9 +153,6 @@ def _run_relocation_smoke(package: Path) -> None:
     ):
         environment.pop(name, None)
     environment["QT_QPA_PLATFORM"] = "offscreen"
-    environment["VOICEINK_SIDECAR_STDERR"] = "inherit"
-    environment["VOICEINK_SIDECAR_NO_WARMUP"] = "1"
-    environment["VOICEINK_SIDECAR_VERBOSE"] = "1"
     process = subprocess.Popen(
         [str(executable), "--smoke", "--package-smoke"],
         cwd=package,

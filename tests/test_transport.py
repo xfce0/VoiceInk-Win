@@ -111,7 +111,7 @@ def test_readiness_probe_sends_nonce_header(monkeypatch) -> None:
                 {
                     "ready": True,
                     "device": "cpu",
-                    "capabilities": ["transcription"],
+                    "capabilities": ["asr"],
                 }
             ).encode()
 
@@ -193,9 +193,7 @@ def test_readiness_probe_attests_device_for_configured_backend(
 
         def read(self, amount: int) -> bytes:
             del amount
-            return json.dumps(
-                {"ready": True, "device": device, "capabilities": ["transcription"]}
-            ).encode()
+            return json.dumps({"ready": True, "device": device, "capabilities": ["asr"]}).encode()
 
     monkeypatch.setattr(
         "voiceink_win.infrastructure.process.urlopen",
@@ -211,7 +209,8 @@ def test_readiness_probe_attests_device_for_configured_backend(
     "payload",
     [
         {"ready": True},
-        {"ready": True, "capabilities": {"transcription": True}},
+        {"ready": True, "capabilities": {"asr": True}},
+        {"ready": True, "capabilities": ["transcription"]},
         {"ready": True, "capabilities": ["speech"]},
     ],
 )
