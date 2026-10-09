@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from voiceink_win.application import HistoryDeletionService, PersistenceService
 from voiceink_win.domain import (
     DictionaryEntry,
     HistoryRecord,
@@ -222,6 +223,88 @@ def test_migration_checksums_detect_drift_and_missing_package_files(tmp_path: Pa
     missing.close().result(timeout=2)
 
 
+def test_null_migration_checksum_fails_closed_without_rebaselining(tmp_path: Path) -> None:
+    database = tmp_path / "null-checksum.sqlite3"
+    first = SQLitePersistence(database)
+    first.ready().result(timeout=2)
+    first.close().result(timeout=2)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE schema_migrations SET checksum = NULL WHERE version = 1")
+        connection.commit()
+
+    reopened = SQLitePersistence(database)
+    with pytest.raises(PersistenceError, match="checksum is NULL"):
+        reopened.ready().result(timeout=2)
+    reopened.close().result(timeout=2)
+
+
+def test_history_search_escapes_like_metacharacters(store: SQLitePersistence) -> None:
+    store.upsert_history(_record("literal", datetime.now(UTC), "100%_literal")).result(timeout=2)
+    store.upsert_history(_record("wildcard", datetime.now(UTC), "100Xyliteral")).result(timeout=2)
+
+    page = store.list_history(search="100%_").result(timeout=2)
+
+    assert [record.id for record in page.records] == ["literal"]
+
+
+def test_pending_history_deletion_reconciles_after_failure_and_restart(tmp_path: Path) -> None:
+    database = tmp_path / "reconcile.sqlite3"
+    artifact_root = tmp_path / "audio"
+    artifacts = AudioArtifactStore(artifact_root)
+    artifacts.write("history/item.wav", b"audio")
+    sqlite = SQLitePersistence(database)
+    sqlite.ready().result(timeout=2)
+    sqlite.upsert_history(
+        HistoryRecord(
+            id="pending",
+            source=TranscriptionSource.IMPORTED_FILE,
+            original_text="pending",
+            audio_artifact_path="history/item.wav",
+        )
+    ).result(timeout=2)
+    sqlite.mark_history_deleting("pending").result(timeout=2)
+    sqlite.close().result(timeout=2)
+
+    reopened = SQLitePersistence(database)
+
+    def fail_cleanup(path: str | None) -> None:
+        raise OSError("temporary cleanup failure")
+
+    service = HistoryDeletionService(PersistenceService(reopened), fail_cleanup)
+    with pytest.raises(RuntimeError, match="pending history deletions failed"):
+        service.start().result(timeout=2)
+    assert [
+        item.record_id for item in reopened.list_pending_history_deletions().result(timeout=2)
+    ] == ["pending"]
+    service.close()
+    reopened.close().result(timeout=2)
+
+    restarted = SQLitePersistence(database)
+    restarted.ready().result(timeout=2)
+    recovery = HistoryDeletionService(PersistenceService(restarted), artifacts.delete)
+    recovery.start().result(timeout=2)
+    recovery.close()
+    assert restarted.list_history().result(timeout=2).records == ()
+    assert not (artifact_root / "history" / "item.wav").exists()
+    restarted.close().result(timeout=2)
+
+
+def test_audio_artifact_delete_rejects_symlinks_and_never_follows_outside_root(
+    tmp_path: Path,
+) -> None:
+    artifacts = AudioArtifactStore(tmp_path / "audio")
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"outside")
+    link = artifacts.resolve("linked.wav")
+    link.symlink_to(outside)
+
+    with pytest.raises(InvalidAudioArtifactPathError):
+        artifacts.delete("linked.wav")
+
+    assert outside.read_bytes() == b"outside"
+    assert link.is_symlink()
+
+
 def test_migration_failure_rolls_back_the_failed_migration(tmp_path: Path) -> None:
     migration_dir = tmp_path / "migrations"
     migration_dir.mkdir()
@@ -282,9 +365,11 @@ def test_history_tombstone_survives_database_failure_until_finalized(
 
     reopened = SQLitePersistence(database)
     reopened.ready().result(timeout=2)
-    assert [record.id for record in reopened.list_history().result(timeout=2).records] == [
-        "tombstone"
-    ]
+    assert reopened.list_history().result(timeout=2).records == ()
+    assert [
+        deletion.record_id
+        for deletion in reopened.list_pending_history_deletions().result(timeout=2)
+    ] == ["tombstone"]
     reopened.finalize_history_deletion("tombstone").result(timeout=2)
     assert reopened.list_history().result(timeout=2).records == ()
     reopened.close().result(timeout=2)

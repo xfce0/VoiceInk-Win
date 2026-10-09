@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -22,13 +24,20 @@ from PySide6.QtWidgets import (
 )
 
 from voiceink_win.application import PersistenceService
-from voiceink_win.application.transcribe_output import serialize_markdown, serialize_txt
+from voiceink_win.application.persistence import HistoryDeletionService
+from voiceink_win.application.transcribe_output import (
+    LocalTextFilePort,
+    TextFilePort,
+    serialize_markdown,
+    serialize_txt,
+)
 from voiceink_win.domain import HistoryPage as DomainHistoryPage
 from voiceink_win.domain import (
     HistoryRecord,
     HistoryStatus,
     TranscriptDocument,
     TranscriptionSource,
+    TranscriptVariant,
 )
 
 from .async_tools import FutureBridge
@@ -45,13 +54,27 @@ class HistoryPage(QWidget):
         parent: QWidget | None = None,
         locale_config: LocaleConfig | None = None,
         artifact_cleanup: Callable[[str], None] | None = None,
+        history_deletion: HistoryDeletionService | None = None,
+        text_files: TextFilePort | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("historyPage")
         self._persistence = persistence
         self._artifact_cleanup = artifact_cleanup
-        self._cleanup_executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="history-artifact"
+        self._history_deletion = history_deletion or (
+            HistoryDeletionService(persistence, artifact_cleanup)
+            if persistence is not None
+            else None
+        )
+        self._owns_history_deletion = (
+            history_deletion is None and self._history_deletion is not None
+        )
+        if self._owns_history_deletion:
+            self._history_deletion.start()
+        self._text_files = text_files or LocalTextFilePort()
+        self._export_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="history-export",
         )
         self._locale_config = locale_config or LocaleConfig(parent=self)
         self._locale_callback = self.apply_locale
@@ -69,6 +92,7 @@ class HistoryPage(QWidget):
         self._next_cursor: str | None = None
         self._cursor_stack: list[str | None] = []
         self._generation = 0
+        self._operation = 0
         self._disposed = False
         self._build_ui()
         self.refresh()
@@ -110,6 +134,12 @@ class HistoryPage(QWidget):
         self._text.setReadOnly(True)
         detail.addWidget(self._text, 1)
         actions = QHBoxLayout()
+        self._variant = QComboBox(self)
+        self._variant.setAccessibleName("Transcript variant")
+        self._variant.addItem("Original", "original")
+        self._variant.addItem("Enhanced", "enhanced")
+        self._variant.currentIndexChanged.connect(self._variant_changed)
+        actions.addWidget(self._variant)
         self._copy = QPushButton(self)
         self._copy.setObjectName("secondaryButton")
         self._copy.clicked.connect(self._copy_selected)
@@ -155,6 +185,7 @@ class HistoryPage(QWidget):
     def _load(self, cursor: str | int | None, *, push_cursor: bool = False) -> None:
         if self._disposed:
             return
+        self._operation += 1
         if push_cursor:
             self._cursor_stack.append(self._cursor)
         if isinstance(cursor, int):
@@ -217,15 +248,19 @@ class HistoryPage(QWidget):
             self._list.clear()
             self._text.clear()
             self._metadata.clear()
+            self._variant.setEnabled(False)
             self._copy.setEnabled(False)
             self._export_txt.setEnabled(False)
             self._export_markdown.setEnabled(False)
             self._delete.setEnabled(False)
+        else:
+            self._variant.setEnabled(self._selected is not None)
 
     def _render_records(self) -> None:
         self._list.clear()
         self._selected = None
         self._text.clear()
+        self._variant.setEnabled(False)
         self._metadata.setText(
             self._t(TranslationKey.HISTORY_EMPTY)
             if not self._records
@@ -244,6 +279,7 @@ class HistoryPage(QWidget):
         self._selected = next((record for record in self._records if record.id == record_id), None)
         if self._selected is None:
             self._text.clear()
+            self._variant.setEnabled(False)
             self._metadata.setText(self._t(TranslationKey.HISTORY_SELECT))
             self._copy.setEnabled(False)
             self._export_txt.setEnabled(False)
@@ -251,10 +287,14 @@ class HistoryPage(QWidget):
             self._delete.setEnabled(False)
             return
         record = self._selected
+        self._variant.setEnabled(True)
+        self._variant.blockSignals(True)
+        self._variant.setCurrentIndex(self._variant.findData(record.selected_variant.value))
+        self._variant.blockSignals(False)
         self._metadata.setText(self._record_metadata(record))
         self._text.setPlainText(
             record.enhanced_text
-            if record.selected_variant.value == "enhanced" and record.enhanced_text
+            if record.selected_variant is TranscriptVariant.ENHANCED and record.enhanced_text
             else record.original_text
         )
         self._copy.setEnabled(bool(self._text.toPlainText()))
@@ -266,7 +306,11 @@ class HistoryPage(QWidget):
         if self._selected is None:
             return
         self._status.setText(self._t(TranslationKey.HISTORY_COPYING))
-        self._copy_port.copy(self._text.toPlainText(), self._copy_finished)
+        operation = self._next_operation()
+        self._copy_port.copy(
+            self._text.toPlainText(),
+            lambda error, request=operation: self._copy_finished(request, error),
+        )
 
     def _search_submitted(self) -> None:
         self._cursor_stack.clear()
@@ -277,9 +321,15 @@ class HistoryPage(QWidget):
         if record is None:
             return
         suffix = ".txt" if format_name == "txt" else ".md"
-        target, _ = QFileDialog.getSaveFileName(self, f"Export {format_name}", f"history{suffix}")
+        title = (
+            self._t(TranslationKey.HISTORY_EXPORT_TXT)
+            if format_name == "txt"
+            else self._t(TranslationKey.HISTORY_EXPORT_MARKDOWN)
+        )
+        target, _ = QFileDialog.getSaveFileName(self, title, f"history{suffix}")
         if not target:
             return
+        variant = TranscriptVariant(self._variant.currentData())
         document = TranscriptDocument(
             str(record.source_metadata.get("source_name", record.source)),
             record.created_at.isoformat(),
@@ -288,18 +338,30 @@ class HistoryPage(QWidget):
             record.enhanced_text,
             record.selected_variant,
         )
-        content = serialize_txt(document) if format_name == "txt" else serialize_markdown(document)
-        self._status.setText(f"Exporting {format_name}...")
-        future = self._cleanup_executor.submit(Path(target).write_bytes, content)
-        self._bridge.watch(future, self._export_finished)
+        content = (
+            serialize_txt(document, variant)
+            if format_name == "txt"
+            else serialize_markdown(document, variant)
+        )
+        operation = self._next_operation()
+        self._status.setText(self._t(TranslationKey.HISTORY_EXPORTING))
+        future = self._export_executor.submit(self._text_files.write_atomic, Path(target), content)
+        self._bridge.watch(
+            future,
+            lambda _result, error, request=operation: self._export_finished(request, error),
+        )
 
-    def _export_finished(self, _result, error: BaseException | None) -> None:
-        if self._disposed:
+    def _export_finished(self, operation: int, error: BaseException | None) -> None:
+        if self._disposed or operation != self._operation:
             return
-        self._status.setText("Export failed" if error else "Exported")
+        self._status.setText(
+            self._t(TranslationKey.HISTORY_EXPORT_ERROR)
+            if error
+            else self._t(TranslationKey.HISTORY_EXPORTED)
+        )
 
-    def _copy_finished(self, error: BaseException | None) -> None:
-        if self._disposed:
+    def _copy_finished(self, operation: int, error: BaseException | None) -> None:
+        if self._disposed or operation != self._operation:
             return
         self._status.setText(
             self._t(TranslationKey.COMMON_ERROR if error else TranslationKey.HISTORY_COPIED)
@@ -323,63 +385,18 @@ class HistoryPage(QWidget):
         self._copy.setEnabled(False)
         self._delete.setEnabled(False)
         self._status.setText(self._t(TranslationKey.HISTORY_DELETING))
-        generation = self._generation
-        self._bridge.watch(
-            self._persistence.mark_history_deleting(record.id),
-            lambda _result, error, deleted=record, request=generation: self._deletion_marked(
-                deleted, request, error
-            ),
-        )
-
-    def _deletion_marked(
-        self, record: HistoryRecord, generation: int, error: BaseException | None
-    ) -> None:
-        if self._disposed or generation != self._generation:
-            return
-        if error is not None:
-            self._deletion_failed(error)
-            return
-        cleanup = record.audio_artifact_path and self._artifact_cleanup
-        if cleanup:
-            self._status.setText(self._t(TranslationKey.HISTORY_CLEANING))
-            future = self._cleanup_executor.submit(cleanup, record.audio_artifact_path)
-            self._bridge.watch(
-                future,
-                lambda _result, cleanup_error, deleted=record, request=self._generation: (
-                    self._artifact_cleaned(deleted, request, cleanup_error)
-                ),
-            )
-        else:
-            self._delete_record(record)
-
-    def _artifact_cleaned(
-        self, record: HistoryRecord, generation: int, error: BaseException | None
-    ) -> None:
-        if self._disposed or generation != self._generation:
-            return
-        if error is not None:
+        operation = self._next_operation()
+        if self._history_deletion is None:
             self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.HISTORY_CLEANUP_ERROR))
-            self._delete.setEnabled(True)
+            self._error.setText(self._t(TranslationKey.HISTORY_DELETE_ERROR))
             return
-        self._delete_record(record)
-
-    def _deletion_failed(self, error: BaseException) -> None:
-        self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-        self._error.setText(self._t(TranslationKey.HISTORY_DELETE_ERROR))
-        self._delete.setEnabled(True)
-
-    def _delete_record(self, record: HistoryRecord) -> None:
-        if self._persistence is None:
-            return
-        generation = self._generation
         self._bridge.watch(
-            self._persistence.finalize_history_deletion(record.id),
-            lambda _result, error: self._deleted(generation, error),
+            self._history_deletion.delete(record.id, record.audio_artifact_path),
+            lambda _result, error, request=operation: self._deleted(request, error),
         )
 
-    def _deleted(self, generation: int, error: BaseException | None) -> None:
-        if self._disposed or generation != self._generation:
+    def _deleted(self, operation: int, error: BaseException | None) -> None:
+        if self._disposed or operation != self._operation:
             return
         if error is not None:
             self._status.setText(self._t(TranslationKey.COMMON_ERROR))
@@ -387,6 +404,44 @@ class HistoryPage(QWidget):
             self._delete.setEnabled(True)
             return
         self._load(self._offset)
+
+    def _variant_changed(self, index: int) -> None:
+        record = self._selected
+        if self._disposed or record is None or index < 0:
+            return
+        variant = TranscriptVariant(self._variant.itemData(index))
+        if variant is TranscriptVariant.ENHANCED and not record.enhanced_text:
+            self._variant.blockSignals(True)
+            self._variant.setCurrentIndex(self._variant.findData(TranscriptVariant.ORIGINAL.value))
+            self._variant.blockSignals(False)
+            return
+        updated = replace(record, selected_variant=variant)
+        self._selected = updated
+        self._records = tuple(updated if item.id == record.id else item for item in self._records)
+        self._text.setPlainText(
+            updated.enhanced_text
+            if variant is TranscriptVariant.ENHANCED and updated.enhanced_text
+            else updated.original_text
+        )
+        self._copy.setEnabled(bool(self._text.toPlainText()))
+        self._export_txt.setEnabled(bool(self._text.toPlainText()))
+        self._export_markdown.setEnabled(bool(self._text.toPlainText()))
+        if self._persistence is not None:
+            operation = self._next_operation()
+            self._bridge.watch(
+                self._persistence.update_history_variant(record.id, variant),
+                lambda _result, error, request=operation: self._variant_saved(request, error),
+            )
+
+    def _variant_saved(self, operation: int, error: BaseException | None) -> None:
+        if self._disposed or operation != self._operation:
+            return
+        if error is not None:
+            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+
+    def _next_operation(self) -> int:
+        self._operation += 1
+        return self._operation
 
     def _previous_page(self) -> None:
         if self._cursor_stack:
@@ -431,6 +486,11 @@ class HistoryPage(QWidget):
         self._title.setText(self._t(TranslationKey.HISTORY_TITLE))
         self._subtitle.setText(self._t(TranslationKey.HISTORY_SUBTITLE))
         self._copy.setText(self._t(TranslationKey.HISTORY_COPY))
+        self._variant.setItemText(0, self._t(TranslationKey.HISTORY_ORIGINAL))
+        self._variant.setItemText(1, self._t(TranslationKey.HISTORY_ENHANCED))
+        self._variant.setAccessibleName(self._t(TranslationKey.HISTORY_VARIANT))
+        self._export_txt.setText(self._t(TranslationKey.HISTORY_EXPORT_TXT_SHORT))
+        self._export_markdown.setText(self._t(TranslationKey.HISTORY_EXPORT_MARKDOWN_SHORT))
         self._delete.setText(self._t(TranslationKey.HISTORY_DELETE))
         self._previous.setText(self._t(TranslationKey.HISTORY_PREVIOUS))
         self._next.setText(self._t(TranslationKey.HISTORY_NEXT))
@@ -449,8 +509,11 @@ class HistoryPage(QWidget):
     def dispose(self) -> None:
         self._disposed = True
         self._generation += 1
+        self._operation += 1
+        if self._owns_history_deletion and self._history_deletion is not None:
+            self._history_deletion.close()
         try:
             self._locale_config.locale_changed.disconnect(self._locale_callback)
         except (RuntimeError, TypeError):
             pass
-        self._cleanup_executor.shutdown(wait=False, cancel_futures=True)
+        self._export_executor.shutdown(wait=False, cancel_futures=True)

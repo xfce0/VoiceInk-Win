@@ -25,6 +25,8 @@ class QtClipboardPort(QObject):
             if clipboard is None:
                 raise RuntimeError("Qt clipboard is unavailable")
             clipboard.setText(text)
+            if clipboard.text() != text:
+                raise RuntimeError("Qt clipboard did not retain the requested text")
         except BaseException as error:
             completion(error)
         else:

@@ -2,9 +2,10 @@
 
 ## Status
 
-Draft. This document is architecture-only and authorizes no production code.
-The implementation, if approved, must be a separate change from this
-documentation and catalog update.
+Draft. This document remains an architecture reference and does not authorize
+microphone, WASAPI, hotkey, or native-runtime implementation. The current
+working tree contains the explicitly scoped persistence and lifecycle slice
+described below; this RFC is not an approval record.
 
 This RFC defines the production composition boundary, configured local
 persistence, the imported-media bootstrap path, and the unavailable fallback
@@ -79,8 +80,10 @@ success.
   loading, runtime discovery, runtime configuration, or network transport.
   Runtime integration remains specified by
   `rfcs/parakeet-runtime-integration.md`.
-- Imported-media behavior, history, tray policy, text delivery, persistence,
-  installer behavior, or native smoke changes.
+- Detailed imported-media behavior, history-page behavior, tray policy, text
+  delivery, installer behavior, or native smoke changes. The composition still
+  owns the configured persistence boundary and history-deletion reconciliation
+  needed by the desktop lifecycle.
 - A production fake fallback, environment-controlled demo mode, or a promise
   that recording will become available in this build.
 
@@ -108,7 +111,16 @@ class DesktopComposition(Protocol):
     def controller(self) -> ShellController: ...
 
     @property
+    def transcribe_controller(self) -> TranscribePageController: ...
+
+    @property
     def persistence(self) -> PersistenceService: ...
+
+    @property
+    def artifact_cleanup(self) -> Callable[[str], None]: ...
+
+    @property
+    def history_deletion(self) -> HistoryDeletionService: ...
 
     def close(self) -> None: ...
 
@@ -120,9 +132,15 @@ The API is intentionally exact and minimal:
 
 - `build_desktop_composition()` takes no arguments and has no environment,
   command-line, factory, backend, or runtime override.
-- `controller` returns the composition-owned unavailable controller.
+- `controller` returns the composition-owned unavailable microphone controller.
+- `transcribe_controller` starts unavailable/loading and is attached to the
+  verified imported-media backend only after asynchronous bootstrap succeeds.
 - `persistence` is the composition-owned SQLite boundary backed by the
   configured VoiceInk application-data path.
+- `artifact_cleanup` is the composition-owned validated audio artifact delete
+  operation; it never accepts an external path outside the artifact root.
+- `history_deletion` owns pending tombstone reconciliation and serialized
+  history/artifact deletion work.
 - `close()` is synchronous and idempotent; it closes imported-media workers,
   artifact work, and SQLite after queued operations have drained.
 - There is no `CleanupResult`, async close, context-manager API, resource list,

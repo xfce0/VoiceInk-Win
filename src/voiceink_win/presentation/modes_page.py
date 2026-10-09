@@ -94,6 +94,7 @@ class ModesPage(QWidget):
         if self._disposed:
             return
         self._generation += 1
+        self._save_sequence += 1
         generation = self._generation
         if self._persistence is None:
             self._apply_settings(Settings(), unavailable=True)
@@ -143,15 +144,22 @@ class ModesPage(QWidget):
         selected_mode = self._mode_combo.itemData(index)
         self._save_sequence += 1
         sequence = self._save_sequence
+        generation = self._generation
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
         self._bridge.watch(
             self._persistence.update_settings({"selected_mode": selected_mode}),
-            lambda result, error: self._saved(sequence, result, error),
+            lambda result, error: self._saved(generation, sequence, result, error),
         )
         self._render_detail()
 
-    def _saved(self, sequence: int, result: Settings | None, error: BaseException | None) -> None:
-        if self._disposed or sequence != self._save_sequence:
+    def _saved(
+        self,
+        generation: int,
+        sequence: int,
+        result: Settings | None,
+        error: BaseException | None,
+    ) -> None:
+        if self._disposed or generation != self._generation or sequence != self._save_sequence:
             return
         if result is not None:
             self._settings = result
@@ -182,6 +190,7 @@ class ModesPage(QWidget):
     def dispose(self) -> None:
         self._disposed = True
         self._generation += 1
+        self._save_sequence += 1
         try:
             self._locale_config.locale_changed.disconnect(self._locale_callback)
         except (RuntimeError, TypeError):

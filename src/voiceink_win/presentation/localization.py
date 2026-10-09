@@ -114,6 +114,16 @@ class TranslationKey(StrEnum):
     HISTORY_DELETE_ERROR = "history.delete_error"
     HISTORY_CLEANING = "history.cleaning"
     HISTORY_CLEANUP_ERROR = "history.cleanup_error"
+    HISTORY_VARIANT = "history.variant"
+    HISTORY_ORIGINAL = "history.original"
+    HISTORY_ENHANCED = "history.enhanced"
+    HISTORY_EXPORT_TXT_SHORT = "history.export_txt_short"
+    HISTORY_EXPORT_MARKDOWN_SHORT = "history.export_markdown_short"
+    HISTORY_EXPORT_TXT = "history.export_txt"
+    HISTORY_EXPORT_MARKDOWN = "history.export_markdown"
+    HISTORY_EXPORTING = "history.exporting"
+    HISTORY_EXPORTED = "history.exported"
+    HISTORY_EXPORT_ERROR = "history.export_error"
     HISTORY_PREVIOUS = "history.previous"
     HISTORY_NEXT = "history.next"
 
@@ -427,6 +437,22 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.HISTORY_CLEANUP_ERROR: _entry(
         "The linked artifact could not be removed.", "Не удалось удалить связанный артефакт."
+    ),
+    TranslationKey.HISTORY_VARIANT: _entry("Transcript variant", "Вариант расшифровки"),
+    TranslationKey.HISTORY_ORIGINAL: _entry("Original", "Оригинал"),
+    TranslationKey.HISTORY_ENHANCED: _entry("Enhanced", "Улучшенный"),
+    TranslationKey.HISTORY_EXPORT_TXT_SHORT: _entry("TXT", "TXT"),
+    TranslationKey.HISTORY_EXPORT_MARKDOWN_SHORT: _entry("Markdown", "Markdown"),
+    TranslationKey.HISTORY_EXPORT_TXT: _entry(
+        "Export transcript as TXT", "Экспортировать расшифровку как TXT"
+    ),
+    TranslationKey.HISTORY_EXPORT_MARKDOWN: _entry(
+        "Export transcript as Markdown", "Экспортировать расшифровку как Markdown"
+    ),
+    TranslationKey.HISTORY_EXPORTING: _entry("Exporting...", "Экспорт..."),
+    TranslationKey.HISTORY_EXPORTED: _entry("Exported", "Экспорт завершён"),
+    TranslationKey.HISTORY_EXPORT_ERROR: _entry(
+        "Export failed.", "Не удалось экспортировать расшифровку."
     ),
     TranslationKey.HISTORY_PREVIOUS: _entry("Previous", "Назад"),
     TranslationKey.HISTORY_NEXT: _entry("Next", "Далее"),

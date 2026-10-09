@@ -4,7 +4,7 @@ from .asr_service import ApplicationAsrService, AsrApplicationService
 from .cancellation import CancellationTokenSource, EventCancellationToken
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
-from .persistence import PersistenceService
+from .persistence import HistoryDeletionService, PersistenceService
 from .shell_controller import ShellController, ShellTranscriptionBackend
 from .transcribe_controller import ImportedMediaPort, TranscribePageController
 from .transcribe_output import LocalTextFilePort, serialize_markdown, serialize_txt
@@ -21,6 +21,7 @@ __all__ = [
     "ReservationToken",
     "SystemClock",
     "PersistenceService",
+    "HistoryDeletionService",
     "ShellController",
     "ShellTranscriptionBackend",
     "ImportedMediaPort",

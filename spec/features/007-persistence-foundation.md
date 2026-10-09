@@ -68,5 +68,7 @@ traversal rejection.
 
 ## Open Questions and Deferred Work
 
-Microphone capture, WASAPI, hotkey registration, recording orchestration,
-history UI, and presentation integration remain outside this feature.
+Microphone capture, WASAPI, hotkey registration, and recording orchestration
+remain outside this feature. The desktop composition now consumes this
+boundary, and its history page uses the application persistence and deletion
+services; detailed page behavior remains specified by the desktop-pages RFC.
