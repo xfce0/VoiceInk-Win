@@ -7,10 +7,15 @@ from collections.abc import Callable
 from time import monotonic
 from typing import Protocol
 
-from voiceink_win.desktop_composition import DesktopComposition, build_desktop_composition
+from voiceink_win.desktop_composition import (
+    DesktopComposition,
+    build_desktop_composition,
+    build_package_smoke_desktop_composition,
+)
 from voiceink_win.domain import TranscribeAvailability
 
-PACKAGE_SMOKE_TIMEOUT_SECONDS = 120
+PACKAGE_SMOKE_TIMEOUT_SECONDS = 300
+PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS = 240.0
 
 
 class _Window(Protocol):
@@ -75,7 +80,11 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
 
     from .main_window import MainWindow
 
-    composition = build_desktop_composition()
+    composition = (
+        build_package_smoke_desktop_composition(PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS)
+        if package_smoke
+        else build_desktop_composition()
+    )
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
@@ -99,11 +108,12 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             deadline = monotonic() + PACKAGE_SMOKE_TIMEOUT_SECONDS
 
             def wait_for_backend() -> None:
+                now = monotonic()
                 availability = composition.transcribe_controller.snapshot.availability
-                if availability is TranscribeAvailability.AVAILABLE:
-                    application.quit()
-                elif availability is TranscribeAvailability.UNAVAILABLE or monotonic() >= deadline:
+                if now >= deadline or availability is TranscribeAvailability.UNAVAILABLE:
                     application.exit(1)
+                elif availability is TranscribeAvailability.AVAILABLE:
+                    application.quit()
                 else:
                     QTimer.singleShot(100, wait_for_backend)
 
