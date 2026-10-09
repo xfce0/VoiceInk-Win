@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -101,9 +101,12 @@ class SerializedSQLiteExecutor:
             with self._lock:
                 self._failure = error
                 self._terminated = True
-            if connection is not None:
-                connection.close()
             self._set_exception_once(self._ready_future, error)
+            close_error = self._close_connection(connection)
+            if close_error is not None:
+                error.add_note(
+                    f"SQLite connection close after startup failure failed: {close_error}"
+                )
             self._fail_queued(error)
             with self._lock:
                 if self._close_future is not None and not self._close_future.done():
@@ -114,8 +117,11 @@ class SerializedSQLiteExecutor:
         while True:
             item = self._queue.get()
             if isinstance(item, _Stop):
-                connection.close()
-                self._set_result_once(item.future, None)
+                close_error = self._close_connection(connection)
+                if close_error is None:
+                    self._set_result_once(item.future, None)
+                else:
+                    self._set_exception_once(item.future, close_error)
                 with self._lock:
                     self._terminated = True
                 return
@@ -126,11 +132,33 @@ class SerializedSQLiteExecutor:
                 if item.transaction:
                     connection.commit()
             except BaseException as error:
-                if item.transaction:
-                    connection.rollback()
+                rollback_error = self._rollback_connection(connection)
+                if rollback_error is not None:
+                    error.add_note(
+                        f"SQLite rollback after operation failure failed: {rollback_error}"
+                    )
                 self._set_exception_once(item.future, error)
             else:
                 self._set_result_once(item.future, result)
+
+    @staticmethod
+    def _close_connection(connection: sqlite3.Connection | None) -> BaseException | None:
+        if connection is None:
+            return None
+        try:
+            connection.close()
+        except BaseException as error:
+            return error
+        return None
+
+    @staticmethod
+    def _rollback_connection(connection: sqlite3.Connection) -> BaseException | None:
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        except BaseException as error:
+            return error
+        return None
 
     def _fail_queued(self, error: BaseException) -> None:
         while True:
@@ -145,10 +173,14 @@ class SerializedSQLiteExecutor:
 
     @staticmethod
     def _set_result_once(future: Future[object], result: object) -> None:
-        if not future.done():
+        try:
             future.set_result(result)
+        except InvalidStateError:
+            pass
 
     @staticmethod
     def _set_exception_once(future: Future[object], error: BaseException) -> None:
-        if not future.done():
+        try:
             future.set_exception(error)
+        except InvalidStateError:
+            pass

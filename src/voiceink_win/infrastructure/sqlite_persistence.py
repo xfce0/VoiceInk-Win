@@ -364,8 +364,8 @@ class SQLitePersistence(PersistencePort):
             for hook in self._reconciliation_hooks:
                 hook(connection)
             connection.commit()
-        except BaseException:
-            connection.rollback()
+        except BaseException as error:
+            _rollback_safely(connection, error)
             raise
 
 
@@ -437,8 +437,15 @@ def _apply_migrations(
         try:
             connection.executescript(transaction)
         except BaseException as error:
-            connection.rollback()
+            _rollback_safely(connection, error)
             raise PersistenceError(f"SQLite migration {path.name} failed: {error}") from error
+
+
+def _rollback_safely(connection: sqlite3.Connection, error: BaseException) -> None:
+    try:
+        connection.rollback()
+    except BaseException as rollback_error:
+        error.add_note(f"SQLite rollback failed during startup: {rollback_error}")
 
 
 def _validate_schema_contract(connection: sqlite3.Connection) -> None:
