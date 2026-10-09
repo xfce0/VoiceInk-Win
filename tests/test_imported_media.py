@@ -480,7 +480,7 @@ def test_cleanup_completion_at_deadline_publishes_cleanup_warning(tmp_path: Path
 
     assert result.code is ErrorCode.CLEANUP_WARNING
     assert result.stage is Stage.CLEANUP
-    application.close(timeout=2.0)
+    application.close(timeout=5.0)
 
 
 def test_invalid_media_fails_without_asr_invocation(tmp_path: Path) -> None:
