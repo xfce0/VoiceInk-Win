@@ -312,7 +312,8 @@ class SQLitePersistence(PersistencePort):
                 "model_preferences_json, audio_preferences_json FROM settings WHERE singleton = 1"
             ).fetchone()
             current = _settings_from_row(row) if row is not None else Settings()
-            hotkeys = dict(current.hotkeys)
+            hotkeys = {"start_stop": "", "cancel": ""}
+            hotkeys.update(current.hotkeys)
             values: dict[str, object] = {
                 "language": current.language,
                 "selected_mode": current.selected_mode,
