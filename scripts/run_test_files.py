@@ -16,7 +16,7 @@ def main() -> int:
     for test_file in test_files:
         print(f"=== {test_file} ===", flush=True)
         result = subprocess.run([sys.executable, "-m", "pytest", str(test_file)], check=False)
-        if result.returncode != 0:
+        if result.returncode not in (0, 5):
             return result.returncode
     return 0
 
