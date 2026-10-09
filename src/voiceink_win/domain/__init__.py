@@ -84,6 +84,21 @@ from .models import (
     TranscriptSegment,
     WordTimestamp,
 )
+from .persistence import (
+    DictionaryEntry,
+    DictionaryPort,
+    HistoryPage,
+    HistoryPort,
+    HistoryRecord,
+    HistoryStatus,
+    InvalidAudioArtifactPathError,
+    PersistenceClosedError,
+    PersistenceError,
+    PersistencePort,
+    Settings,
+    SettingsPort,
+    TranscriptionSource,
+)
 from .ports import AsrRuntime
 from .shell import ShellSnapshot, ShellState
 from .transcribe import (
@@ -114,6 +129,19 @@ __all__ = [
     "AsrErrorCode",
     "AsrRequest",
     "AsrRuntime",
+    "DictionaryEntry",
+    "DictionaryPort",
+    "HistoryPage",
+    "HistoryPort",
+    "HistoryRecord",
+    "HistoryStatus",
+    "InvalidAudioArtifactPathError",
+    "PersistenceClosedError",
+    "PersistenceError",
+    "PersistencePort",
+    "Settings",
+    "SettingsPort",
+    "TranscriptionSource",
     "ShellSnapshot",
     "ShellState",
     "AsrTimeoutError",
