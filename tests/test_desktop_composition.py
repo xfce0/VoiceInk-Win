@@ -135,7 +135,7 @@ def test_production_composition_and_entrypoint_do_not_reference_fake_shell() -> 
     assert not (source_root / "infrastructure" / "fake_shell.py").exists()
 
 
-def test_production_builder_imports_no_infrastructure_or_runtime_modules() -> None:
+def test_production_builder_imports_persistence_without_runtime_or_fake_shell() -> None:
     source_root = Path(__file__).resolve().parents[1] / "src"
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join(
@@ -147,8 +147,9 @@ from voiceink_win.desktop_composition import build_desktop_composition
 
 composition = build_desktop_composition()
 assert composition.controller.snapshot.state.value == "unavailable"
+assert composition.persistence is not None
 composition.close()
-assert not any(name.startswith("voiceink_win.infrastructure") for name in sys.modules)
+assert any(name == "voiceink_win.infrastructure.sqlite_persistence" for name in sys.modules)
 assert not any(name.endswith("fake_shell") for name in sys.modules)
 """
 

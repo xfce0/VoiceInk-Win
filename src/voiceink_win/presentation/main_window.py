@@ -19,11 +19,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from voiceink_win.application import ShellController, TranscribePageController
+from voiceink_win.application import PersistenceService, ShellController, TranscribePageController
 from voiceink_win.application.transcribe_output import LocalTextFilePort
 from voiceink_win.domain import ShellSnapshot, ShellState
 
 from .clipboard import QtClipboardPort
+from .dictionary_page import DictionaryPage
+from .history_page import HistoryPage
 from .icon_registry import SIDEBAR_ITEMS
 from .localization import (
     LocaleConfig,
@@ -32,7 +34,9 @@ from .localization import (
     translate,
     translate_message,
 )
+from .modes_page import ModesPage
 from .qt_icons import sidebar_icon
+from .settings_page import SettingsPage
 from .theme import ThemeMode, ThemeTokens, stylesheet_for, theme_for
 from .transcribe_page import TranscribePage
 from .widgets import WaveformWidget
@@ -237,6 +241,8 @@ class MainWindow(QMainWindow):
         theme: ThemeTokens | None = None,
         transcribe_controller=None,
         locale_config: LocaleConfig | None = None,
+        persistence: PersistenceService | None = None,
+        artifact_cleanup=None,
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
@@ -249,6 +255,8 @@ class MainWindow(QMainWindow):
         self._bridge = _SnapshotBridge(self)
         self._bridge.changed.connect(self._render)
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
+        self._persistence = persistence
+        self._artifact_cleanup = artifact_cleanup
         self._transcribe_controller.set_output_ports(
             clipboard=QtClipboardPort(self),
             text_files=LocalTextFilePort(),
@@ -281,6 +289,25 @@ class MainWindow(QMainWindow):
             self._transcribe_controller, self._pages, locale_config=self._locale_config
         )
         self._pages.addWidget(self._transcribe_page)
+        self._modes_page = ModesPage(
+            self._persistence, self._pages, locale_config=self._locale_config
+        )
+        self._pages.addWidget(self._modes_page)
+        self._history_page = HistoryPage(
+            self._persistence,
+            self._pages,
+            locale_config=self._locale_config,
+            artifact_cleanup=self._artifact_cleanup,
+        )
+        self._pages.addWidget(self._history_page)
+        self._dictionary_page = DictionaryPage(
+            self._persistence, self._pages, locale_config=self._locale_config
+        )
+        self._pages.addWidget(self._dictionary_page)
+        self._settings_page = SettingsPage(
+            self._persistence, self._pages, locale_config=self._locale_config
+        )
+        self._pages.addWidget(self._settings_page)
         layout.addWidget(self._pages, 1)
         self.setCentralWidget(root)
 
@@ -338,6 +365,18 @@ class MainWindow(QMainWindow):
             self._pages.setCurrentIndex(0)
         elif label == "Transcribe":
             self._pages.setCurrentIndex(1)
+        elif label == "Modes":
+            self._pages.setCurrentIndex(2)
+            self._modes_page.refresh()
+        elif label == "History":
+            self._pages.setCurrentIndex(3)
+            self._history_page.refresh()
+        elif label == "Dictionary":
+            self._pages.setCurrentIndex(4)
+            self._dictionary_page.refresh()
+        elif label == "Settings":
+            self._pages.setCurrentIndex(5)
+            self._settings_page.refresh()
         else:
             return
         for name, button in self._nav_buttons.items():
@@ -601,4 +640,8 @@ class MainWindow(QMainWindow):
         self._disconnect_theme_signal()
         self._recorder.dispose()
         self._transcribe_page.dispose()
+        self._modes_page.dispose()
+        self._history_page.dispose()
+        self._dictionary_page.dispose()
+        self._settings_page.dispose()
         self._unsubscribe()

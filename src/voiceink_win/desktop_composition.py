@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Lock, Thread, current_thread
 from typing import Protocol
 
-from voiceink_win.application import ShellController, TranscribePageController
+from voiceink_win.application import PersistenceService, ShellController, TranscribePageController
 from voiceink_win.domain import TranscribeAvailability
+from voiceink_win.infrastructure import AudioArtifactStore, SQLitePersistence, VoiceInkPaths
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,12 @@ class DesktopComposition(Protocol):
     @property
     def transcribe_controller(self) -> TranscribePageController: ...
 
+    @property
+    def persistence(self) -> PersistenceService: ...
+
+    @property
+    def artifact_cleanup(self) -> Callable[[str], None]: ...
+
     def close(self) -> None: ...
 
 
@@ -28,6 +36,8 @@ class DesktopComposition(Protocol):
 class _DesktopComposition:
     controller: ShellController
     transcribe_controller: TranscribePageController
+    persistence: PersistenceService
+    artifact_cleanup: Callable[[str], None]
     _backend: object | None = field(default=None, init=False, repr=False)
     _bootstrap_thread: Thread | None = field(default=None, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
@@ -61,6 +71,10 @@ class _DesktopComposition:
             self._backend = None
         if backend is not None:
             self._close_backend_safely(backend)
+        try:
+            self.persistence.close().result(timeout=3.0)
+        except Exception:
+            logger.exception("failed to close SQLite persistence")
 
     def _bootstrap_backend(self) -> None:
         backend = None
@@ -126,6 +140,10 @@ def build_desktop_composition() -> DesktopComposition:
     Recording remains deliberately unavailable: this composition never enables
     microphone or WASAPI paths.
     """
+    paths = VoiceInkPaths.default()
+    sqlite = SQLitePersistence(paths.database)
+    persistence = PersistenceService(sqlite)
+    artifacts = AudioArtifactStore(paths.audio)
     transcribe_controller = TranscribePageController(
         None,
         availability=TranscribeAvailability.LOADING,
@@ -134,6 +152,8 @@ def build_desktop_composition() -> DesktopComposition:
     composition = _DesktopComposition(
         controller=ShellController.unavailable(),
         transcribe_controller=transcribe_controller,
+        persistence=persistence,
+        artifact_cleanup=artifacts.delete,
     )
     if not _imported_media_environment_present():
         transcribe_controller.mark_unavailable("Imported media runtime is not configured.")

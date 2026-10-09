@@ -79,3 +79,7 @@ class AudioArtifactStore:
         finally:
             temporary_path.unlink(missing_ok=True)
         return target
+
+    def delete(self, relative_path: str) -> None:
+        """Remove one validated artifact without following paths outside the store."""
+        self.resolve(relative_path).unlink(missing_ok=True)

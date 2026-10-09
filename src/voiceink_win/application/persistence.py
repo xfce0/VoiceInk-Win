@@ -45,3 +45,9 @@ class PersistenceService(HistoryPort, DictionaryPort, SettingsPort):
 
     def save_settings(self, settings: Settings) -> Future[None]:
         return self._persistence.save_settings(settings)
+
+    def ready(self) -> Future[None]:
+        return self._persistence.ready()
+
+    def close(self) -> Future[None]:
+        return self._persistence.close()
