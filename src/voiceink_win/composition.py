@@ -34,6 +34,7 @@ from voiceink_win.infrastructure import (
     UrllibLoopbackTransport,
     VerifiedFfmpegArtifact,
     create_media_snapshot_store,
+    load_packaged_runtime,
     load_runtime_configuration,
 )
 
@@ -453,6 +454,25 @@ def build_application_from_environment(
     environ: dict[str, str] | None = None,
     history_port: HistoryPort | None = None,
 ) -> BackendApplication:
+    values = environ if environ is not None else os.environ
+    runtime_names = (
+        "VOICEINK_RUNTIME_MANIFEST",
+        "VOICEINK_ARTIFACT_LOCK",
+        "VOICEINK_ARTIFACT_LOCK_SHA256",
+    )
+    packaged = None
+    if not all(values.get(name, "").strip() for name in runtime_names):
+        packaged = load_packaged_runtime(environ=values)
+    if packaged is not None:
+        configuration = load_runtime_configuration(packaged.manifest, packaged.artifact_lock)
+        imported_media = ImportedMediaConfiguration.from_environment(packaged.environment)
+        return build_application_from_configuration(
+            configuration,
+            endpoint=endpoint,
+            readiness_timeout=readiness_timeout,
+            imported_media=imported_media,
+            history_port=history_port,
+        )
     paths = RuntimePaths.from_environment(environ)
     imported_media = ImportedMediaConfiguration.from_environment(environ)
     return build_application(

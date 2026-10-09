@@ -15,7 +15,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test compile build build-deps require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check test compile build build-deps portable-package require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -71,6 +71,13 @@ build-deps: require-windows
 ## build: Build and validate the Windows GUI and console smoke executables in dist/
 build: require-windows build-deps
 	$(VENV_PYTHON) scripts/frontend_build.py
+
+## portable-package: Stage a relocatable CPU runtime bundle from pinned local artifacts
+portable-package: require-windows build
+	@test -n "$(VOICEINK_FFMPEG_PATH)" || (printf '%s\n' 'VOICEINK_FFMPEG_PATH must point to a pinned ffmpeg.exe' >&2; exit 1)
+	@test -n "$(VOICEINK_SIDECAR_PATH)" || (printf '%s\n' 'VOICEINK_SIDECAR_PATH must point to a pinned nemo-speech.exe' >&2; exit 1)
+	@test -n "$(VOICEINK_MODEL_PATH)" || (printf '%s\n' 'VOICEINK_MODEL_PATH must point to a pinned Parakeet model' >&2; exit 1)
+	$(VENV_PYTHON) scripts/portable_package.py --shell-dist dist --ffmpeg "$(VOICEINK_FFMPEG_PATH)" --sidecar "$(VOICEINK_SIDECAR_PATH)" --model "$(VOICEINK_MODEL_PATH)" --output release/voiceink-shell-windows-x64
 
 ## diagnostic-build: Build the Windows diagnostic executable (run on Windows)
 diagnostic-build:

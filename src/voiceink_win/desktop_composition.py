@@ -17,7 +17,12 @@ from voiceink_win.application import (
     TranscribePageController,
 )
 from voiceink_win.domain import TranscribeAvailability
-from voiceink_win.infrastructure import AudioArtifactStore, SQLitePersistence, VoiceInkPaths
+from voiceink_win.infrastructure import (
+    AudioArtifactStore,
+    SQLitePersistence,
+    VoiceInkPaths,
+    packaged_runtime_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +215,7 @@ def _imported_media_environment_present() -> bool:
         "VOICEINK_FFMPEG_SHA256",
         "VOICEINK_FFMPEG_LICENSE",
     )
-    return all(os.environ.get(name, "").strip() for name in names)
+    return all(os.environ.get(name, "").strip() for name in names) or packaged_runtime_available()
 
 
 __all__ = ["DesktopComposition", "build_desktop_composition"]

@@ -118,6 +118,22 @@ Replace `RUN_ID` with the workflow run ID, or download the artifact ZIP from
 the Actions page and extract it with `Expand-Archive`. The artifact includes
 the same command in its `README.txt`.
 
+To stage a complete relocatable CPU package from already downloaded, pinned
+artifacts, run this on Windows after `make build`:
+
+```powershell
+make portable-package `
+  VOICEINK_FFMPEG_PATH='C:\path\to\ffmpeg.exe' `
+  VOICEINK_SIDECAR_PATH='C:\path\to\nemo-speech.exe' `
+  VOICEINK_MODEL_PATH='C:\path\to\parakeet.gguf'
+```
+
+The result is `release/voiceink-shell-windows-x64`. It contains the shell,
+FFmpeg, sidecar, model, package-relative runtime metadata, and a launcher.
+The builder verifies every supplied file against
+`.github/native-smoke/artifact-lock.template.json`; it does not download
+artifacts.
+
 The packaged shell supports two explicit runtime modes:
 
 - **No-resource mode:** when imported-media configuration is absent, the shell
