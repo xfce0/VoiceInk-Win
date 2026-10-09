@@ -8,9 +8,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from voiceink_win.domain import InvalidSourceError
 from voiceink_win.domain.persistence import InvalidAudioArtifactPathError
 
-from .media_snapshot import WindowsAdapterRequiredError
+from .media_snapshot import WindowsAdapterRequiredError, WindowsMediaSecurityAdapter
 
 
 def default_app_data_root(environ: dict[str, str] | None = None) -> Path:
@@ -54,7 +55,12 @@ def normalise_relative_audio_path(value: str) -> str:
 class AudioArtifactStore:
     """Store optional audio outside SQLite using atomic replacement."""
 
-    def __init__(self, audio_root: Path, *, windows_adapter=None) -> None:
+    def __init__(
+        self,
+        audio_root: Path,
+        *,
+        windows_adapter: WindowsMediaSecurityAdapter | None = None,
+    ) -> None:
         requested = Path(audio_root).expanduser().absolute()
         if os.name == "nt" and windows_adapter is None:
             raise WindowsAdapterRequiredError(
@@ -100,7 +106,10 @@ class AudioArtifactStore:
         """Remove one validated artifact without following paths outside the store."""
         safe_path = normalise_relative_audio_path(relative_path)
         if self._windows_adapter is not None:
-            self._windows_adapter.delete_artifact(self._root, safe_path)
+            try:
+                self._windows_adapter.delete_artifact(self._root, safe_path)
+            except InvalidSourceError as error:
+                raise InvalidAudioArtifactPathError(str(error)) from error
             return
         self._delete_posix(safe_path)
 

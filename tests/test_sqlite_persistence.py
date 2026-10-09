@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -20,7 +21,13 @@ from voiceink_win.domain import (
     TranscriptionSource,
     TranscriptVariant,
 )
-from voiceink_win.infrastructure import AudioArtifactStore, SQLitePersistence
+from voiceink_win.infrastructure import (
+    AudioArtifactStore,
+    NativeWindowsMediaSecurityAdapter,
+    SQLitePersistence,
+    WindowsMediaSecurityAdapter,
+    sqlite_executor,
+)
 from voiceink_win.infrastructure.storage_paths import VoiceInkPaths, normalise_relative_audio_path
 
 
@@ -35,6 +42,31 @@ def _record(record_id: str, created_at: datetime, text: str) -> HistoryRecord:
         selected_variant=TranscriptVariant.ENHANCED,
         status=HistoryStatus.COMPLETED,
     )
+
+
+class _TestArtifactSecurityAdapter:
+    """Typed adapter for tests that exercise portable artifact semantics only."""
+
+    def validate_source(self, path: Path) -> None:
+        del path
+
+    def cleanup_workspace(self, path: Path) -> None:
+        del path
+
+    def delete_artifact(self, root: Path, relative_path: str) -> None:
+        root.joinpath(*relative_path.split("/")).unlink(missing_ok=True)
+
+
+def _portable_artifacts(path: Path) -> AudioArtifactStore:
+    adapter: WindowsMediaSecurityAdapter | None = _TestArtifactSecurityAdapter()
+    return AudioArtifactStore(path, windows_adapter=adapter)
+
+
+def _native_safety_artifacts(path: Path) -> AudioArtifactStore:
+    adapter: WindowsMediaSecurityAdapter | None = (
+        NativeWindowsMediaSecurityAdapter() if os.name == "nt" else None
+    )
+    return AudioArtifactStore(path, windows_adapter=adapter)
 
 
 @pytest.fixture
@@ -179,7 +211,7 @@ def test_audio_paths_reject_traversal_and_writes_are_atomic(
     tmp_path: Path, store: SQLitePersistence
 ) -> None:
     paths = VoiceInkPaths.from_root(tmp_path / "AppData" / "Local" / "VoiceInk")
-    artifacts = AudioArtifactStore(paths.audio)
+    artifacts = _portable_artifacts(paths.audio)
     with pytest.raises(InvalidAudioArtifactPathError):
         artifacts.resolve("../outside.wav")
     with pytest.raises(InvalidAudioArtifactPathError):
@@ -250,7 +282,7 @@ def test_history_search_escapes_like_metacharacters(store: SQLitePersistence) ->
 def test_pending_history_deletion_reconciles_after_failure_and_restart(tmp_path: Path) -> None:
     database = tmp_path / "reconcile.sqlite3"
     artifact_root = tmp_path / "audio"
-    artifacts = AudioArtifactStore(artifact_root)
+    artifacts = _portable_artifacts(artifact_root)
     artifacts.write("history/item.wav", b"audio")
     sqlite = SQLitePersistence(database)
     sqlite.ready().result(timeout=2)
@@ -292,7 +324,7 @@ def test_pending_history_deletion_reconciles_after_failure_and_restart(tmp_path:
 def test_audio_artifact_delete_rejects_symlinks_and_never_follows_outside_root(
     tmp_path: Path,
 ) -> None:
-    artifacts = AudioArtifactStore(tmp_path / "audio")
+    artifacts = _native_safety_artifacts(tmp_path / "audio")
     outside = tmp_path / "outside.wav"
     outside.write_bytes(b"outside")
     link = artifacts.resolve("linked.wav")
@@ -347,6 +379,35 @@ def test_persistence_validation_completes_future_with_error(store: SQLitePersist
     invalid_page = store.list_history(limit=0)
     with pytest.raises(InvalidInputError):
         invalid_page.result(timeout=2)
+
+
+def test_sqlite_worker_completes_future_when_rollback_also_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class BrokenConnection:
+        in_transaction = True
+
+        def execute(self, statement: str):
+            if statement == "BEGIN IMMEDIATE":
+                raise RuntimeError("operation failed")
+            return self
+
+        def rollback(self) -> None:
+            raise RuntimeError("rollback failed")
+
+        def close(self) -> None:
+            return None
+
+    connection = BrokenConnection()
+    monkeypatch.setattr(sqlite_executor.sqlite3, "connect", lambda *args, **kwargs: connection)
+    executor = sqlite_executor.SerializedSQLiteExecutor(tmp_path / "worker.sqlite3", lambda _: None)
+    executor.ready().result(timeout=2)
+
+    failed = executor.submit(lambda _: None, transaction=True)
+
+    with pytest.raises(RuntimeError, match="operation failed"):
+        failed.result(timeout=2)
+    executor.close().result(timeout=2)
 
 
 def test_history_tombstone_survives_database_failure_until_finalized(
