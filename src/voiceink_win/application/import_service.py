@@ -67,7 +67,7 @@ from voiceink_win.domain.imported_errors import (
     UnsupportedMediaError,
 )
 
-from .asr_service import AsrApplicationService
+from .asr_service import AsrApplicationService, AsrRequestHandle, QuiescenceFence
 from .cancellation import CancellationTokenSource
 from .import_queue import ImportQueue, ReservationToken
 
@@ -100,6 +100,7 @@ class _Record:
     source: SourceMedia
     options: ImportOptions
     token: ReservationToken
+    started_at: float
     cancellation: CancellationTokenSource = field(default_factory=CancellationTokenSource)
     workspace: JobWorkspace | None = None
     snapshot: object | None = None
@@ -130,6 +131,8 @@ class _Record:
     reservation_release_lock: Lock = field(default_factory=Lock)
     cleanup_warning: bool = False
     deadline_interrupt_started: float | None = None
+    asr_handle: AsrRequestHandle | None = None
+    asr_handle_released: bool = False
 
 
 class _JobObservation:
@@ -274,9 +277,10 @@ class ImportedMediaTranscriptionService:
         workspace: JobWorkspace | None = None
         try:
             token = self._queue.reserve(job_id)
-            job = ImportJob(job_id, deadline=self._clock.monotonic() + self._processing_deadline)
+            started_at = self._clock.monotonic()
+            job = ImportJob(job_id, deadline=started_at + self._processing_deadline)
             workspace = self._store.create_workspace(job.job_id, job.attempt.value)
-            record = _Record(job, source, options, token, workspace=workspace)
+            record = _Record(job, source, options, token, started_at, workspace=workspace)
             self._records[job.job_id] = record
             job.transition(job.attempt, Stage.ACCEPTED, Stage.QUEUED)
             self._queue.enqueue(record, token)
@@ -663,8 +667,10 @@ class ImportedMediaTranscriptionService:
                 cancellation=record.cancellation.token,
             )
             record.normalized = None
+            record.asr_handle = self._asr.try_admit(request)
+            record.asr_handle_released = False
             with self._workspace_processing_lock(record.workspace):
-                transcript_result = self._asr.transcribe(request)
+                transcript_result = record.asr_handle.await_result(stage_deadline)
             self._finish_stage(record, Stage.TRANSCRIBING)
             if record.stage_owner_done.is_set():
                 transcript_committed = self._accept_stage_result(
@@ -1066,7 +1072,7 @@ class ImportedMediaTranscriptionService:
             record.normalized_duration,
             record.attempt_count,
             tuple(record.stage_timings),
-            self._clock.monotonic() - (job.deadline - self._processing_deadline),
+            self._clock.monotonic() - record.started_at,
             Stage.SUCCEEDED,
         )
         transcription = ImportedTranscriptionResult(
@@ -1301,6 +1307,9 @@ class ImportedMediaTranscriptionService:
             if interrupt is None:
                 interrupt = getattr(getattr(self._normalizer, "runner", None), "interrupt", None)
         elif record.job.stage is Stage.TRANSCRIBING:
+            if record.asr_handle is not None:
+                record.asr_handle.cancel()
+                return
             interrupt = getattr(self._asr, "interrupt_active", None)
         else:
             interrupt = None
@@ -1423,13 +1432,15 @@ class ImportedMediaTranscriptionService:
             record.stage_timings.append(
                 StageTiming(stage, max(0.0, self._clock.monotonic() - started))
             )
-        owner_done = self._stage_owner_event(stage)
+        owner_done = self._stage_owner_event(record, stage)
         if owner_done is None or owner_done.is_set():
+            self._release_asr_handle(record)
             record.stage_owner_done.set()
             return
 
         def wait_for_owner() -> None:
             owner_done.wait()
+            self._release_asr_handle(record)
             record.stage_owner_done.set()
             with self._lock:
                 self._stage_owner_threads.discard(thread)
@@ -1467,14 +1478,24 @@ class ImportedMediaTranscriptionService:
             with self._lock:
                 self._snapshot_recovery.pop(record.job.job_id, None)
 
-    def _stage_owner_event(self, stage: Stage) -> Event | None:
+    def _stage_owner_event(self, record: _Record, stage: Stage) -> Event | QuiescenceFence | None:
+        if stage is Stage.TRANSCRIBING and record.asr_handle is not None:
+            return record.asr_handle.quiescence_event
         owner = self._normalizer if stage is Stage.NORMALIZING else self._asr
         event = getattr(owner, "stage_owner_done", None)
         if callable(event):
             event = event()
-        if isinstance(event, Event):
+        if isinstance(event, (Event, QuiescenceFence)):
             return event
         return None
+
+    def _release_asr_handle(self, record: _Record) -> None:
+        handle = record.asr_handle
+        if handle is None or record.asr_handle_released or not handle.is_quiescent:
+            return
+        handle.release()
+        record.asr_handle_released = True
+        record.asr_handle = None
 
     def _raise_if_interrupted(self, record: _Record, stage: Stage) -> None:
         if self._is_cancelled(record):

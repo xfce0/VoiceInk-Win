@@ -27,7 +27,13 @@ documents:
     status: proposed
   - path: spec/features/004-frontend-shell.md
     kind: feature
+    status: implemented
+  - path: spec/features/006-desktop-pages-transcribe.md
+    kind: feature
     status: proposed
+  - path: spec/features/007-persistence-foundation.md
+    kind: feature
+    status: implemented
   - path: rfcs/parakeet-runtime-integration.md
     kind: rfc
     status: proposed
@@ -62,6 +68,10 @@ documents:
   - path: rfcs/desktop-composition-boundary.md
     kind: rfc
     status: draft
+  - path: rfcs/desktop-pages-transcribe.md
+    kind: rfc
+    status: proposed
+    implementation_allowed: false
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed

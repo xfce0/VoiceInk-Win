@@ -2,12 +2,15 @@
 
 ## Status and Scope
 
-Status: proposed.
+Status: proposed. The current branch contains local slices for the enabled desktop
+pages and persistence, but this feature's full route-complete contract remains
+unapproved and its open questions below are not closed.
 
-Current implementation scope: this slice enables only the Transcribe route and
-its imported-media workflow. Modes, History, Dictionary, AI Models, and Audio
-remain specified future work; their sidebar descriptors stay disabled and this
-slice does not claim route-complete delivery.
+Current implementation scope: the delivered slice enables Dashboard, Modes,
+Transcribe, History, Dictionary, and Settings, including the imported-media
+workflow and SQLite-backed settings/history/dictionary boundaries. AI Models and
+Audio remain specified future work; their sidebar descriptors stay disabled and
+this slice does not claim route-complete delivery.
 
 This feature is the next desktop presentation slice after the existing shell
 and microphone planning. It adds the Modes, Transcribe, History, Dictionary,

@@ -4,6 +4,7 @@ PROJECT := voiceink-win
 VENV := .venv
 PIP_VERSION := 26.2.1
 BUILD_CONSTRAINTS := packaging/windows-build-constraints.txt
+WINDOWS_RELEASE_LOCK ?= .github/native-smoke/artifact-lock.template.json
 
 ifeq ($(OS),Windows_NT)
 PYTHON ?= python
@@ -15,7 +16,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test compile build build-deps require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check wasapi-contract-check test compile build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -40,8 +41,12 @@ lint:
 	$(VENV_PYTHON) -m ruff check src tests scripts
 
 ## spec-check: Validate the living specification catalog and required sections
-spec-check:
+spec-check: wasapi-contract-check
 	$(VENV_PYTHON) scripts/spec_check.py
+
+## wasapi-contract-check: Validate the disabled native WASAPI scaffold and provenance template
+wasapi-contract-check:
+	$(VENV_PYTHON) scripts/wasapi_contract.py
 
 ## test: Run behavior-focused automated tests
 test:
@@ -72,6 +77,20 @@ build-deps: require-windows
 build: require-windows build-deps
 	$(VENV_PYTHON) scripts/frontend_build.py
 
+## portable-package: Stage a relocatable CPU runtime bundle from pinned local artifacts
+portable-package: require-windows require-portable-artifacts build
+	$(VENV_PYTHON) scripts/portable_package.py --shell-dist dist --ffmpeg "$(VOICEINK_FFMPEG_PATH)" --sidecar "$(VOICEINK_SIDECAR_PATH)" --model "$(VOICEINK_MODEL_PATH)" --output release/voiceink-shell-windows-x64
+
+## windows-release-smoke: Download tracked pins, build, relocate, smoke-test, and bundle the Windows release package
+windows-release-smoke: build
+	$(VENV_PYTHON) scripts/windows_release_package.py --lock "$(WINDOWS_RELEASE_LOCK)" --shell-dist dist --output release/voiceink-shell-windows-x64 --bundle release/voiceink-shell-windows-x64.zip --report release/windows-release-smoke.json
+
+## require-portable-artifacts: Verify portable package inputs before the Windows build
+require-portable-artifacts:
+	@test -n "$(VOICEINK_FFMPEG_PATH)" || (printf '%s\n' 'VOICEINK_FFMPEG_PATH must point to a pinned ffmpeg.exe' >&2; exit 1)
+	@test -n "$(VOICEINK_SIDECAR_PATH)" || (printf '%s\n' 'VOICEINK_SIDECAR_PATH must point to a pinned nemo-speech.exe' >&2; exit 1)
+	@test -n "$(VOICEINK_MODEL_PATH)" || (printf '%s\n' 'VOICEINK_MODEL_PATH must point to a pinned Parakeet model' >&2; exit 1)
+
 ## diagnostic-build: Build the Windows diagnostic executable (run on Windows)
 diagnostic-build:
 	@test -n "$(VOICEINK_FFMPEG_PATH)" || (printf '%s\n' 'VOICEINK_FFMPEG_PATH must point to an external ffmpeg.exe' >&2; exit 1)
@@ -95,7 +114,7 @@ run-shell:
 
 ## clean: Remove local caches and generated build directories
 clean:
-	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist *.egg-info
+	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist release *.egg-info
 
 ## install-hooks: Install repository pre-commit and pre-push checks
 install-hooks:

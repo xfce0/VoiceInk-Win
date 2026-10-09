@@ -24,12 +24,14 @@ from voiceink_win.domain import (
 from voiceink_win.infrastructure import FakeAsrRuntime, FakeAsrScenario
 
 
-def request(*, deadline: float | None = None, cancellation=None) -> AsrRequest:
+def request(
+    *, deadline: float | None = None, cancellation=None, request_id: str = "test-request"
+) -> AsrRequest:
     from voiceink_win.domain import CanonicalAudio
 
     return AsrRequest(
         CanonicalAudio(b"\x00\x00" * 16_000),
-        request_id="test-request",
+        request_id=request_id,
         deadline=deadline,
         cancellation=cancellation,
         include_timestamps=True,
@@ -158,6 +160,106 @@ def test_application_service_rejects_full_queue() -> None:
     release.set()
     first.join(1.0)
     second.join(1.0)
+    service.close()
+
+
+def test_request_scoped_admission_is_bounded_and_releases_once() -> None:
+    started = Event()
+    release = Event()
+
+    class BlockingRuntime(FakeAsrRuntime):
+        def transcribe(self, request: AsrRequest) -> TranscriptResult:
+            started.set()
+            release.wait()
+            return TranscriptResult("first", request.audio.duration)
+
+    service = AsrApplicationService(BlockingRuntime(), queue_capacity=1)
+    active = service.try_admit(request())
+    assert started.wait(1.0)
+    fence = active.quiescence_event
+    assert not fence.is_set()
+    with pytest.raises(AttributeError):
+        fence.set()  # type: ignore[attr-defined]
+    queued = service.try_admit(request())
+
+    with pytest.raises(QueueFullError):
+        service.try_admit(request())
+    assert service.admitted_count == 2
+
+    queued.cancel()
+    with pytest.raises(CancellationError):
+        queued.await_result()
+    queued.await_quiescence(deadline=time.monotonic() + 1.0)
+    queued.release()
+    queued.release()
+
+    release.set()
+    assert active.await_result().text == "first"
+    active.await_quiescence(deadline=time.monotonic() + 1.0)
+    active.release()
+    assert service.admitted_count == 0
+    service.close()
+
+
+def test_request_cancellation_fences_late_result_until_quiescence() -> None:
+    started = Event()
+    release = Event()
+
+    class LateRuntime(FakeAsrRuntime):
+        def transcribe(self, request: AsrRequest) -> TranscriptResult:
+            started.set()
+            release.wait()
+            return TranscriptResult("late", request.audio.duration)
+
+    service = AsrApplicationService(LateRuntime())
+    handle = service.try_admit(request())
+    assert started.wait(1.0)
+
+    handle.cancel()
+    with pytest.raises(CancellationError):
+        handle.await_result()
+    with pytest.raises(RuntimeRecoveryPendingError):
+        handle.release()
+    with pytest.raises(RuntimeRecoveryPendingError):
+        handle.await_quiescence(deadline=time.monotonic() + 0.01)
+
+    release.set()
+    handle.await_quiescence(deadline=time.monotonic() + 1.0)
+    with pytest.raises(CancellationError):
+        handle.await_result()
+    handle.release()
+    assert service.admitted_count == 0
+    service.close()
+
+
+def test_late_result_cannot_cross_request_generation_fence() -> None:
+    first_started = Event()
+    first_release = Event()
+
+    class GenerationRuntime(FakeAsrRuntime):
+        def transcribe(self, request: AsrRequest) -> TranscriptResult:
+            if request.request_id == "first":
+                first_started.set()
+                first_release.wait()
+                return TranscriptResult("stale", request.audio.duration)
+            return TranscriptResult("current", request.audio.duration)
+
+    service = AsrApplicationService(GenerationRuntime(), queue_capacity=1)
+    first = service.try_admit(request(request_id="first"))
+    assert first_started.wait(1.0)
+    first.cancel()
+    second = service.try_admit(request(request_id="second"))
+    assert second.generation != first.generation
+
+    with pytest.raises(CancellationError):
+        first.await_result()
+    first_release.set()
+    first.await_quiescence(deadline=time.monotonic() + 1.0)
+    first.release()
+
+    assert second.await_result().text == "current"
+    second.await_quiescence(deadline=time.monotonic() + 1.0)
+    second.release()
     service.close()
 
 

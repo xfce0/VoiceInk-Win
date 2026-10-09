@@ -17,7 +17,12 @@ from voiceink_win.application import (
     TranscribePageController,
 )
 from voiceink_win.domain import TranscribeAvailability
-from voiceink_win.infrastructure import AudioArtifactStore, SQLitePersistence, VoiceInkPaths
+from voiceink_win.infrastructure import (
+    AudioArtifactStore,
+    SQLitePersistence,
+    VoiceInkPaths,
+    packaged_runtime_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,7 @@ class _DesktopComposition:
     persistence: PersistenceService
     artifact_cleanup: Callable[[str], None]
     history_deletion: HistoryDeletionService
+    readiness_timeout: float | None = field(default=None, repr=False)
     _backend: object | None = field(default=None, init=False, repr=False)
     _bootstrap_thread: Thread | None = field(default=None, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
@@ -101,7 +107,11 @@ class _DesktopComposition:
             )
             from voiceink_win.infrastructure import WindowsAdapterRequiredError
 
-            backend = _build_backend(build_application_from_environment, self.persistence)
+            backend = _build_backend(
+                build_application_from_environment,
+                self.persistence,
+                readiness_timeout=self.readiness_timeout,
+            )
             backend.start()
         except (
             ConfigurationError,
@@ -112,7 +122,12 @@ class _DesktopComposition:
         ) as error:
             if backend is not None:
                 self._close_backend_safely(backend)
-            logger.warning("imported-media runtime unavailable", extra={"reason": str(error)})
+            diagnostics = getattr(backend, "diagnostics", None)
+            logger.warning(
+                "imported-media runtime unavailable: %s; diagnostics=%s",
+                error,
+                diagnostics,
+            )
             self.transcribe_controller.mark_unavailable(
                 "Imported media transcription is unavailable: runtime prerequisites failed."
             )
@@ -148,19 +163,26 @@ class _DesktopComposition:
             logger.exception("failed to close imported-media runtime")
 
 
-def _build_backend(builder: Callable[..., object], history_port: PersistenceService) -> object:
+def _build_backend(
+    builder: Callable[..., object],
+    history_port: PersistenceService,
+    *,
+    readiness_timeout: float | None = None,
+) -> object:
     """Support narrow test builders without weakening production history wiring."""
     parameters = signature(builder).parameters
-    history_parameter = parameters.get("history_port")
     accepts_keywords = any(
         parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
-    if history_parameter is not None or accepts_keywords:
-        return builder(history_port=history_port)
-    return builder()
+    kwargs: dict[str, object] = {}
+    if "history_port" in parameters or accepts_keywords:
+        kwargs["history_port"] = history_port
+    if readiness_timeout is not None and ("readiness_timeout" in parameters or accepts_keywords):
+        kwargs["readiness_timeout"] = readiness_timeout
+    return builder(**kwargs)
 
 
-def build_desktop_composition() -> DesktopComposition:
+def _build_desktop_composition(readiness_timeout: float | None) -> DesktopComposition:
     """Return promptly and bootstrap imported media outside the Qt thread.
 
     Recording remains deliberately unavailable: this composition never enables
@@ -189,12 +211,21 @@ def build_desktop_composition() -> DesktopComposition:
         persistence=persistence,
         artifact_cleanup=artifacts.delete,
         history_deletion=history_deletion,
+        readiness_timeout=readiness_timeout,
     )
     if not _imported_media_environment_present():
         transcribe_controller.mark_unavailable("Imported media runtime is not configured.")
     else:
         composition.start()
     return composition
+
+
+def build_desktop_composition() -> DesktopComposition:
+    return _build_desktop_composition(None)
+
+
+def build_package_smoke_desktop_composition(readiness_timeout: float) -> DesktopComposition:
+    return _build_desktop_composition(readiness_timeout)
 
 
 def _imported_media_environment_present() -> bool:
@@ -210,7 +241,11 @@ def _imported_media_environment_present() -> bool:
         "VOICEINK_FFMPEG_SHA256",
         "VOICEINK_FFMPEG_LICENSE",
     )
-    return all(os.environ.get(name, "").strip() for name in names)
+    return all(os.environ.get(name, "").strip() for name in names) or packaged_runtime_available()
 
 
-__all__ = ["DesktopComposition", "build_desktop_composition"]
+__all__ = [
+    "DesktopComposition",
+    "build_desktop_composition",
+    "build_package_smoke_desktop_composition",
+]

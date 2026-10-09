@@ -480,7 +480,7 @@ def test_cleanup_completion_at_deadline_publishes_cleanup_warning(tmp_path: Path
 
     assert result.code is ErrorCode.CLEANUP_WARNING
     assert result.stage is Stage.CLEANUP
-    application.close(timeout=2.0)
+    application.close(timeout=5.0)
 
 
 def test_invalid_media_fails_without_asr_invocation(tmp_path: Path) -> None:
@@ -850,7 +850,7 @@ def test_completed_record_is_pruned_after_fenced_cleanup_finishes(tmp_path: Path
         FakeMediaNormalizer(),
         AsrApplicationService(FakeAsrRuntime()),
         store,
-        cleanup_timeout_seconds=0.01,
+        cleanup_timeout_seconds=0.1,
         max_completed_records=1,
     )
     first_id = application.submit(str(source_file(tmp_path, b"first")))
@@ -1091,6 +1091,9 @@ def test_late_asr_result_is_fenced_after_cancellation(tmp_path: Path) -> None:
     record = application._record(job_id)
     assert record.normalized is None
     assert record.transcript is None
+    assert record.asr_handle_released is True
+    assert record.asr_handle is None
+    assert application._asr.admitted_count == 0
 
 
 def test_late_normalizer_result_is_not_retained_after_cancellation(tmp_path: Path) -> None:

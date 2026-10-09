@@ -176,7 +176,8 @@ def test_frontend_entrypoint_delegates_to_presentation_app() -> None:
     entrypoint = (ROOT / "scripts" / "frontend_entrypoint.py").read_text(encoding="utf-8")
 
     assert "from voiceink_win.presentation.app import main" in entrypoint
-    assert "raise SystemExit(main(smoke=smoke))" in entrypoint
+    assert 'package_smoke = "--package-smoke" in sys.argv' in entrypoint
+    assert "raise SystemExit(main(smoke=smoke, package_smoke=package_smoke))" in entrypoint
 
 
 def test_frontend_package_smoke_validates_x64_gui_pe(tmp_path: Path) -> None:

@@ -20,7 +20,8 @@ The macOS project is the reference for behavior and visual language. The existin
 
 ## Current Status
 
-The foundation and imported-media backend are implemented. The following are complete:
+The foundation, imported-media backend, and the first desktop presentation/persistence
+slices are implemented. The following are complete:
 
 - specification-driven project layout;
 - architecture baseline;
@@ -30,17 +31,19 @@ The foundation and imported-media backend are implemented. The following are com
 - public project context;
 - foundation/runtime boundary and fake adapter tests;
 - imported-media queue, normalization, cancellation, retry, and cleanup contracts;
-- Windows diagnostic build and manual ARM64 smoke validation.
+- PySide6 desktop presentation for Dashboard, Modes, Transcribe, History,
+  Dictionary, and Settings;
+- SQLite persistence for settings, history, dictionary entries, and audio references;
+- English/Russian desktop localization and TXT/Markdown/clipboard output actions;
+- reproducible Windows x64 frontend packaging and offscreen shell smoke validation.
 
-The following are not implemented:
+The following remain incomplete or deferred:
 
-- PySide6 UI, tray, and overlay;
-- production Parakeet runtime/model management;
+- production Parakeet runtime/model management and native Windows smoke evidence;
 - microphone/WASAPI recording;
-- Windows hotkeys, clipboard, and text input;
-- SQLite history;
-- modes, enhancement, cloud providers, and packaging;
-- Windows CI runtime smoke and NVIDIA validation.
+- Windows global hotkeys, active-application text injection, system tray, and overlay;
+- AI Models and native Audio page behavior;
+- enhancement, cloud providers, NVIDIA validation, and Windows runtime smoke.
 
 ## Current Milestone
 

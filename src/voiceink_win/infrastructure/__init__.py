@@ -36,6 +36,14 @@ from .media_snapshot import (
     WindowsAdapterRequiredError,
     WindowsMediaSecurityAdapter,
 )
+from .packaged_runtime import (
+    PACKAGE_DESCRIPTOR,
+    PACKAGE_SCHEMA,
+    TRUSTED_PACKAGE_ARTIFACTS,
+    PackagedRuntime,
+    load_packaged_runtime,
+    packaged_runtime_available,
+)
 from .process import (
     ProcessHandle,
     ReadinessProbe,
@@ -110,6 +118,12 @@ __all__ = [
     "SubprocessConfig",
     "SubprocessSupervisor",
     "UrllibReadinessProbe",
+    "PACKAGE_DESCRIPTOR",
+    "PACKAGE_SCHEMA",
+    "TRUSTED_PACKAGE_ARTIFACTS",
+    "PackagedRuntime",
+    "load_packaged_runtime",
+    "packaged_runtime_available",
     "ARTIFACT_LOCK_SCHEMA",
     "RUNTIME_MANIFEST_SCHEMA",
     "ArtifactLock",

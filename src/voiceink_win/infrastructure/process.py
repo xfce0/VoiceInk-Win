@@ -374,7 +374,7 @@ class UrllibReadinessProbe:
                     isinstance(payload, dict)
                     and payload.get("ready") is True
                     and isinstance(payload.get("capabilities"), list)
-                    and "transcription" in payload["capabilities"]
+                    and "asr" in payload["capabilities"]
                     and _ready_device_matches_backend(payload.get("device"), self._expected_backend)
                 )
         except (HTTPError, URLError, OSError, TimeoutError, ValueError, UnicodeDecodeError):
