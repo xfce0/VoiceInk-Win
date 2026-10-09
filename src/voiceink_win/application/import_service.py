@@ -100,6 +100,7 @@ class _Record:
     source: SourceMedia
     options: ImportOptions
     token: ReservationToken
+    started_at: float
     cancellation: CancellationTokenSource = field(default_factory=CancellationTokenSource)
     workspace: JobWorkspace | None = None
     snapshot: object | None = None
@@ -276,9 +277,10 @@ class ImportedMediaTranscriptionService:
         workspace: JobWorkspace | None = None
         try:
             token = self._queue.reserve(job_id)
-            job = ImportJob(job_id, deadline=self._clock.monotonic() + self._processing_deadline)
+            started_at = self._clock.monotonic()
+            job = ImportJob(job_id, deadline=started_at + self._processing_deadline)
             workspace = self._store.create_workspace(job.job_id, job.attempt.value)
-            record = _Record(job, source, options, token, workspace=workspace)
+            record = _Record(job, source, options, token, started_at, workspace=workspace)
             self._records[job.job_id] = record
             job.transition(job.attempt, Stage.ACCEPTED, Stage.QUEUED)
             self._queue.enqueue(record, token)
@@ -1070,7 +1072,7 @@ class ImportedMediaTranscriptionService:
             record.normalized_duration,
             record.attempt_count,
             tuple(record.stage_timings),
-            self._clock.monotonic() - (job.deadline - self._processing_deadline),
+            self._clock.monotonic() - record.started_at,
             Stage.SUCCEEDED,
         )
         transcription = ImportedTranscriptionResult(

@@ -122,7 +122,12 @@ class _DesktopComposition:
         ) as error:
             if backend is not None:
                 self._close_backend_safely(backend)
-            logger.warning("imported-media runtime unavailable", extra={"reason": str(error)})
+            diagnostics = getattr(backend, "diagnostics", None)
+            logger.warning(
+                "imported-media runtime unavailable: %s; diagnostics=%s",
+                error,
+                diagnostics,
+            )
             self.transcribe_controller.mark_unavailable(
                 "Imported media transcription is unavailable: runtime prerequisites failed."
             )
