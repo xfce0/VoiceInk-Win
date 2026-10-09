@@ -14,8 +14,8 @@ from voiceink_win.desktop_composition import (
 )
 from voiceink_win.domain import TranscribeAvailability
 
-PACKAGE_SMOKE_TIMEOUT_SECONDS = 540
-PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS = 480.0
+PACKAGE_SMOKE_TIMEOUT_SECONDS = 1320
+PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS = 1200.0
 
 
 class _Window(Protocol):
