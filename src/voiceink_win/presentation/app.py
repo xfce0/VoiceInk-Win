@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from time import monotonic
 from typing import Protocol
 
 from voiceink_win.desktop_composition import DesktopComposition, build_desktop_composition
+from voiceink_win.domain import TranscribeAvailability
+
+PACKAGE_SMOKE_TIMEOUT_SECONDS = 120
 
 
 class _Window(Protocol):
@@ -48,7 +52,7 @@ def _run_session(
         return result
 
 
-def main(*, smoke: bool = False) -> int:
+def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     try:
         from PySide6.QtCore import QTimer
         from PySide6.QtGui import QFont, QFontDatabase
@@ -91,7 +95,20 @@ def main(*, smoke: bool = False) -> int:
         return window
 
     def after_show(_window: _Window) -> None:
-        if smoke:
+        if package_smoke:
+            deadline = monotonic() + PACKAGE_SMOKE_TIMEOUT_SECONDS
+
+            def wait_for_backend() -> None:
+                availability = composition.transcribe_controller.snapshot.availability
+                if availability is TranscribeAvailability.AVAILABLE:
+                    application.quit()
+                elif availability is TranscribeAvailability.UNAVAILABLE or monotonic() >= deadline:
+                    application.exit(1)
+                else:
+                    QTimer.singleShot(100, wait_for_backend)
+
+            QTimer.singleShot(0, wait_for_backend)
+        elif smoke:
             QTimer.singleShot(100, application.quit)
 
     return _run_session(

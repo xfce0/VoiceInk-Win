@@ -15,7 +15,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test compile build build-deps portable-package require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check test compile build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -75,6 +75,10 @@ build: require-windows build-deps
 ## portable-package: Stage a relocatable CPU runtime bundle from pinned local artifacts
 portable-package: require-windows require-portable-artifacts build
 	$(VENV_PYTHON) scripts/portable_package.py --shell-dist dist --ffmpeg "$(VOICEINK_FFMPEG_PATH)" --sidecar "$(VOICEINK_SIDECAR_PATH)" --model "$(VOICEINK_MODEL_PATH)" --output release/voiceink-shell-windows-x64
+
+## windows-release-smoke: Download tracked pins, build, relocate, smoke-test, and bundle the Windows release package
+windows-release-smoke: build
+	$(VENV_PYTHON) scripts/windows_release_package.py --lock .github/native-smoke/artifact-lock.template.json --shell-dist dist --output release/voiceink-shell-windows-x64 --bundle release/voiceink-shell-windows-x64.zip --report release/windows-release-smoke.json
 
 ## require-portable-artifacts: Verify portable package inputs before the Windows build
 require-portable-artifacts:

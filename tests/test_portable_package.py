@@ -134,3 +134,35 @@ def test_build_package_rejects_changed_pinned_artifact(tmp_path: Path) -> None:
             output=tmp_path / "release" / "voiceink-shell-windows-x64",
             lock_template=lock_path,
         )
+
+
+def test_build_package_copies_sidecar_dll_dependencies(tmp_path: Path) -> None:
+    ffmpeg = b"ffmpeg"
+    sidecar = b"sidecar"
+    model = b"model"
+    shell_dist = tmp_path / "dist"
+    shell_dist.mkdir()
+    (shell_dist / "voiceink-shell.exe").write_bytes(b"shell")
+    (shell_dist / "voiceink-shell-smoke.exe").write_bytes(b"smoke")
+    lock_path = tmp_path / "lock.json"
+    lock_path.write_text(json.dumps(_lock(ffmpeg, sidecar, model)), encoding="utf-8")
+    ffmpeg_path = tmp_path / "ffmpeg.exe"
+    sidecar_path = tmp_path / "runtime" / "nemo-speech.exe"
+    model_path = tmp_path / "parakeet.gguf"
+    sidecar_path.parent.mkdir()
+    ffmpeg_path.write_bytes(ffmpeg)
+    sidecar_path.write_bytes(sidecar)
+    (sidecar_path.parent / "ggml.dll").write_bytes(b"runtime")
+    model_path.write_bytes(model)
+
+    output = build_package(
+        shell_dist=shell_dist,
+        ffmpeg=ffmpeg_path,
+        sidecar=sidecar_path,
+        model=model_path,
+        output=tmp_path / "release" / "voiceink-shell-windows-x64",
+        lock_template=lock_path,
+    )
+
+    assert (output / "runtime" / "nemo-speech.exe").is_file()
+    assert (output / "runtime" / "ggml.dll").read_bytes() == b"runtime"

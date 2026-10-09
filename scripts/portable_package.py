@@ -12,6 +12,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK_TEMPLATE = ROOT / ".github" / "native-smoke" / "artifact-lock.template.json"
 PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
+SIDECAR_RUNTIME_DLLS = frozenset(
+    {
+        "concrt140.dll",
+        "ggml-base.dll",
+        "ggml-cpu.dll",
+        "ggml.dll",
+        "llama.dll",
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
+        "msvcp140_atomic_wait.dll",
+        "msvcp140_codecvt_ids.dll",
+        "nemo_speech_asr.dll",
+        "nemo_speech_asr_c.dll",
+        "nemo_speech_nmt.dll",
+        "nemo_speech_nmt_c.dll",
+        "nemo_speech_tts.dll",
+        "vcomp140.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+    }
+)
 
 
 class PackageBuildError(RuntimeError):
@@ -39,6 +61,21 @@ def _copy_verified(source: Path, destination: Path, expected: str, label: str) -
         raise PackageBuildError(f"{label} checksum mismatch")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+
+
+def _copy_verified_sidecar(source: Path, destination: Path, expected: str) -> None:
+    source = _regular_file(source, "NeMo sidecar")
+    if _sha256(source).lower() != expected.lower():
+        raise PackageBuildError("NeMo sidecar checksum mismatch")
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination / "nemo-speech.exe")
+    for dependency in source.parent.iterdir():
+        if dependency.suffix.casefold() != ".dll":
+            continue
+        if dependency.name.casefold() not in SIDECAR_RUNTIME_DLLS:
+            raise PackageBuildError(f"unsupported NeMo sidecar dependency: {dependency.name}")
+        _regular_file(dependency, "NeMo sidecar dependency")
+        shutil.copy2(dependency, destination / dependency.name)
 
 
 def _load_lock(path: Path) -> dict[str, object]:
@@ -105,12 +142,7 @@ def build_package(
         _copy_verified(
             ffmpeg, staged / "tools" / "ffmpeg.exe", ffmpeg_lock["executable_sha256"], "FFmpeg"
         )
-        _copy_verified(
-            sidecar,
-            staged / "runtime" / "nemo-speech.exe",
-            sidecar_lock["executable_sha256"],
-            "NeMo sidecar",
-        )
+        _copy_verified_sidecar(sidecar, staged / "runtime", sidecar_lock["executable_sha256"])
         _copy_verified(
             model, staged / "models" / "parakeet.gguf", model_lock["sha256"], "Parakeet model"
         )
