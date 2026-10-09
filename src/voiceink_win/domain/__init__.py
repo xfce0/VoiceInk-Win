@@ -101,7 +101,7 @@ from .persistence import (
     TranscriptionSource,
     canonical_dictionary_key,
 )
-from .ports import AsrRuntime
+from .ports import AsrRequestHandle, AsrRuntime
 from .shell import ShellSnapshot, ShellState
 from .transcribe import (
     SUPPORTED_MEDIA_EXTENSIONS,
@@ -131,6 +131,7 @@ __all__ = [
     "AsrErrorCode",
     "AsrRequest",
     "AsrRuntime",
+    "AsrRequestHandle",
     "DictionaryEntry",
     "DictionaryPort",
     "HistoryPage",

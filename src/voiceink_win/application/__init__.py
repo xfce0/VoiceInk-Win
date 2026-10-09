@@ -1,6 +1,6 @@
 """Application-layer ASR orchestration."""
 
-from .asr_service import ApplicationAsrService, AsrApplicationService
+from .asr_service import ApplicationAsrService, AsrApplicationService, AsrRequestHandle
 from .cancellation import CancellationTokenSource, EventCancellationToken
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
@@ -12,6 +12,7 @@ from .transcribe_output import LocalTextFilePort, serialize_markdown, serialize_
 __all__ = [
     "ApplicationAsrService",
     "AsrApplicationService",
+    "AsrRequestHandle",
     "CancellationTokenSource",
     "EventCancellationToken",
     "ImportQueue",

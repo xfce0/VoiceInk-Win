@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from inspect import signature
-from queue import Full, Queue
+from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread, current_thread
 from typing import cast
 
@@ -37,6 +37,13 @@ class _ServiceState(StrEnum):
     CLOSED = "closed"
 
 
+class _TaskState(StrEnum):
+    ADMITTED = "admitted"
+    ACTIVE = "active"
+    QUIESCENT = "quiescent"
+    RELEASED = "released"
+
+
 class SystemMonotonicClock:
     def monotonic(self) -> float:
         return time.monotonic()
@@ -53,11 +60,15 @@ class _Invocation:
 
 @dataclass(slots=True)
 class _Task:
+    generation: int
     request: AsrRequest
     deadline: float
     cancellation: Event = field(default_factory=Event)
     done: Event = field(default_factory=Event)
+    terminal: Event = field(default_factory=Event)
     invocation: _Invocation = field(default_factory=_Invocation)
+    state: _TaskState = _TaskState.ADMITTED
+    auto_release: bool = False
 
 
 class _TaskCancellation:
@@ -67,6 +78,45 @@ class _TaskCancellation:
     def is_cancelled(self) -> bool:
         token = self._task.request.cancellation
         return self._task.cancellation.is_set() or (token is not None and token.is_cancelled())
+
+
+class AsrRequestHandle:
+    """Own one admitted request until its worker is quiescent and released."""
+
+    def __init__(self, service: AsrApplicationService, task: _Task) -> None:
+        self._service = service
+        self._task = task
+
+    @property
+    def generation(self) -> int:
+        return self._task.generation
+
+    @property
+    def quiescence_event(self) -> Event:
+        """Expose the internal fence to application workflows that own cleanup."""
+        return self._task.done
+
+    @property
+    def is_quiescent(self) -> bool:
+        return self._task.done.is_set()
+
+    @property
+    def is_released(self) -> bool:
+        with self._service._lock:
+            return self._task.state is _TaskState.RELEASED
+
+    def cancel(self, deadline: float | None = None) -> None:
+        del deadline
+        self._service._cancel_task(self._task)
+
+    def await_result(self, deadline: float | None = None) -> TranscriptResult:
+        return self._service._await_result(self._task, deadline)
+
+    def await_quiescence(self, deadline: float | None = None) -> None:
+        self._service._await_quiescence(self._task, deadline)
+
+    def release(self) -> None:
+        self._service._release_task(self._task)
 
 
 class AsrApplicationService:
@@ -108,6 +158,11 @@ class AsrApplicationService:
         self._state = _ServiceState.OPEN
         self._pending: set[int] = set()
         self._active: dict[int, _Task] = {}
+        self._admitted: dict[int, _Task] = {}
+        self._next_generation = 1
+        # Keep the historical queue_capacity meaning: it bounds waiting work;
+        # active workers add their own bounded slots.
+        self._admission_capacity = worker_count + queue_capacity
         self._workers: list[Thread] = []
         self._runtime_close_started = False
         self._runtime_close_error: AsrError | None = None
@@ -157,22 +212,31 @@ class AsrApplicationService:
         with self._lock:
             return bool(self._active)
 
+    @property
+    def admitted_count(self) -> int:
+        with self._lock:
+            return len(self._admitted)
+
     def interrupt_active(self) -> None:
         """Request cancellation and interrupt runtimes that expose a hard stop."""
         with self._lock:
             active = tuple(self._active.values())
-        for task in active:
-            task.cancellation.set()
+            for task in active:
+                self._cancel_task_locked(task, CancellationError("ASR request was interrupted"))
         interrupt = getattr(self._runtime, "interrupt", None)
         if interrupt is not None:
             interrupt()
 
-    def transcribe(self, request: AsrRequest) -> TranscriptResult:
-        self._validate_request(request)
-        with self._lock:
-            if self._state is not _ServiceState.OPEN:
-                raise RuntimeUnavailableError("ASR service is closed")
+    def try_admit(self, request: AsrRequest) -> AsrRequestHandle:
+        """Admit one request or raise a bounded ``QueueFullError``.
 
+        The admission lock is the single linearization point. The returned
+        handle owns the admission slot until ``release()`` succeeds.
+        """
+        self._validate_request(request)
+        token = request.cancellation
+        if token is not None and token.is_cancelled():
+            raise CancellationError("ASR request was cancelled")
         deadline = (
             request.deadline
             if request.deadline is not None
@@ -180,18 +244,32 @@ class AsrApplicationService:
         )
         if self._clock.monotonic() >= deadline:
             raise AsrTimeoutError("ASR request deadline exceeded")
-        task = _Task(request=request, deadline=deadline)
-        task_id = id(task)
         with self._lock:
             if self._state is not _ServiceState.OPEN:
                 raise RuntimeUnavailableError("ASR service is closed")
+            if len(self._admitted) >= self._admission_capacity:
+                raise QueueFullError("ASR request queue is full")
+            task = _Task(
+                generation=self._next_generation,
+                request=request,
+                deadline=deadline,
+            )
+            self._next_generation += 1
             try:
                 self._queue.put_nowait(task)
             except Full as error:
                 raise QueueFullError("ASR request queue is full") from error
-            self._pending.add(task_id)
+            self._admitted[task.generation] = task
+            self._pending.add(task.generation)
+        return AsrRequestHandle(self, task)
 
-        return self._wait_for_task(task, task_id)
+    def transcribe(self, request: AsrRequest) -> TranscriptResult:
+        """Preserve the legacy synchronous API over request-scoped admission."""
+        handle = self.try_admit(request)
+        try:
+            return handle.await_result()
+        finally:
+            self._finish_legacy_request(handle._task)
 
     def close(self, *, deadline: float | None = None) -> None:
         with self._close_lock:
@@ -200,7 +278,7 @@ class AsrApplicationService:
                     return
                 self._state = _ServiceState.CLOSING
                 for task in self._active.values():
-                    task.cancellation.set()
+                    self._cancel_task_locked(task, CancellationError("ASR service is closing"))
                 self._drain_pending_locked()
 
             close_deadline = (
@@ -349,51 +427,159 @@ class AsrApplicationService:
                 self._queue.task_done()
                 return
             task = cast(_Task, item)
-            task_id = id(task)
             with self._lock:
-                self._pending.discard(task_id)
-                if self._state is not _ServiceState.OPEN:
-                    task.cancellation.set()
-                self._active[task_id] = task
-            try:
-                if task.cancellation.is_set():
-                    task.invocation.error = CancellationError("ASR request was cancelled")
+                self._pending.discard(task.generation)
+                if task.state in {_TaskState.QUIESCENT, _TaskState.RELEASED}:
+                    should_run = False
                 else:
+                    if self._state is not _ServiceState.OPEN:
+                        self._cancel_task_locked(task, CancellationError("ASR service is closing"))
+                    elif self._request_cancelled(task):
+                        self._cancel_task_locked(
+                            task, CancellationError("ASR request was cancelled")
+                        )
+                    elif self._clock.monotonic() >= task.deadline:
+                        task.cancellation.set()
+                        self._publish_terminal_locked(
+                            task, error=AsrTimeoutError("ASR request deadline exceeded")
+                        )
+                    if task.state is _TaskState.ADMITTED:
+                        task.state = _TaskState.ACTIVE
+                        self._active[task.generation] = task
+                        should_run = not task.terminal.is_set()
+                    else:
+                        should_run = False
+            result: TranscriptResult | object | None = None
+            error: AsrError | None = None
+            try:
+                if should_run:
                     runtime_request = replace(
                         task.request,
                         deadline=task.deadline,
                         cancellation=_TaskCancellation(task),
                     )
                     try:
-                        task.invocation.result = self._runtime.transcribe(runtime_request)
-                    except AsrError as error:
-                        task.invocation.error = error
-                    except Exception as error:
-                        task.invocation.error = ExecutionError(
-                            "ASR runtime execution failed", cause=error
-                        )
+                        result = self._runtime.transcribe(runtime_request)
+                    except AsrError as runtime_error:
+                        error = runtime_error
+                    except Exception as runtime_error:
+                        error = ExecutionError("ASR runtime execution failed", cause=runtime_error)
             finally:
                 with self._lock:
-                    self._active.pop(task_id, None)
-                task.done.set()
+                    if should_run:
+                        self._publish_terminal_locked(task, result=result, error=error)
+                    self._active.pop(task.generation, None)
+                    if task.state is not _TaskState.RELEASED:
+                        task.state = _TaskState.QUIESCENT
+                        task.done.set()
+                        if task.auto_release:
+                            self._release_task_locked(task)
                 self._queue.task_done()
 
-    def _wait_for_task(self, task: _Task, task_id: int) -> TranscriptResult:
-        while not task.done.is_set():
+    def _await_result(self, task: _Task, deadline: float | None) -> TranscriptResult:
+        effective_deadline = task.deadline if deadline is None else min(task.deadline, deadline)
+        while not task.terminal.is_set():
             if self._request_cancelled(task):
-                task.cancellation.set()
-                raise CancellationError("ASR request was cancelled")
-            if self._clock.monotonic() >= task.deadline:
-                task.cancellation.set()
-                raise AsrTimeoutError("ASR request deadline exceeded")
-            self._clock.sleep(0.02)
-        if task.cancellation.is_set() or self._request_cancelled(task):
-            raise CancellationError("ASR request was cancelled")
-        if task.invocation.error is not None:
-            raise task.invocation.error
-        if not isinstance(task.invocation.result, TranscriptResult):
+                self._cancel_task(task)
+                continue
+            if self._clock.monotonic() >= effective_deadline:
+                self._timeout_task(task)
+                continue
+            task.terminal.wait(0.01)
+            if not task.terminal.is_set():
+                self._clock.sleep(0.01)
+        with self._lock:
+            error = task.invocation.error
+            result = task.invocation.result
+        if error is not None:
+            raise error
+        if not isinstance(result, TranscriptResult):
             raise ProtocolError("ASR runtime returned a malformed transcript result")
-        return task.invocation.result
+        return result
+
+    def _await_quiescence(self, task: _Task, deadline: float | None) -> None:
+        effective_deadline = task.deadline if deadline is None else min(task.deadline, deadline)
+        while not task.done.is_set():
+            if effective_deadline is not None and self._clock.monotonic() >= effective_deadline:
+                raise RuntimeRecoveryPendingError("ASR request quiescence exceeded its deadline")
+            wait_time = 0.01
+            if effective_deadline is not None:
+                wait_time = min(wait_time, max(0.0, effective_deadline - self._clock.monotonic()))
+            task.done.wait(wait_time)
+            if not task.done.is_set():
+                self._clock.sleep(wait_time)
+
+    def _cancel_task(self, task: _Task) -> None:
+        with self._lock:
+            self._cancel_task_locked(task, CancellationError("ASR request was cancelled"))
+
+    def _cancel_task_locked(self, task: _Task, error: CancellationError) -> None:
+        if self._admitted.get(task.generation) is not task:
+            return
+        task.cancellation.set()
+        if task.terminal.is_set():
+            return
+        self._publish_terminal_locked(task, error=error)
+        if task.state is _TaskState.ADMITTED:
+            self._pending.discard(task.generation)
+            task.state = _TaskState.QUIESCENT
+            task.done.set()
+            if task.auto_release:
+                self._release_task_locked(task)
+
+    def _timeout_task(self, task: _Task) -> None:
+        with self._lock:
+            if self._admitted.get(task.generation) is not task:
+                return
+            task.cancellation.set()
+            if not task.terminal.is_set():
+                self._publish_terminal_locked(
+                    task, error=AsrTimeoutError("ASR request deadline exceeded")
+                )
+
+    def _publish_terminal_locked(
+        self,
+        task: _Task,
+        *,
+        result: TranscriptResult | object | None = None,
+        error: AsrError | None = None,
+    ) -> bool:
+        if (
+            self._admitted.get(task.generation) is not task
+            or task.state is _TaskState.RELEASED
+            or task.terminal.is_set()
+        ):
+            return False
+        task.invocation.result = result
+        task.invocation.error = error
+        task.terminal.set()
+        return True
+
+    def _release_task(self, task: _Task) -> None:
+        with self._lock:
+            if task.state is _TaskState.RELEASED:
+                return
+            if not task.done.is_set():
+                raise RuntimeRecoveryPendingError("ASR request must be quiescent before release")
+            self._release_task_locked(task)
+
+    def _release_task_locked(self, task: _Task) -> None:
+        if task.state is _TaskState.RELEASED:
+            return
+        if not task.done.is_set():
+            return
+        if self._admitted.get(task.generation) is task:
+            del self._admitted[task.generation]
+        task.state = _TaskState.RELEASED
+
+    def _finish_legacy_request(self, task: _Task) -> None:
+        with self._lock:
+            if task.state is _TaskState.RELEASED:
+                return
+            if task.done.is_set():
+                self._release_task_locked(task)
+            else:
+                task.auto_release = True
 
     def _request_cancelled(self, task: _Task) -> bool:
         token = task.request.cancellation
@@ -403,14 +589,17 @@ class AsrApplicationService:
         while True:
             try:
                 item = self._queue.get_nowait()
-            except Exception:
+            except Empty:
                 return
             if item is not _STOP:
                 task = cast(_Task, item)
-                self._pending.discard(id(task))
-                task.cancellation.set()
-                task.invocation.error = CancellationError("ASR service is closing")
-                task.done.set()
+                self._pending.discard(task.generation)
+                if task.state not in {_TaskState.QUIESCENT, _TaskState.RELEASED}:
+                    self._cancel_task_locked(task, CancellationError("ASR service is closing"))
+                    task.state = _TaskState.QUIESCENT
+                    task.done.set()
+                    if task.auto_release:
+                        self._release_task_locked(task)
             self._queue.task_done()
 
     def _validate_request(self, request: AsrRequest) -> None:
