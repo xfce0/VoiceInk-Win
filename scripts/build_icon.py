@@ -26,7 +26,7 @@ def _render_png(renderer: QSvgRenderer, size: int) -> bytes:
     if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
         raise RuntimeError("Unable to open an in-memory PNG buffer")
     try:
-        if not image.save(buffer, b"PNG"):
+        if not image.save(buffer, "PNG"):
             raise RuntimeError(f"Unable to encode {size}x{size} PNG data")
         return bytes(buffer.data())
     finally:
