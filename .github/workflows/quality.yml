@@ -47,7 +47,11 @@ jobs:
         run: python -m ruff check src tests scripts
 
       - name: Test
-        run: python -m pytest
+        env:
+          PYTHONPATH: scripts
+          PYTEST_PLUGINS: pytest_thread_diagnostics
+          PYTHONUNBUFFERED: "1"
+        run: python -m pytest -vv --durations=50
 
       - name: Compile
         run: python -m compileall -q src scripts
