@@ -1,0 +1,46 @@
+{
+  "schema": "voiceink.wasapi.helper-artifact-lock.v1",
+  "version": 1,
+  "status": "blocked",
+  "implementation_allowed": false,
+  "artifacts": {
+    "voiceink-audio-helper-windows-x64": {
+      "kind": "signed-executable",
+      "version": "REPLACE_WITH_APPROVED_VERSION",
+      "provenance_url": "https://REPLACE_WITH_APPROVED_PROVENANCE",
+      "sha256": "REPLACE_WITH_64_HEX_SHA256",
+      "license": "REPLACE_WITH_APPROVED_LICENSE",
+      "allowed_relative_path": "audio/voiceink-audio-helper.exe",
+      "authenticode_publisher_thumbprint": "REPLACE_WITH_APPROVED_THUMBPRINT",
+      "signature_policy": "Authenticode-required"
+    }
+  },
+  "required_gates": [
+    "D1",
+    "D2",
+    "D3",
+    "D4",
+    "D5",
+    "D6",
+    "D7",
+    "D8",
+    "D9",
+    "D10",
+    "D11",
+    "D12",
+    "D13",
+    "D14",
+    "D15",
+    "D16",
+    "D17",
+    "D18",
+    "D19",
+    "G1",
+    "G2",
+    "G3a",
+    "G4a=GO",
+    "decision_sync",
+    "implementation_plan"
+  ],
+  "enablement_gates": ["G3b", "G4b"]
+}

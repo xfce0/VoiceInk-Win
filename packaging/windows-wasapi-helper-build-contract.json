@@ -1,0 +1,73 @@
+{
+  "schema": "voiceink.wasapi.helper-build-contract.v1",
+  "version": 1,
+  "status": "blocked",
+  "implementation_allowed": false,
+  "target": {
+    "operating_systems": [
+      "Windows 10 22H2",
+      "Windows 11 23H2",
+      "Windows 11 24H2"
+    ],
+    "architecture": "x64",
+    "compiler": "MSVC",
+    "language_standard": "C++17",
+    "windows_sdk": "REQUIRES_G4A_APPROVED_VERSION",
+    "configuration": "Release"
+  },
+  "output": {
+    "relative_path": "audio/voiceink-audio-helper.exe",
+    "one_process_per_generation": true,
+    "runtime_path_lookup": "verified-bundle-relative-only"
+  },
+  "native_ownership": {
+    "com": "helper-only",
+    "wasapi": "helper-only",
+    "conversion": "helper-only",
+    "job_object": "parent-owned-kill-on-close"
+  },
+  "forbidden_implementations": [
+    "python_ctypes_capture",
+    "python_pywin32_capture",
+    "fake_microphone_backend",
+    "in_process_wasapi",
+    "ffmpeg_live_capture",
+    "runtime_enablement_without_gates"
+  ],
+  "required_inputs": [
+    "approved_protocol_contract",
+    "approved_format_matrix",
+    "approved_converter_and_license",
+    "approved_recovery_budget",
+    "pinned_helper_source_and_toolchain",
+    "pinned_artifact_lock"
+  ],
+  "required_gates": [
+    "D1",
+    "D2",
+    "D3",
+    "D4",
+    "D5",
+    "D6",
+    "D7",
+    "D8",
+    "D9",
+    "D10",
+    "D11",
+    "D12",
+    "D13",
+    "D14",
+    "D15",
+    "D16",
+    "D17",
+    "D18",
+    "D19",
+    "G1",
+    "G2",
+    "G3a",
+    "G4a=GO",
+    "decision_sync",
+    "implementation_plan"
+  ],
+  "enablement_gates": ["G3b", "G4b"]
+}

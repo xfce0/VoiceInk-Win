@@ -1,0 +1,95 @@
+{
+  "schema": "voiceink.wasapi.protocol.v1",
+  "version": 1,
+  "status": "blocked",
+  "implementation_allowed": false,
+  "source_documents": [
+    "rfcs/microphone-recording.md",
+    "spec/features/005-microphone-recording.md"
+  ],
+  "transport": {
+    "kind": "current-user-named-pipe",
+    "pipe_owner": "parent",
+    "helper_receives_inherited_server_handle": true,
+    "remote_clients": "rejected",
+    "reconnect": false
+  },
+  "authentication": {
+    "bootstrap_challenge_bytes": 32,
+    "session_key_derivation": "HKDF-SHA-256(challenge,generation)",
+    "direction_specific_hmac": "HMAC-SHA-256",
+    "verify_connected_server_pid": true,
+    "verify_before_open": true
+  },
+  "frame": {
+    "magic": "VIKA",
+    "version_field": "u16",
+    "type_field": "u8",
+    "flags_field": "u8",
+    "generation_field": "u64",
+    "sequence_field": "u64",
+    "deadline_ns_field": "u64",
+    "payload_length_field": "u32",
+    "tag": "hmac_sha256[32]",
+    "max_payload_bytes": 65536,
+    "canonical_chunk_bytes": 32768,
+    "aggregate_ipc_queue_bytes": 4194304
+  },
+  "messages": [
+    "HELLO",
+    "OPEN",
+    "START",
+    "AUDIO",
+    "STOP",
+    "CANCEL",
+    "STATUS",
+    "RESULT",
+    "CLOSE"
+  ],
+  "reject_before_payload_allocation": [
+    "malformed",
+    "replayed",
+    "oversized",
+    "out_of_order",
+    "wrong_generation",
+    "wrong_direction",
+    "wrong_version",
+    "wrong_hmac"
+  ],
+  "audio_boundary": {
+    "helper_to_parent": "canonical-mono-16000-s16le-chunks-only",
+    "native_packets_cross_boundary": false,
+    "native_handles_cross_boundary": false,
+    "endpoint_ids_cross_boundary": false,
+    "parent_final_value": "CanonicalAudio",
+    "disk_spill": false
+  },
+  "required_gates": [
+    "D1",
+    "D2",
+    "D3",
+    "D4",
+    "D5",
+    "D6",
+    "D7",
+    "D8",
+    "D9",
+    "D10",
+    "D11",
+    "D12",
+    "D13",
+    "D14",
+    "D15",
+    "D16",
+    "D17",
+    "D18",
+    "D19",
+    "G1",
+    "G2",
+    "G3a",
+    "G4a=GO",
+    "decision_sync",
+    "implementation_plan"
+  ],
+  "enablement_gates": ["G3b", "G4b"]
+}

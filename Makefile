@@ -15,7 +15,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check test compile build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check wasapi-contract-check test compile build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -40,8 +40,12 @@ lint:
 	$(VENV_PYTHON) -m ruff check src tests scripts
 
 ## spec-check: Validate the living specification catalog and required sections
-spec-check:
+spec-check: wasapi-contract-check
 	$(VENV_PYTHON) scripts/spec_check.py
+
+## wasapi-contract-check: Validate the disabled native WASAPI scaffold and provenance template
+wasapi-contract-check:
+	$(VENV_PYTHON) scripts/wasapi_contract.py
 
 ## test: Run behavior-focused automated tests
 test:
