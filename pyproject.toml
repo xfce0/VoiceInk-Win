@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -19,10 +19,11 @@ dev = [
     "ruff>=0.9,<1",
 ]
 gui = [
-    "PySide6>=6.8,<7",
+    "PySide6==6.12.0",
 ]
 build = [
-    "pyinstaller>=6.14,<7",
+    "Pillow==12.3.0",
+    "pyinstaller==6.22.3",
 ]
 
 [project.scripts]
@@ -30,6 +31,9 @@ voiceink-win-shell = "voiceink_win.presentation.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"voiceink_win.infrastructure" = ["migrations/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

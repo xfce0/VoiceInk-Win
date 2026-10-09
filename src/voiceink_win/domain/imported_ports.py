@@ -14,6 +14,7 @@ from .imported_models import (
     SourceMedia,
     SourceSnapshot,
 )
+from .transcribe import EndOfStream, ImportObservation
 
 
 class MonotonicClock(Protocol):
@@ -65,3 +66,9 @@ class MediaNormalizer(Protocol):
         cancellation: CancellationToken,
         deadline: float,
     ) -> NormalizedAudio: ...
+
+
+class ObservationSubscription(Protocol):
+    def next(self, timeout: float | None = None) -> ImportObservation | EndOfStream | None: ...
+
+    def close(self) -> None: ...

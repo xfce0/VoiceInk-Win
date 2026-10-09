@@ -51,6 +51,7 @@ def safe_message(code: ErrorCode) -> str:
 
 class WarningCode(StrEnum):
     CLEANUP_WARNING = "CleanupWarning"
+    HISTORY_PERSISTENCE_WARNING = "HistoryPersistenceWarning"
 
 
 class CancellationReason(StrEnum):

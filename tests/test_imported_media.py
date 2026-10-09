@@ -7,6 +7,7 @@ import os
 import shutil
 import stat
 import time
+from concurrent.futures import Future
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from voiceink_win.domain import (
     Attempt,
     ConfigurationError,
     ErrorCode,
+    HistoryStatus,
     ImportRecoveryPendingError,
     ImportShutdownError,
     InvalidSourceError,
@@ -111,6 +113,149 @@ def test_imported_audio_success_cleans_workspace_and_calls_asr(tmp_path: Path) -
     assert normalizer.calls == 1
     assert application._queue.reservation_count == 0
     assert list((tmp_path / "work").rglob("source.snapshot")) == []
+
+
+class _HistoryRecorder:
+    def __init__(self) -> None:
+        self.records = []
+
+    def upsert_history(self, record) -> Future[None]:
+        self.records.append(record)
+        future: Future[None] = Future()
+        future.set_result(None)
+        return future
+
+
+class _RetryingHistoryRecorder(_HistoryRecorder):
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.attempts = 0
+
+    def upsert_history(self, record) -> Future[None]:
+        self.records.append(record)
+        self.attempts += 1
+        future: Future[None] = Future()
+        if self.attempts <= self.failures:
+            future.set_exception(OSError("history unavailable"))
+        else:
+            future.set_result(None)
+        return future
+
+
+def test_terminal_import_results_persist_once_after_cleanup_for_all_outcomes(
+    tmp_path: Path,
+) -> None:
+    history = _HistoryRecorder()
+    started = Event()
+    release = Event()
+
+    class BlockingNormalizer(FakeMediaNormalizer):
+        def normalize(self, *args, **kwargs):
+            started.set()
+            release.wait(2.0)
+            return super().normalize(*args, **kwargs)
+
+    normalizer = BlockingNormalizer()
+    store = FakeSnapshotStore(tmp_path / "work")
+    application = ImportedMediaTranscriptionService(
+        normalizer,
+        AsrApplicationService(FakeAsrRuntime()),
+        store,
+        history_port=history,
+        queue_capacity=2,
+    )
+    success_path = tmp_path / "success.wav"
+    cancelled_path = tmp_path / "cancelled.wav"
+    success_path.write_bytes(b"success")
+    cancelled_path.write_bytes(b"cancelled")
+    success_id = application.submit(str(success_path))
+    assert started.wait(1.0)
+    cancelled_id = application.submit(str(cancelled_path))
+    assert application.cancel(cancelled_id)
+    release.set()
+    success = application.wait(success_id, timeout=2.0)
+    cancelled = application.wait(cancelled_id, timeout=2.0)
+
+    failing_history = _HistoryRecorder()
+    failing = ImportedMediaTranscriptionService(
+        FakeMediaNormalizer(FakeMediaScenario.NO_AUDIO),
+        AsrApplicationService(FakeAsrRuntime()),
+        FakeSnapshotStore(tmp_path / "failed-work"),
+        history_port=failing_history,
+    )
+    failed_path = tmp_path / "failed.wav"
+    failed_path.write_bytes(b"failed")
+    failed = failing.submit_and_wait(str(failed_path), timeout=2.0)
+
+    application.close()
+    failing.close()
+
+    assert success.status == "succeeded"
+    assert cancelled.status == "cancelled"
+    assert failed.status == "failed"
+    assert {record.status for record in history.records} == {
+        HistoryStatus.COMPLETED,
+        HistoryStatus.CANCELLED,
+    }
+    assert failing_history.records[0].status is HistoryStatus.FAILED
+    assert failing_history.records[0].failure_code == ErrorCode.NO_AUDIO_STREAM.value
+    assert len(history.records) == 2
+    assert all(record.source_metadata["source_name"] for record in history.records)
+
+    record = application._record(success_id)
+    application._persist_history_once(record, success)
+    assert len(history.records) == 2
+
+
+def test_terminal_history_waits_for_future_retry_before_publishing_success(tmp_path: Path) -> None:
+    history = _RetryingHistoryRecorder(failures=1)
+    application = service(
+        tmp_path,
+        history_port=history,
+        history_persist_retries=2,
+        retry_backoff=lambda _: 0,
+    )
+
+    result = application.submit_and_wait(str(source_file(tmp_path)), timeout=2.0)
+
+    assert result.status == "succeeded"
+    assert result.warnings == ()
+    assert history.attempts == 2
+    assert application._record(result.job_id).history_persisted is True
+    application.close()
+
+
+def test_terminal_history_reports_bounded_persistence_failure(tmp_path: Path) -> None:
+    history = _RetryingHistoryRecorder(failures=5)
+    application = service(
+        tmp_path,
+        history_port=history,
+        history_persist_retries=2,
+        retry_backoff=lambda _: 0,
+    )
+
+    result = application.submit_and_wait(str(source_file(tmp_path)), timeout=2.0)
+
+    assert result.status == "succeeded"
+    assert result.warnings == (WarningCode.HISTORY_PERSISTENCE_WARNING,)
+    assert history.attempts == 2
+    assert application._record(result.job_id).history_persisted is False
+    application.close()
+
+
+def test_history_source_metadata_contains_no_full_source_path(tmp_path: Path) -> None:
+    history = _HistoryRecorder()
+    application = service(tmp_path, history_port=history)
+    source = source_file(tmp_path)
+
+    application.submit_and_wait(str(source), timeout=2.0)
+    application.close()
+
+    metadata = history.records[0].source_metadata
+    assert "source_path" not in metadata
+    assert metadata["source_name"] == source.name
+    assert metadata["source_reference"].startswith("sha256:")
 
 
 def test_normalization_uses_one_stage_deadline_and_does_not_retry_after_processing_expiry(
@@ -1862,6 +2007,28 @@ def test_windows_snapshot_admission_rejects_device_and_pipe_handles(file_type: i
     adapter._kernel32 = api.dll
     with pytest.raises(InvalidSourceError, match="regular file"):
         adapter._open(Path("C:/input"), is_directory=False)
+
+
+def test_native_windows_adapter_accepts_integer_win32_handles() -> None:
+    class FakeDll:
+        def CreateFileW(self, *args):
+            del args
+            return 17
+
+        def GetFileInformationByHandle(self, handle, pointer):
+            del handle
+            pointer = ctypes.cast(pointer, ctypes.POINTER(windows_snapshot._WindowsFileInformation))
+            pointer.contents.attributes = 0
+            return True
+
+        def GetFileType(self, handle):
+            del handle
+            return 1
+
+    adapter = object.__new__(NativeWindowsMediaSecurityAdapter)
+    adapter._kernel32 = FakeDll()
+
+    assert adapter._open(Path("C:/input"), is_directory=False) == 17
 
 
 def test_windows_job_object_binding_and_lifecycle_are_injectable() -> None:

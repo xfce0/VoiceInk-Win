@@ -50,9 +50,59 @@ make push
 
 ## Windows Frontend Shell Artifact
 
-The `Windows Frontend Shell Build` workflow publishes the artifact
-`voiceink-shell-windows-x64` with the user-facing GUI executable
-`voiceink-shell.exe` and a separate console-mode CI smoke executable.
+After a clean clone, `make build` is the reproducible Windows packaging command.
+It creates or updates only the frontend outputs in `dist/`, installs the exact
+`.[gui,build]` extras into `.venv`, validates both x64 PE subsystems, and runs
+the console executable with Qt's offscreen platform. It requires 64-bit Windows,
+GNU Make, and Python 3.12, 3.13, or 3.14. macOS and Linux are intentionally
+rejected for this target; use `make check` there.
+
+Build prerequisites are GNU Make (`make --version` must work) and Git for
+Windows with `sh.exe` available on `PATH`; the Makefile uses `/bin/sh`. Git
+Bash supplies the required shell, but GNU Make is still required. PowerShell
+is supported when both `make.exe` and `sh.exe` are available on `PATH`.
+Direct frontend build pins, including the Qt split packages, are committed in
+`packaging/windows-build-constraints.txt`.
+
+PowerShell:
+
+```powershell
+git clone https://github.com/xfce0/VoiceInk-Win.git
+Set-Location .\VoiceInk-Win
+python --version  # 3.12.x, 3.13.x, or 3.14.x
+make build
+```
+
+If `python` is not the desired supported interpreter, use the Python launcher:
+
+```powershell
+make build 'PYTHON=py -3.12'
+```
+
+Git Bash:
+
+```bash
+git clone https://github.com/xfce0/VoiceInk-Win.git
+cd VoiceInk-Win
+python --version  # 3.12.x, 3.13.x, or 3.14.x
+make build
+```
+
+The command produces exactly these package files:
+
+```text
+dist/
+  README.txt
+  voiceink-shell.exe          # user-facing GUI executable
+  voiceink-shell-smoke.exe    # console/offscreen smoke executable
+```
+
+If `dist/` contains unrelated files, the build refuses to overwrite them. Move
+those files or explicitly run `make clean` before retrying. `make clean` removes
+all generated `dist/` and build directories.
+
+The `Windows Frontend Shell Build` workflow uses the same `make build` command
+and publishes the artifact `voiceink-shell-windows-x64`.
 GitHub CLI downloads and extracts it into the requested directory:
 
 ```powershell
@@ -68,12 +118,37 @@ Replace `RUN_ID` with the workflow run ID, or download the artifact ZIP from
 the Actions page and extract it with `Expand-Archive`. The artifact includes
 the same command in its `README.txt`.
 
-The user-facing shell is a no-resource unavailable state: microphone capture and
-real ASR are not included, and production startup does not construct a fake
-backend or show synthetic text. The fake is reserved for focused tests and a
-separately named, development-only demo if one is provided; it is never a
-production fallback. Global hotkeys, system tray, history persistence, and
-imported-media actions are also not wired into the desktop shell.
+The packaged shell supports two explicit runtime modes:
+
+- **No-resource mode:** when imported-media configuration is absent, the shell
+  starts promptly and shows recording and Transcribe as unavailable. It never
+  constructs a fake backend or shows synthetic text. The fake backend is
+  reserved for focused tests and is never a production fallback.
+- **Configured imported-media mode:** when the trusted ASR and FFmpeg settings
+  below are complete, the shell starts promptly with Transcribe loading, then
+  enables the page only after backend readiness succeeds. Microphone capture,
+  WASAPI, and native audio remain unavailable in both modes.
+
+Configured imported-media mode requires these runtime environment variables:
+
+```text
+VOICEINK_RUNTIME_MANIFEST=C:\path\to\runtime.manifest.json
+VOICEINK_ARTIFACT_LOCK=C:\path\to\artifacts.lock.json
+VOICEINK_ARTIFACT_LOCK_SHA256=<sha256-of-artifacts.lock.json>
+VOICEINK_FFMPEG_PATH=C:\path\to\ffmpeg.exe
+VOICEINK_FFMPEG_VERSION=<approved-version>
+VOICEINK_FFMPEG_PROVENANCE_URL=https://<approved-source>
+VOICEINK_FFMPEG_SHA256=<sha256-of-ffmpeg.exe>
+VOICEINK_FFMPEG_LICENSE=<license-name>
+VOICEINK_IMPORT_WORKSPACE_ROOT=C:\path\to\workspace
+VOICEINK_IMPORT_ROOTS=C:\path\to\allowed\media;D:\another\allowed\root
+```
+
+The runtime manifest and artifact lock must describe the approved model and
+sidecar executable. FFmpeg must be an approved absolute path whose metadata and
+SHA-256 pass verification. `VOICEINK_IMPORT_ROOTS` is a semicolon-separated
+list on Windows. Global hotkeys, system tray, and history persistence are not
+part of this Transcribe-only slice.
 
 ## Windows Diagnostic Build
 
