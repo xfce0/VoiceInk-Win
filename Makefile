@@ -16,7 +16,7 @@ VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
 endif
 
-.PHONY: help setup format format-check lint spec-check wasapi-contract-check test compile build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check wasapi-contract-check test compile platform-check build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -56,13 +56,13 @@ test:
 compile:
 	$(VENV_PYTHON) -m compileall -q src scripts
 
+## platform-check: Detect Windows version/architecture and selected x64 artifact settings
+platform-check:
+	$(PYTHON) scripts/windows_platform.py --check
+
 ## require-windows: Stop Windows-only packaging with an actionable error elsewhere
 require-windows:
-ifeq ($(OS),Windows_NT)
-	@:
-else
-	@printf '%s\n' 'Frontend packaging requires 64-bit Windows (Windows_NT). Run `make check` on macOS/Linux, or use a Windows 10/11 x64 host for `make build`.' >&2; exit 1
-endif
+	$(MAKE) platform-check
 
 ## build-deps: Create the build environment and verify the exact GUI/PyInstaller extras
 build-deps: require-windows
@@ -92,7 +92,7 @@ require-portable-artifacts:
 	@test -n "$(VOICEINK_MODEL_PATH)" || (printf '%s\n' 'VOICEINK_MODEL_PATH must point to a pinned Parakeet model' >&2; exit 1)
 
 ## diagnostic-build: Build the Windows diagnostic executable (run on Windows)
-diagnostic-build:
+diagnostic-build: require-windows
 	@test -n "$(VOICEINK_FFMPEG_PATH)" || (printf '%s\n' 'VOICEINK_FFMPEG_PATH must point to an external ffmpeg.exe' >&2; exit 1)
 	@test -n "$(VOICEINK_FFMPEG_MANIFEST)" || (printf '%s\n' 'VOICEINK_FFMPEG_MANIFEST must point to ffmpeg.manifest.json' >&2; exit 1)
 	$(VENV_PYTHON) -m PyInstaller --clean --noconfirm --onefile --name voiceink-diagnostic --add-binary "$(VOICEINK_FFMPEG_PATH);." --add-data "$(VOICEINK_FFMPEG_MANIFEST);." scripts/diagnostic_cli.py
