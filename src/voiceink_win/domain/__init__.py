@@ -85,8 +85,10 @@ from .models import (
     WordTimestamp,
 )
 from .persistence import (
+    AudioArtifactQuotaError,
     DictionaryEntry,
     DictionaryPort,
+    HistoryAudioArtifactPort,
     HistoryPage,
     HistoryPort,
     HistoryRecord,
@@ -134,6 +136,8 @@ __all__ = [
     "AsrRequestHandle",
     "DictionaryEntry",
     "DictionaryPort",
+    "AudioArtifactQuotaError",
+    "HistoryAudioArtifactPort",
     "HistoryPage",
     "HistoryPort",
     "HistoryRecord",

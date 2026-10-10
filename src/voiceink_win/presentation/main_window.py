@@ -248,6 +248,8 @@ class MainWindow(QMainWindow):
         locale_config: LocaleConfig | None = None,
         persistence: PersistenceService | None = None,
         artifact_cleanup=None,
+        artifact_reveal=None,
+        artifact_folder=None,
         history_deletion: HistoryDeletionService | None = None,
     ) -> None:
         super().__init__()
@@ -263,6 +265,8 @@ class MainWindow(QMainWindow):
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
         self._persistence = persistence
         self._artifact_cleanup = artifact_cleanup
+        self._artifact_reveal = artifact_reveal
+        self._artifact_folder = artifact_folder
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None
@@ -314,6 +318,8 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             artifact_cleanup=self._artifact_cleanup,
+            artifact_reveal=self._artifact_reveal,
+            artifact_folder=self._artifact_folder,
             history_deletion=self._history_deletion,
         )
         self._pages.addWidget(self._history_page)

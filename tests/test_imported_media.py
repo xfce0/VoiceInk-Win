@@ -143,6 +143,40 @@ class _RetryingHistoryRecorder(_HistoryRecorder):
         return future
 
 
+class _HistoryAudioRecorder:
+    def __init__(self) -> None:
+        self.saved: list[tuple[str, bytes]] = []
+        self.deleted: list[str] = []
+
+    def save_normalized_audio(self, audio, artifact_id: str) -> str:
+        path = f"history/{artifact_id}.wav"
+        self.saved.append((path, audio.pcm16le))
+        return path
+
+    def delete(self, relative_path: str) -> None:
+        self.deleted.append(relative_path)
+
+
+def test_successful_history_record_links_the_normalized_audio_artifact(
+    tmp_path: Path,
+) -> None:
+    history = _HistoryRecorder()
+    artifacts = _HistoryAudioRecorder()
+    application = service(
+        tmp_path,
+        history_port=history,
+        audio_artifact_port=artifacts,
+    )
+
+    result = application.submit_and_wait(str(source_file(tmp_path)), timeout=2.0)
+    application.close()
+
+    assert result.status == "succeeded"
+    assert len(history.records) == 1
+    assert history.records[0].audio_artifact_path == artifacts.saved[0][0]
+    assert artifacts.saved[0][1]
+
+
 def test_terminal_import_results_persist_once_after_cleanup_for_all_outcomes(
     tmp_path: Path,
 ) -> None:

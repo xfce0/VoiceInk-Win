@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,8 @@ import pytest
 
 from voiceink_win.application import HistoryDeletionService, PersistenceService
 from voiceink_win.domain import (
+    AudioArtifactQuotaError,
+    CanonicalAudio,
     DictionaryEntry,
     HistoryRecord,
     HistoryStatus,
@@ -60,6 +63,18 @@ class _TestArtifactSecurityAdapter:
 def _portable_artifacts(path: Path) -> AudioArtifactStore:
     adapter: WindowsMediaSecurityAdapter | None = _TestArtifactSecurityAdapter()
     return AudioArtifactStore(path, windows_adapter=adapter)
+
+
+def _portable_artifacts_with_limits(
+    path: Path, *, max_bytes: int, quota: int
+) -> AudioArtifactStore:
+    adapter: WindowsMediaSecurityAdapter | None = _TestArtifactSecurityAdapter()
+    return AudioArtifactStore(
+        path,
+        windows_adapter=adapter,
+        max_artifact_bytes=max_bytes,
+        quota_bytes=quota,
+    )
 
 
 def _native_safety_artifacts(path: Path) -> AudioArtifactStore:
@@ -225,6 +240,37 @@ def test_audio_paths_reject_traversal_and_writes_are_atomic(
     target = artifacts.write("history/sample.wav", b"new audio")
     assert target.read_bytes() == b"new audio"
     assert target.parent == paths.audio / "history"
+
+
+def test_normalized_audio_artifacts_use_private_safe_names_and_reveal_only_regular_files(
+    tmp_path: Path,
+) -> None:
+    artifacts = _portable_artifacts(tmp_path / "audio")
+    relative_path = artifacts.save_normalized_audio(
+        CanonicalAudio(b"\x01\x00" * 800), "job/with-user-source-name"
+    )
+
+    assert relative_path.startswith("history/")
+    assert Path(relative_path).name.endswith(".wav")
+    revealed = artifacts.reveal_path(relative_path)
+    assert revealed.parent == tmp_path / "audio" / "history"
+    with wave.open(str(revealed), "rb") as audio:
+        assert audio.getnchannels() == 1
+        assert audio.getframerate() == 16_000
+        assert audio.getsampwidth() == 2
+        assert audio.readframes(audio.getnframes()) == b"\x01\x00" * 800
+
+    with pytest.raises(InvalidAudioArtifactPathError):
+        artifacts.reveal_path("../outside.wav")
+
+
+def test_audio_artifact_quota_is_enforced_before_replacement(tmp_path: Path) -> None:
+    artifacts = _portable_artifacts_with_limits(tmp_path / "audio", max_bytes=512, quota=100)
+
+    with pytest.raises(AudioArtifactQuotaError, match="quota"):
+        artifacts.save_normalized_audio(CanonicalAudio(b"\x00\x00" * 100), "job-1")
+
+    assert list((tmp_path / "audio").rglob("*.wav")) == []
 
 
 def test_migration_checksums_detect_drift_and_missing_package_files(tmp_path: Path) -> None:
