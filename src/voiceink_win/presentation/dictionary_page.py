@@ -548,6 +548,7 @@ class DictionaryPage(QWidget):
                 self._t(TranslationKey.DICTIONARY_EDIT_ACCESSIBLE),
             )
         self._set_editor_title()
+        self._resize_rows()
 
     def _t(self, key: TranslationKey, **values: object) -> str:
         return translate(key, self._locale_config.locale, **values)
