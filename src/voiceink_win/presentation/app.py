@@ -91,7 +91,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         else build_desktop_composition()
     )
     global_shortcut = GlobalToggleShortcutService(
-        composition.controller, create_global_shortcut_port()
+        getattr(composition, "recorder", composition.controller), create_global_shortcut_port()
     )
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
@@ -106,6 +106,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             artifact_folder=getattr(composition, "artifact_folder", None),
             history_deletion=getattr(composition, "history_deletion", None),
             global_shortcut=global_shortcut,
+            recorder_controller=getattr(composition, "recorder", None),
         )
         window.setWindowIcon(application.windowIcon())
         if color_scheme_changed is not None:

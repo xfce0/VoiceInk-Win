@@ -28,10 +28,16 @@ class TranslationKey(StrEnum):
 
     RECORDER_CLOSE = "recorder.close"
     RECORDER_CLOSE_DESCRIPTION = "recorder.close_description"
+    RECORDER_CANCEL_DESCRIPTION = "recorder.cancel_description"
     RECORDER_STATUS_UNAVAILABLE = "recorder.status.unavailable"
     RECORDER_STATUS_READY = "recorder.status.ready"
+    RECORDER_STATUS_REQUESTING = "recorder.status.requesting"
+    RECORDER_STATUS_STARTING = "recorder.status.starting"
     RECORDER_STATUS_LISTENING = "recorder.status.listening"
+    RECORDER_STATUS_STOPPING = "recorder.status.stopping"
     RECORDER_STATUS_TRANSCRIBING = "recorder.status.transcribing"
+    RECORDER_STATUS_CANCELLING = "recorder.status.cancelling"
+    RECORDER_STATUS_RECOVERY = "recorder.status.recovery"
     RECORDER_STATUS_TRANSCRIPT_READY = "recorder.status.transcript_ready"
     RECORDER_STATUS_NO_WORDS = "recorder.status.no_words"
     RECORDER_STATUS_ACTION_NEEDED = "recorder.status.action_needed"
@@ -363,10 +369,20 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.RECORDER_CLOSE_DESCRIPTION: _entry(
         "Close the floating recorder", "Закрыть плавающий рекордер"
     ),
+    TranslationKey.RECORDER_CANCEL_DESCRIPTION: _entry(
+        "Cancel microphone recording", "Отменить запись с микрофона"
+    ),
     TranslationKey.RECORDER_STATUS_UNAVAILABLE: _entry("Not available", "Недоступно"),
     TranslationKey.RECORDER_STATUS_READY: _entry("Ready", "Готово"),
+    TranslationKey.RECORDER_STATUS_REQUESTING: _entry(
+        "Requesting microphone", "Запрашиваю микрофон"
+    ),
+    TranslationKey.RECORDER_STATUS_STARTING: _entry("Starting microphone", "Запускаю микрофон"),
     TranslationKey.RECORDER_STATUS_LISTENING: _entry("Listening", "Слушаю"),
+    TranslationKey.RECORDER_STATUS_STOPPING: _entry("Stopping", "Останавливаю"),
     TranslationKey.RECORDER_STATUS_TRANSCRIBING: _entry("Transcribing", "Расшифровываю"),
+    TranslationKey.RECORDER_STATUS_CANCELLING: _entry("Cancelling", "Отменяю"),
+    TranslationKey.RECORDER_STATUS_RECOVERY: _entry("Recovering", "Восстанавливаю"),
     TranslationKey.RECORDER_STATUS_TRANSCRIPT_READY: _entry("Transcript ready", "Текст готов"),
     TranslationKey.RECORDER_STATUS_NO_WORDS: _entry("No words captured", "Слова не распознаны"),
     TranslationKey.RECORDER_STATUS_ACTION_NEEDED: _entry("Action needed", "Требуется действие"),
