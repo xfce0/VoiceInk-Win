@@ -343,6 +343,7 @@ def test_windows_reveal_adapter_uses_the_windows_directory(monkeypatch) -> None:
             return len(buffer.value)
 
     monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=Kernel32()), raising=False)
+    monkeypatch.setattr(Path, "is_file", lambda _path: True)
     commands: list[list[str]] = []
     adapter = WindowsHistoryArtifactRevealAdapter(platform_name="nt", launcher=commands.append)
 

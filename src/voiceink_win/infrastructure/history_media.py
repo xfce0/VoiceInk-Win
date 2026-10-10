@@ -25,14 +25,29 @@ class WindowsHistoryArtifactRevealAdapter:
         self._platform_name = os.name if platform_name is None else platform_name
         self._launcher = launcher or self._launch
         self._explorer_path = explorer_path
+        self._available = self._platform_name == "nt"
+        if self._available and self._explorer_path is None:
+            try:
+                self._explorer_path = self._system_explorer_path()
+                self._available = Path(self._explorer_path).is_file()
+            except Exception as error:
+                self._available = False
+                logger.warning(
+                    "history artifact reveal unavailable",
+                    extra={
+                        "reason_code": "PLATFORM_UNAVAILABLE",
+                        "failure_stage": "initialization",
+                        "exception_type": type(error).__name__,
+                    },
+                )
 
     def is_available(self) -> bool:
-        return self._platform_name == "nt"
+        return self._available
 
     def reveal(self, resolved_artifact: Path) -> None:
-        self._launcher(
-            [self._explorer_path or self._system_explorer_path(), f'/select,"{resolved_artifact}"']
-        )
+        if not self.is_available() or self._explorer_path is None:
+            raise RuntimeError("history artifact reveal is unavailable")
+        self._launcher([self._explorer_path, f'/select,"{resolved_artifact}"'])
 
     @staticmethod
     def _system_explorer_path() -> str:
@@ -132,10 +147,15 @@ class WindowsHistoryAudioPlaybackAdapter:
         try:
             self._player.setSource(self._url_factory(str(resolved_artifact)))
             self._player.play()
+        except Exception:
+            self._invalidate_playback()
+            raise
         finally:
             self._play_in_progress = False
         if self._playback_error is not None:
-            raise self._playback_error
+            error = self._playback_error
+            self._invalidate_playback()
+            raise error
 
     def _on_playback_error(self, request: int) -> None:
         if request != self._playback_request:
@@ -171,25 +191,40 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._error_slot = None
         self._status_slot = None
 
-    def close(self) -> None:
-        if self._player is not None:
-            try:
-                if self._empty_url_factory is not None:
-                    self._player.setSource(self._empty_url_factory())
-                self._player.stop()
-            finally:
-                delete_later = getattr(self._player, "deleteLater", None)
-                if delete_later is not None:
-                    delete_later()
-        if self._audio_output is not None:
-            delete_later = getattr(self._audio_output, "deleteLater", None)
-            if delete_later is not None:
-                delete_later()
-        self._player = None
-        self._audio_output = None
+    def _invalidate_playback(self) -> None:
         self._failure_callback = None
         self._playback_request += 1
         self._disconnect_playback_signals()
+
+    def close(self) -> None:
+        player = self._player
+        audio_output = self._audio_output
+        self._player = None
+        self._audio_output = None
+        self._invalidate_playback()
+        if player is not None:
+            try:
+                if self._empty_url_factory is not None:
+                    player.setSource(self._empty_url_factory())
+            except Exception:
+                logger.warning("failed to reset history audio source during close")
+            try:
+                player.stop()
+            except Exception:
+                logger.warning("failed to stop history audio during close")
+            try:
+                delete_later = getattr(player, "deleteLater", None)
+                if delete_later is not None:
+                    delete_later()
+            except Exception:
+                logger.warning("failed to release history audio player during close")
+        if audio_output is not None:
+            try:
+                delete_later = getattr(audio_output, "deleteLater", None)
+                if delete_later is not None:
+                    delete_later()
+            except Exception:
+                logger.warning("failed to release history audio output during close")
         self._error_signal = None
         self._error_slot = None
         self._status_signal = None
