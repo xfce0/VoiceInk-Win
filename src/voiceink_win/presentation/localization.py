@@ -78,6 +78,10 @@ class TranslationKey(StrEnum):
     SETTINGS_TITLE = "settings.title"
     SETTINGS_SUBTITLE = "settings.subtitle"
     SETTINGS_LANGUAGE = "settings.language"
+    SETTINGS_THEME = "settings.theme"
+    SETTINGS_THEME_SYSTEM = "settings.theme_system"
+    SETTINGS_THEME_LIGHT = "settings.theme_light"
+    SETTINGS_THEME_DARK = "settings.theme_dark"
     SETTINGS_ENGLISH = "settings.english"
     SETTINGS_RUSSIAN = "settings.russian"
     SETTINGS_AUTO_COPY = "settings.auto_copy"
@@ -88,6 +92,32 @@ class TranslationKey(StrEnum):
     SETTINGS_MODEL = "settings.model"
     SETTINGS_AUDIO = "settings.audio"
     SETTINGS_BACKEND_UNAVAILABLE = "settings.backend_unavailable"
+    SETTINGS_SAVE_ERROR = "settings.save_error"
+
+    AUDIO_TITLE = "audio.title"
+    AUDIO_SUBTITLE = "audio.subtitle"
+    AUDIO_DEVICE_SECTION = "audio.device_section"
+    AUDIO_DEVICE_ROUTE = "audio.device_route"
+    AUDIO_ROUTE_SYSTEM_DEFAULT = "audio.route.system_default"
+    AUDIO_ROUTE_SELECTED_DEVICE = "audio.route.selected_device"
+    AUDIO_ROUTE_PRIORITY_ORDER = "audio.route.priority_order"
+    AUDIO_DEVICE_LIST = "audio.device_list"
+    AUDIO_NO_DEVICES = "audio.no_devices"
+    AUDIO_DEVICE_UNAVAILABLE = "audio.device_unavailable"
+    AUDIO_SELECTED_DEVICE = "audio.selected_device"
+    AUDIO_RECORDING_BEHAVIOR = "audio.recording_behavior"
+    AUDIO_MUTE_WHILE_RECORDING = "audio.mute_while_recording"
+    AUDIO_PAUSE_MEDIA_WHILE_RECORDING = "audio.pause_media_while_recording"
+    AUDIO_RESUME_DELAY = "audio.resume_delay"
+    AUDIO_START_SOUND = "audio.start_sound"
+    AUDIO_STOP_SOUND = "audio.stop_sound"
+    AUDIO_SOUND_NONE = "audio.sound.none"
+    AUDIO_SOUND_BUILT_IN = "audio.sound.built_in"
+    AUDIO_SOUND_CUSTOM = "audio.sound.custom"
+    AUDIO_FORMAT = "audio.format"
+    AUDIO_FORMAT_VALUE = "audio.format_value"
+    AUDIO_BACKEND_UNAVAILABLE = "audio.backend_unavailable"
+    AUDIO_PREFERENCES_READ_ONLY = "audio.preferences_read_only"
 
     HISTORY_TITLE = "history.title"
     HISTORY_SUBTITLE = "history.subtitle"
@@ -137,6 +167,7 @@ class TranslationKey(StrEnum):
     HISTORY_EXPORT_ERROR = "history.export_error"
     HISTORY_PREVIOUS = "history.previous"
     HISTORY_NEXT = "history.next"
+    HISTORY_VARIANT_ERROR = "history.variant_error"
 
     DICTIONARY_TITLE = "dictionary.title"
     DICTIONARY_SUBTITLE = "dictionary.subtitle"
@@ -388,6 +419,10 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "функция среды доступна.",
     ),
     TranslationKey.SETTINGS_LANGUAGE: _entry("Language", "Язык"),
+    TranslationKey.SETTINGS_THEME: _entry("Dashboard theme", "Тема панели"),
+    TranslationKey.SETTINGS_THEME_SYSTEM: _entry("System", "Системная"),
+    TranslationKey.SETTINGS_THEME_LIGHT: _entry("Light", "Светлая"),
+    TranslationKey.SETTINGS_THEME_DARK: _entry("Dark", "Тёмная"),
     TranslationKey.SETTINGS_ENGLISH: _entry("English", "Английский"),
     TranslationKey.SETTINGS_RUSSIAN: _entry("Russian", "Русский"),
     TranslationKey.SETTINGS_AUTO_COPY: _entry(
@@ -404,7 +439,64 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.SETTINGS_MODEL: _entry("Model preference", "Настройка модели"),
     TranslationKey.SETTINGS_AUDIO: _entry("Audio preference", "Настройка аудио"),
     TranslationKey.SETTINGS_BACKEND_UNAVAILABLE: _entry(
-        "Backend is not configured yet.", "Среда выполнения пока не настроена."
+        "Unavailable in this build.", "Недоступно в этой сборке."
+    ),
+    TranslationKey.SETTINGS_SAVE_ERROR: _entry(
+        "Could not save settings. Try again.",
+        "Не удалось сохранить настройки. Попробуйте ещё раз.",
+    ),
+    TranslationKey.AUDIO_TITLE: _entry("Audio", "Аудио"),
+    TranslationKey.AUDIO_SUBTITLE: _entry(
+        "Choose how local microphone recordings will use audio input when the "
+        "native backend is available.",
+        "Выберите, как локальные записи с микрофона будут использовать аудиовход, "
+        "когда станет доступна нативная среда.",
+    ),
+    TranslationKey.AUDIO_DEVICE_SECTION: _entry("Input device", "Устройство ввода"),
+    TranslationKey.AUDIO_DEVICE_ROUTE: _entry("Input route", "Источник ввода"),
+    TranslationKey.AUDIO_ROUTE_SYSTEM_DEFAULT: _entry(
+        "System default", "Системное устройство по умолчанию"
+    ),
+    TranslationKey.AUDIO_ROUTE_SELECTED_DEVICE: _entry("Selected device", "Выбранное устройство"),
+    TranslationKey.AUDIO_ROUTE_PRIORITY_ORDER: _entry("Priority order", "Порядок приоритета"),
+    TranslationKey.AUDIO_DEVICE_LIST: _entry("Available microphones", "Доступные микрофоны"),
+    TranslationKey.AUDIO_NO_DEVICES: _entry(
+        "No input devices are available in this build.",
+        "В этой сборке устройства ввода недоступны.",
+    ),
+    TranslationKey.AUDIO_DEVICE_UNAVAILABLE: _entry(
+        "Microphone enumeration is unavailable until the native audio backend is enabled.",
+        "Перечень микрофонов недоступен, пока не включена нативная аудиосреда.",
+    ),
+    TranslationKey.AUDIO_SELECTED_DEVICE: _entry("Selected device", "Выбранное устройство"),
+    TranslationKey.AUDIO_RECORDING_BEHAVIOR: _entry("Recording behavior", "Поведение записи"),
+    TranslationKey.AUDIO_MUTE_WHILE_RECORDING: _entry(
+        "Mute other audio while recording", "Отключать другой звук во время записи"
+    ),
+    TranslationKey.AUDIO_PAUSE_MEDIA_WHILE_RECORDING: _entry(
+        "Pause media while recording", "Приостанавливать медиа во время записи"
+    ),
+    TranslationKey.AUDIO_RESUME_DELAY: _entry(
+        "Resume delay (seconds)", "Задержка возобновления (секунды)"
+    ),
+    TranslationKey.AUDIO_START_SOUND: _entry("Start sound", "Звук начала"),
+    TranslationKey.AUDIO_STOP_SOUND: _entry("Stop sound", "Звук окончания"),
+    TranslationKey.AUDIO_SOUND_NONE: _entry("None", "Нет"),
+    TranslationKey.AUDIO_SOUND_BUILT_IN: _entry("Built-in", "Встроенный"),
+    TranslationKey.AUDIO_SOUND_CUSTOM: _entry("Custom", "Пользовательский"),
+    TranslationKey.AUDIO_FORMAT: _entry("Canonical format", "Канонический формат"),
+    TranslationKey.AUDIO_FORMAT_VALUE: _entry(
+        "Mono 16 kHz signed PCM16", "Моно, 16 кГц, знаковый PCM16"
+    ),
+    TranslationKey.AUDIO_BACKEND_UNAVAILABLE: _entry(
+        "Native microphone capture and playback are unavailable in this build.",
+        "Нативные захват с микрофона и воспроизведение недоступны в этой сборке.",
+    ),
+    TranslationKey.AUDIO_PREFERENCES_READ_ONLY: _entry(
+        "Audio preferences are shown from local storage and will apply when the "
+        "native backend is available.",
+        "Аудионастройки показаны из локального хранилища и применятся, когда станет "
+        "доступна нативная среда.",
     ),
     TranslationKey.HISTORY_TITLE: _entry("History", "История"),
     TranslationKey.HISTORY_SUBTITLE: _entry(
@@ -486,6 +578,10 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.HISTORY_PREVIOUS: _entry("Previous", "Назад"),
     TranslationKey.HISTORY_NEXT: _entry("Next", "Далее"),
+    TranslationKey.HISTORY_VARIANT_ERROR: _entry(
+        "Could not save the transcript variant. Try again.",
+        "Не удалось сохранить вариант расшифровки. Попробуйте ещё раз.",
+    ),
     TranslationKey.DICTIONARY_TITLE: _entry("Dictionary", "Словарь"),
     TranslationKey.DICTIONARY_SUBTITLE: _entry(
         "Store replacement rules now. Applying them to transcription is not enabled in this build.",

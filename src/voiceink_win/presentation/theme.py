@@ -7,17 +7,37 @@ from enum import StrEnum
 
 
 class ThemeMode(StrEnum):
+    SYSTEM = "system"
     LIGHT = "light"
     DARK = "dark"
 
 
 @dataclass(frozen=True)
+class TypographyTokens:
+    body_family: str = "Segoe UI"
+    display_family: str = "Arial Rounded MT Bold"
+    body_size: int = 13
+    body_weight: int = 500
+    sidebar_size: int = 13
+    sidebar_weight: int = 600
+    greeting_size: int = 28
+    greeting_weight: int = 700
+    heading_size: int = 18
+    heading_weight: int = 700
+
+
+DASHBOARD_GOOD_MORNING_TYPOGRAPHY = TypographyTokens()
+
+
+@dataclass(frozen=True)
 class ThemeTokens:
     mode: ThemeMode
+    typography: TypographyTokens
     window: str
     sidebar: str
     border: str
     text: str
+    sidebar_text: str
     muted: str
     disabled: str
     nav_hover: str
@@ -60,10 +80,12 @@ class ThemeTokens:
 
 LIGHT_THEME = ThemeTokens(
     mode=ThemeMode.LIGHT,
+    typography=DASHBOARD_GOOD_MORNING_TYPOGRAPHY,
     window="#f4f4f6",
     sidebar="#e9e9ee",
     border="#d5d5dc",
-    text="#202024",
+    text="#18181d",
+    sidebar_text="#202026",
     muted="#6d6d77",
     disabled="#62626e",
     nav_hover="#dedee5",
@@ -106,10 +128,12 @@ LIGHT_THEME = ThemeTokens(
 
 DARK_THEME = ThemeTokens(
     mode=ThemeMode.DARK,
+    typography=DASHBOARD_GOOD_MORNING_TYPOGRAPHY,
     window="#1f2023",
     sidebar="#25262a",
     border="#3a3b43",
-    text="#f4f4f5",
+    text="#ffffff",
+    sidebar_text="#ffffff",
     muted="#a2a3ad",
     disabled="#aeb0ba",
     nav_hover="#30323a",
@@ -198,6 +222,9 @@ def stylesheet_for(theme: ThemeTokens) -> str:
 QMainWindow, QWidget#root, QWidget#dashboardContent, QWidget#transcribePage {{
     background: {theme.window};
     color: {theme.text};
+    font-family: "{theme.typography.body_family}";
+    font-size: {theme.typography.body_size}px;
+    font-weight: {theme.typography.body_weight};
 }}
 QFrame#sidebar {{
     background: {theme.sidebar};
@@ -275,6 +302,16 @@ QLabel#pageError {{
     color: {theme.error_text};
     border-radius: 8px;
     padding: 8px 10px;
+}}
+QLabel#pageUnavailable {{
+    background: {theme.state_bg};
+    color: {theme.state_text};
+    border: 1px solid {theme.card_border};
+    border-radius: 7px;
+    padding: 5px 8px;
+}}
+QLabel#inlineError {{
+    color: {theme.error_text};
 }}
 QTextEdit {{
     background: {theme.empty_card};
@@ -354,6 +391,9 @@ QPushButton:disabled {{
 QPushButton:focus {{
     border-color: {theme.nav_focus_border};
 }}
+QComboBox:focus, QLineEdit:focus, QCheckBox:focus {{
+    border: 1px solid {theme.nav_focus_border};
+}}
 QPushButton#actionButton {{
     border-radius: 9px;
     padding: 6px 11px;
@@ -362,18 +402,21 @@ QPushButton#navButton {{
     background: transparent;
     border: 1px solid transparent;
     border-radius: 10px;
-    color: {theme.text};
+    color: {theme.sidebar_text};
+    font-family: "{theme.typography.body_family}";
+    font-size: {theme.typography.sidebar_size}px;
+    font-weight: {theme.typography.sidebar_weight};
     padding: 6px 10px 6px 8px;
     text-align: left;
 }}
 QPushButton#navButton:hover {{
     background: {theme.nav_hover};
-    color: {theme.text};
+    color: {theme.sidebar_text};
 }}
 QPushButton#navButton:checked {{
     background: {theme.nav_selected};
     border-color: {theme.nav_selected_border};
-    color: {theme.text};
+    color: {theme.sidebar_text};
 }}
 QPushButton#navButton:checked:hover {{
     background: {theme.nav_selected};
@@ -404,13 +447,13 @@ QFrame#heroCard {{
 }}
 QLabel#heroHeadline {{
     color: {theme.hero_text};
-    font-family: "Arial Rounded MT Bold", "Segoe UI";
+    font-family: "{theme.typography.display_family}", "{theme.typography.body_family}";
     font-size: 23px;
-    font-weight: 700;
+    font-weight: {theme.typography.heading_weight};
 }}
 QLabel#heroAccent {{
     color: {theme.accent};
-    font-family: "Arial Rounded MT Bold", "Segoe UI";
+    font-family: "{theme.typography.display_family}", "{theme.typography.body_family}";
     font-size: 30px;
     font-weight: 900;
 }}
@@ -456,8 +499,8 @@ QPushButton#actionButton:disabled {{
 }}
 QLabel#sectionTitle {{
     color: {theme.text};
-    font-size: 18px;
-    font-weight: 700;
+    font-size: {theme.typography.heading_size}px;
+    font-weight: {theme.typography.heading_weight};
 }}
 QLabel#statePill {{
     background: {theme.state_bg};

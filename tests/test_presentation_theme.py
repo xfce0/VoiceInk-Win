@@ -3,6 +3,7 @@ from __future__ import annotations
 from voiceink_win.presentation.icon_registry import LUCIDE_PATHS, SIDEBAR_ITEMS
 from voiceink_win.presentation.theme import (
     DARK_THEME,
+    DASHBOARD_GOOD_MORNING_TYPOGRAPHY,
     LIGHT_THEME,
     ThemeMode,
     detect_system_theme,
@@ -34,10 +35,23 @@ def test_stylesheet_contains_dark_surface_tokens_for_every_dashboard_layer() -> 
     assert "QPushButton#primaryButton:focus" in stylesheet
     assert "QPushButton#primaryButton:disabled" in stylesheet
     assert "QPushButton#actionButton:disabled" in stylesheet
+    assert f'font-family: "{DASHBOARD_GOOD_MORNING_TYPOGRAPHY.body_family}";' in stylesheet
+    assert f"font-weight: {DASHBOARD_GOOD_MORNING_TYPOGRAPHY.sidebar_weight};" in stylesheet
+    assert "QComboBox:focus, QLineEdit:focus, QCheckBox:focus" in stylesheet
     assert f"background: {DARK_THEME.card};" in stylesheet
     assert f"background: {DARK_THEME.empty_card};" in stylesheet
     assert f"background: {DARK_THEME.hero};" in stylesheet
     assert "#ffffff" not in stylesheet.split("QFrame#card", 1)[1].split("QFrame#heroCard", 1)[0]
+
+
+def test_stylesheet_distinguishes_neutral_unavailability_from_inline_errors() -> None:
+    stylesheet = stylesheet_for(LIGHT_THEME)
+
+    assert "QLabel#pageUnavailable" in stylesheet
+    assert f"background: {LIGHT_THEME.state_bg};" in stylesheet
+    assert "QLabel#inlineError" in stylesheet
+    inline_error = stylesheet.split("QLabel#inlineError", 1)[1].split("}", 1)[0]
+    assert "background:" not in inline_error
 
 
 def test_unknown_system_scheme_is_safe_and_defaults_to_light() -> None:
@@ -45,6 +59,12 @@ def test_unknown_system_scheme_is_safe_and_defaults_to_light() -> None:
     assert mode_from_system_name("light") is ThemeMode.LIGHT
     assert mode_from_system_name("Unknown") is None
     assert mode_from_system_name(None) is None
+
+
+def test_theme_preference_mode_defaults_to_system_but_resolves_explicit_modes() -> None:
+    assert theme_for(ThemeMode.SYSTEM) is LIGHT_THEME
+    assert theme_for(ThemeMode.LIGHT) is LIGHT_THEME
+    assert theme_for(ThemeMode.DARK) is DARK_THEME
 
 
 def test_system_theme_prefers_qt_scheme_without_needing_a_gui_display() -> None:
@@ -79,4 +99,5 @@ def test_sidebar_registry_matches_reference_order_and_has_unique_icons() -> None
     assert SIDEBAR_ITEMS[0].enabled
     assert SIDEBAR_ITEMS[2].enabled
     assert all(item.enabled for item in (*SIDEBAR_ITEMS[1:2], *SIDEBAR_ITEMS[3:5]))
-    assert not any(item.enabled for item in (*SIDEBAR_ITEMS[5:7], SIDEBAR_ITEMS[8]))
+    assert SIDEBAR_ITEMS[6].enabled
+    assert not any(item.enabled for item in (SIDEBAR_ITEMS[5], SIDEBAR_ITEMS[8]))

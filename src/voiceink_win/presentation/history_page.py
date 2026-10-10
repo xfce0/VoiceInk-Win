@@ -126,7 +126,10 @@ class HistoryPage(QWidget):
         self._subtitle.setObjectName("heroSubtext")
         self._subtitle.setWordWrap(True)
         root.addWidget(self._subtitle)
-
+        self._availability = QLabel(self)
+        self._availability.setObjectName("pageUnavailable")
+        self._availability.setWordWrap(True)
+        root.addWidget(self._availability)
         search_row = QHBoxLayout()
         self._search = QLineEdit(self)
         self._search.setAccessibleName(self._t(TranslationKey.HISTORY_SEARCH_ACCESSIBLE))
@@ -166,7 +169,7 @@ class HistoryPage(QWidget):
         root.addLayout(navigation)
 
         self._error = QLabel(self)
-        self._error.setObjectName("pageError")
+        self._error.setObjectName("inlineError")
         self._error.setWordWrap(True)
         root.addWidget(self._error)
 
@@ -221,8 +224,7 @@ class HistoryPage(QWidget):
             return
         if error is not None or page is None:
             self._set_loading(False)
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
-            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
+            self._show_unavailable()
             return
         self._records = page.records
         self._has_more = page.has_more
@@ -237,17 +239,19 @@ class HistoryPage(QWidget):
         self._set_loading(False)
         self._render_records()
         if unavailable:
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
-            self._status.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
-        else:
-            self._error.clear()
+            self._show_unavailable()
 
     def _set_loading(self, loading: bool) -> None:
         self._status.setText(self._t(TranslationKey.COMMON_LOADING) if loading else "")
         self._list.setEnabled(not loading)
+        self._search.setEnabled(not loading)
+        self._search_button.setEnabled(not loading)
         self._previous.setEnabled(not loading and bool(self._cursor_stack))
         self._next.setEnabled(not loading and self._has_more)
         if loading:
+            self._availability.clear()
+            self._availability.setVisible(False)
+            self._error.clear()
             self._list.clear()
             self._rows.clear()
             self._selected = None
@@ -280,6 +284,8 @@ class HistoryPage(QWidget):
         self._previous.setEnabled(bool(self._cursor_stack))
         self._next.setEnabled(self._has_more)
         self._status.setText(self._t(TranslationKey.COMMON_READY))
+        self._availability.clear()
+        self._availability.setVisible(False)
         self._error.clear()
 
     def _build_row(self, record: HistoryRecord) -> HistoryRow:
@@ -323,6 +329,22 @@ class HistoryPage(QWidget):
     def _resize_row(self, item: QListWidgetItem, row: HistoryRow) -> None:
         item.setSizeHint(row.sizeHint())
         self._list.doItemsLayout()
+
+    def _show_unavailable(self) -> None:
+        self._status.clear()
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+        self._availability.setVisible(True)
+        self._error.clear()
+        self._list.setEnabled(False)
+        self._search.setEnabled(False)
+        self._search_button.setEnabled(False)
+        self._variant.setEnabled(False)
+        self._copy.setEnabled(False)
+        self._export_txt.setEnabled(False)
+        self._export_markdown.setEnabled(False)
+        self._delete.setEnabled(False)
+        self._previous.setEnabled(False)
+        self._next.setEnabled(False)
 
     def _select_item(self, item: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         record_id = item.data(Qt.ItemDataRole.UserRole) if item else None
@@ -536,7 +558,7 @@ class HistoryPage(QWidget):
         if self._disposed or operation != self._operation:
             return
         if error is not None:
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+            self._error.setText(self._t(TranslationKey.HISTORY_VARIANT_ERROR))
 
     def _select_record_if_needed(self, record_id: str) -> None:
         if self._selected is not None and self._selected.id == record_id:
@@ -601,6 +623,7 @@ class HistoryPage(QWidget):
         self._search_button.setText(self._t(TranslationKey.HISTORY_SEARCH))
         self._search.setAccessibleName(self._t(TranslationKey.HISTORY_SEARCH_ACCESSIBLE))
         self._search_button.setAccessibleName(self._t(TranslationKey.HISTORY_SEARCH_ACCESSIBLE))
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
         self._copy.setText(self._t(TranslationKey.HISTORY_COPY))
         self._variant.setAccessibleName(self._t(TranslationKey.HISTORY_VARIANT))
         self._export_txt.setText(self._t(TranslationKey.HISTORY_EXPORT_TXT_SHORT))
