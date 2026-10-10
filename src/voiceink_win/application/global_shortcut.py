@@ -66,7 +66,7 @@ class GlobalToggleShortcutService:
         if self._registration is not None:
             return self._status
         self._registration_requested = True
-        if self._controller.snapshot.state is ShellState.UNAVAILABLE:
+        if self._state_value() == ShellState.UNAVAILABLE.value:
             return self._set_status(
                 ShortcutAvailability.UNAVAILABLE,
                 "Recording is unavailable in this build.",
@@ -105,10 +105,17 @@ class GlobalToggleShortcutService:
         return self._status
 
     def _toggle(self) -> None:
-        if self._controller.snapshot.state is ShellState.RECORDING:
+        if self._state_value() in {
+            ShellState.RECORDING.value,
+            "recording_silent",
+            "recording_sounding",
+        }:
             self._controller.stop_recording()
         else:
             self._controller.start_recording()
+
+    def _state_value(self) -> str:
+        return self._controller.snapshot.state.value
 
     def _set_status(
         self, availability: ShortcutAvailability, message: str = ""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from threading import Event, Lock, Thread
 from typing import Protocol
 from uuid import uuid4
@@ -23,6 +24,7 @@ from voiceink_win.domain import (
     CaptureLimits,
     CaptureTimeoutError,
     InputDevice,
+    InputLevel,
     MicrophoneStatus,
     QueueFullError,
     RecordingResult,
@@ -88,6 +90,12 @@ class MicrophoneRecordingHandle:
         self._cancel_requested.set()
         self._service._cancel_asr(self)
         self._session.cancel()
+
+    def subscribe_level(self, listener: Callable[[InputLevel], None]) -> Callable[[], None]:
+        subscribe = getattr(self._session, "subscribe_level", None)
+        if subscribe is None:
+            return lambda: None
+        return subscribe(listener)
 
     def wait(self, timeout: float | None = None) -> RecordingResult:
         if timeout is not None and timeout < 0:
