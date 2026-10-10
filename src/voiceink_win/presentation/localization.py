@@ -106,6 +106,7 @@ class TranslationKey(StrEnum):
     SETTINGS_MODEL = "settings.model"
     SETTINGS_AUDIO = "settings.audio"
     SETTINGS_BACKEND_UNAVAILABLE = "settings.backend_unavailable"
+    SETTINGS_ERROR = "settings.error"
     SETTINGS_SAVE_ERROR = "settings.save_error"
 
     AUDIO_TITLE = "audio.title"
@@ -486,6 +487,7 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.SETTINGS_MODEL: _entry("Model preference", "Настройка модели"),
     TranslationKey.SETTINGS_AUDIO: _entry("Audio preference", "Настройка аудио"),
     TranslationKey.SETTINGS_BACKEND_UNAVAILABLE: _entry("Not available.", "Недоступно."),
+    TranslationKey.SETTINGS_ERROR: _entry("Error", "Ошибка"),
     TranslationKey.SETTINGS_SAVE_ERROR: _entry(
         "Could not save settings. Try again.",
         "Не удалось сохранить настройки. Попробуйте ещё раз.",
