@@ -63,6 +63,8 @@ class SettingsPage(QWidget):
         self._save_sequence = 0
         self._generation = 0
         self._disposed = False
+        self._status_key: TranslationKey | None = None
+        self._error_key: TranslationKey | None = None
         self._build_ui()
         self.refresh()
 
@@ -82,11 +84,6 @@ class SettingsPage(QWidget):
         self._subtitle.setObjectName("heroSubtext")
         self._subtitle.setWordWrap(True)
         root.addWidget(self._subtitle)
-        self._availability = QLabel(content)
-        self._availability.setObjectName("pageUnavailable")
-        self._availability.setWordWrap(True)
-        self._availability.setVisible(False)
-        root.addWidget(self._availability)
 
         form = QFormLayout()
         self._language_label = self._form_label(form, TranslationKey.SETTINGS_LANGUAGE)
@@ -160,10 +157,12 @@ class SettingsPage(QWidget):
         root.addStretch(1)
         self._status = QLabel(content)
         self._status.setObjectName("metadata")
+        self._status.setVisible(False)
         root.addWidget(self._status)
         self._error = QLabel(content)
         self._error.setObjectName("inlineError")
         self._error.setWordWrap(True)
+        self._error.setVisible(False)
         root.addWidget(self._error)
         scroll.setWidget(content)
         layout = QVBoxLayout(self)
@@ -182,15 +181,13 @@ class SettingsPage(QWidget):
         self._generation += 1
         self._save_sequence += 1
         generation = self._generation
-        self._availability.clear()
-        self._availability.setVisible(False)
-        self._error.clear()
+        self._set_feedback()
         if self._persistence is None:
             self._apply_settings(Settings(), unavailable=True)
             return
         self._loading = True
         self._set_controls_enabled(False)
-        self._status.setText(self._t(TranslationKey.COMMON_LOADING))
+        self._set_feedback(TranslationKey.COMMON_LOADING)
         self._bridge.watch(
             self._persistence.get_settings(),
             lambda settings, error: self._loaded(generation, settings, error),
@@ -239,16 +236,22 @@ class SettingsPage(QWidget):
         self._set_controls_enabled(not unavailable)
         self._model_value.setText(self._preference_text(settings.model_preferences))
         self._audio_value.setText(self._preference_text(settings.audio_preferences))
-        self._status.setText(self._t(TranslationKey.COMMON_READY) if not unavailable else "")
-        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
-        self._availability.setVisible(unavailable)
-        self._error.clear()
+        self._set_feedback(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE if unavailable else None)
 
     def _show_unavailable(self) -> None:
-        self._status.clear()
-        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
-        self._availability.setVisible(True)
-        self._error.clear()
+        self._set_feedback(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE)
+
+    def _set_feedback(
+        self,
+        status_key: TranslationKey | None = None,
+        error_key: TranslationKey | None = None,
+    ) -> None:
+        self._status_key = status_key
+        self._error_key = error_key
+        self._status.setText(self._t(status_key) if status_key is not None else "")
+        self._error.setText(self._t(error_key) if error_key is not None else "")
+        self._status.setVisible(status_key is not None)
+        self._error.setVisible(error_key is not None)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         for control in (
@@ -285,7 +288,7 @@ class SettingsPage(QWidget):
         self._save_sequence += 1
         sequence = self._save_sequence
         generation = self._generation
-        self._status.setText(self._t(TranslationKey.COMMON_SAVING))
+        self._set_feedback(TranslationKey.COMMON_SAVING)
         self._bridge.watch(
             self._persistence.update_settings({field: value}),
             lambda result, error: self._saved(generation, sequence, field, result, error),
@@ -302,8 +305,7 @@ class SettingsPage(QWidget):
         if self._disposed or generation != self._generation or sequence != self._save_sequence:
             return
         if error is not None:
-            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.SETTINGS_SAVE_ERROR))
+            self._set_feedback(TranslationKey.SETTINGS_ERROR, TranslationKey.SETTINGS_SAVE_ERROR)
         else:
             if result is not None:
                 self._settings = result
@@ -311,7 +313,7 @@ class SettingsPage(QWidget):
                     shortcut = str(result.hotkeys.get("start_stop", "")).strip()
                     if shortcut:
                         self._on_start_stop_hotkey_changed(shortcut)
-            self._status.setText(self._t(TranslationKey.COMMON_SAVED))
+            self._set_feedback(TranslationKey.COMMON_SAVED)
 
     def _preference_text(self, preferences: dict[str, object]) -> str:
         if not preferences:
@@ -322,7 +324,6 @@ class SettingsPage(QWidget):
         del _locale
         self._title.setText(self._t(TranslationKey.SETTINGS_TITLE))
         self._subtitle.setText(self._t(TranslationKey.SETTINGS_SUBTITLE))
-        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
         self._language_label.setText(self._t(TranslationKey.SETTINGS_LANGUAGE))
         self._theme_label.setText(self._t(TranslationKey.SETTINGS_THEME))
         self._auto_copy_label.setText(self._t(TranslationKey.SETTINGS_AUTO_COPY))
@@ -335,6 +336,7 @@ class SettingsPage(QWidget):
         self._cancel_hotkey.setPlaceholderText(self._t(TranslationKey.SETTINGS_HOTKEY_PLACEHOLDER))
         self._model_value.setText(self._preference_text(self._settings.model_preferences))
         self._audio_value.setText(self._preference_text(self._settings.audio_preferences))
+        self._set_feedback(self._status_key, self._error_key)
         for index, locale in enumerate(SUPPORTED_LOCALES):
             self._language_combo.setItemText(
                 index,
