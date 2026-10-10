@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved for implementation.
+Implemented.
 
 ## Summary
 
@@ -22,6 +22,9 @@ It is copied byte-for-byte to:
 ```text
 packaging/voiceink-shell-windows-x64/voiceink-transcribe.png
 ```
+
+The copied asset SHA-256 is
+`634396427fc3ff823cd24fe57e88f49e55de4f3d`. No source asset blocker remains.
 
 The Windows repository's existing `voiceink-shell.svg` remains the executable
 branding source. No macOS AppIcon is substituted for the Windows executable;

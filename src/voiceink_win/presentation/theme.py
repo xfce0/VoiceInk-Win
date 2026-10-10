@@ -17,13 +17,16 @@ class TypographyTokens:
     body_family: str = "Segoe UI"
     display_family: str = "Arial Rounded MT Bold"
     body_size: int = 13
-    body_weight: int = 500
+    body_weight: int = 550
     sidebar_size: int = 13
-    sidebar_weight: int = 600
+    sidebar_weight: int = 650
     greeting_size: int = 28
     greeting_weight: int = 700
     heading_size: int = 18
     heading_weight: int = 700
+    control_weight: int = 650
+    strong_weight: int = 750
+    display_weight: int = 850
 
 
 DASHBOARD_GOOD_MORNING_TYPOGRAPHY = TypographyTokens()
@@ -114,16 +117,16 @@ LIGHT_THEME = ThemeTokens(
     state_processing_text="#7044aa",
     error_bg="#f9dfdf",
     error_text="#b52e32",
-    recorder="#111113",
-    recorder_border="#343439",
-    recorder_text="#f3f3f4",
-    recorder_muted="#94949e",
-    recorder_control="#36363b",
-    recorder_control_hover="#4b4b52",
-    recorder_control_border="#4b4b52",
+    recorder="#ffffff",
+    recorder_border="#d5d5dc",
+    recorder_text="#18181d",
+    recorder_muted="#6d6d77",
+    recorder_control="#f0f0f3",
+    recorder_control_hover="#e4e4ea",
+    recorder_control_border="#c7c7d0",
     recorder_recording="#c7373b",
     recorder_recording_border="#e16063",
-    waveform="#f5f5f5",
+    waveform="#bf4d10",
 )
 
 DARK_THEME = ThemeTokens(
@@ -262,7 +265,7 @@ QFrame#historyRow[selected="true"] {{
 QLabel#historyTitle {{
     color: {theme.text};
     font-size: 14px;
-    font-weight: 700;
+    font-weight: {theme.typography.strong_weight};
 }}
 QLabel#historyPreview, QLabel#historyFullText {{
     color: {theme.text};
@@ -329,7 +332,7 @@ QTabBar::tab {{
 }}
 QTabBar::tab:selected {{
     color: {theme.accent};
-    font-weight: 700;
+    font-weight: {theme.typography.strong_weight};
 }}
 QProgressBar {{
     background: {theme.empty_card};
@@ -393,7 +396,7 @@ QFrame#dictionaryRow[ruleEnabled="false"] {{
 QLabel#dictionaryPhrase {{
     color: {theme.text};
     font-size: 13px;
-    font-weight: 700;
+    font-weight: {theme.typography.strong_weight};
 }}
 QLabel#dictionaryReplacement {{
     color: {theme.muted};
@@ -442,7 +445,7 @@ QPushButton {{
     border-radius: 10px;
     color: {theme.secondary_text};
     font-size: 12px;
-    font-weight: 600;
+    font-weight: {theme.typography.control_weight};
     padding: 7px 13px;
     min-height: 16px;
 }}
@@ -527,7 +530,7 @@ QLabel#heroAccent {{
     color: {theme.accent};
     font-family: "{theme.typography.display_family}", "{theme.typography.body_family}";
     font-size: 30px;
-    font-weight: 900;
+    font-weight: {theme.typography.display_weight};
 }}
 QPushButton#primaryButton {{
     background: {theme.accent};
@@ -535,7 +538,7 @@ QPushButton#primaryButton {{
     border-radius: 10px;
     color: {theme.accent_text};
     font-size: 13px;
-    font-weight: 700;
+    font-weight: {theme.typography.strong_weight};
     padding: 10px 18px;
 }}
 QPushButton#primaryButton:hover {{
@@ -556,7 +559,7 @@ QPushButton#secondaryButton {{
     border-radius: 10px;
     color: {theme.secondary_text};
     font-size: 13px;
-    font-weight: 600;
+    font-weight: {theme.typography.control_weight};
     padding: 10px 18px;
 }}
 QPushButton#secondaryButton:disabled {{
@@ -580,7 +583,7 @@ QLabel#statePill {{
     color: {theme.state_text};
     padding: 5px 10px;
     font-size: 11px;
-    font-weight: 700;
+    font-weight: {theme.typography.strong_weight};
 }}
 QLabel#statePill[role="recording"] {{
     background: {theme.state_recording_bg};
@@ -621,7 +624,7 @@ QPushButton#recordButton, QPushButton#closeButton {{
     border-radius: 17px;
     color: {theme.recorder_text};
     font-size: 12px;
-    font-weight: 700;
+    font-weight: {theme.typography.strong_weight};
     padding: 8px 13px;
 }}
 QPushButton#recordButton:hover, QPushButton#closeButton:hover {{
