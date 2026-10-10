@@ -24,6 +24,7 @@ from voiceink_win.application import (
     GlobalHotkeySettingsService,
     GlobalToggleShortcutService,
     HistoryDeletionService,
+    HistoryMediaActionService,
     MicrophoneRecorderController,
     PersistenceService,
     ShellController,
@@ -392,8 +393,6 @@ class MainWindow(QMainWindow):
         locale_config: LocaleConfig | None = None,
         persistence: PersistenceService | None = None,
         artifact_cleanup=None,
-        artifact_reveal=None,
-        artifact_folder=None,
         history_deletion: HistoryDeletionService | None = None,
         model_metadata: ModelMetadata | None = None,
         global_shortcut: GlobalToggleShortcutService | None = None,
@@ -401,6 +400,7 @@ class MainWindow(QMainWindow):
         audio_port: HistoryAudioPort | None = None,
         folder_port: HistoryFolderPort | None = None,
         recorder_controller: MicrophoneRecorderController | None = None,
+        media_actions: HistoryMediaActionService | None = None,
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
@@ -418,10 +418,7 @@ class MainWindow(QMainWindow):
         self._persistence = persistence
         self._model_metadata = model_metadata or discover_model_metadata()
         self._artifact_cleanup = artifact_cleanup
-        self._audio_port = audio_port
-        self._folder_port = folder_port
-        self._artifact_reveal = artifact_reveal
-        self._artifact_folder = artifact_folder
+        self._media_actions = media_actions
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None
@@ -495,11 +492,8 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             artifact_cleanup=self._artifact_cleanup,
-            artifact_reveal=self._artifact_reveal,
-            artifact_folder=self._artifact_folder,
             history_deletion=self._history_deletion,
-            audio_port=self._audio_port,
-            folder_port=self._folder_port,
+            media_actions=self._media_actions,
         )
         self._pages.addWidget(self._history_page)
         self._dictionary_page = DictionaryPage(
