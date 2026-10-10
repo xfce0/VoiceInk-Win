@@ -55,6 +55,12 @@ class HistoryStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ThemePreference(StrEnum):
+    SYSTEM = "system"
+    LIGHT = "light"
+    DARK = "dark"
+
+
 class PersistenceError(RuntimeError):
     """Base error for the asynchronous persistence boundary."""
 
@@ -165,6 +171,7 @@ class DictionaryEntry:
 class Settings:
     language: str = "en"
     selected_mode: str = "default"
+    theme_mode: ThemePreference | str = ThemePreference.SYSTEM
     hotkeys: Mapping[str, object] = field(default_factory=dict)
     auto_copy: bool = False
     model_preferences: Mapping[str, object] = field(default_factory=dict)
@@ -175,8 +182,13 @@ class Settings:
             raise InvalidInputError("settings language must not be empty")
         if not isinstance(self.selected_mode, str) or not self.selected_mode.strip():
             raise InvalidInputError("settings selected mode must not be empty")
+        try:
+            theme_mode = ThemePreference(self.theme_mode)
+        except (TypeError, ValueError) as error:
+            raise InvalidInputError("settings theme mode is invalid") from error
         if not isinstance(self.auto_copy, bool):
             raise InvalidInputError("settings auto_copy must be boolean")
+        object.__setattr__(self, "theme_mode", theme_mode)
         object.__setattr__(self, "hotkeys", _json_mapping(self.hotkeys, "settings hotkeys"))
         object.__setattr__(
             self,

@@ -28,6 +28,7 @@ from voiceink_win.application import (
 from voiceink_win.application.transcribe_output import LocalTextFilePort
 from voiceink_win.domain import ShellSnapshot, ShellState
 
+from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
 from .history_page import HistoryPage
@@ -252,6 +253,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
+        self._system_theme = self._theme.mode
+        self._theme_preference = ThemeMode.SYSTEM
         self._controller = controller
         self._locale_config = locale_config or LocaleConfig(parent=self)
         self._locale_signal = self._locale_config.locale_changed
@@ -321,9 +324,14 @@ class MainWindow(QMainWindow):
             self._persistence, self._pages, locale_config=self._locale_config
         )
         self._pages.addWidget(self._dictionary_page)
+        self._audio_page = AudioPage(
+            self._persistence, self._pages, locale_config=self._locale_config
+        )
+        self._pages.addWidget(self._audio_page)
         self._settings_page = SettingsPage(
             self._persistence, self._pages, locale_config=self._locale_config
         )
+        self._settings_page.theme_changed.connect(self.apply_theme_preference)
         self._pages.addWidget(self._settings_page)
         layout.addWidget(self._pages, 1)
         self.setCentralWidget(root)
@@ -391,8 +399,11 @@ class MainWindow(QMainWindow):
         elif label == "Dictionary":
             self._pages.setCurrentIndex(4)
             self._dictionary_page.refresh()
-        elif label == "Settings":
+        elif label == "Audio":
             self._pages.setCurrentIndex(5)
+            self._audio_page.refresh()
+        elif label == "Settings":
+            self._pages.setCurrentIndex(6)
             self._settings_page.refresh()
         else:
             return
@@ -403,6 +414,24 @@ class MainWindow(QMainWindow):
         self._theme = theme
         self.setStyleSheet(stylesheet_for(theme))
         self._recorder.apply_theme(theme)
+
+    @property
+    def theme_preference(self) -> ThemeMode:
+        return self._theme_preference
+
+    def apply_theme_preference(self, preference: ThemeMode | str) -> None:
+        try:
+            selected = ThemeMode(preference)
+        except (TypeError, ValueError):
+            selected = ThemeMode.SYSTEM
+        self._theme_preference = selected
+        effective = self._system_theme if selected is ThemeMode.SYSTEM else selected
+        self.apply_theme(theme_for(effective))
+
+    def apply_system_theme(self, system_theme: ThemeMode) -> None:
+        self._system_theme = system_theme
+        if self._theme_preference is ThemeMode.SYSTEM:
+            self.apply_theme(theme_for(system_theme))
 
     def apply_locale(self, _locale: str | None = None) -> None:
         del _locale
@@ -458,7 +487,14 @@ class MainWindow(QMainWindow):
 
         self._greeting_label = QLabel(self._greeting(), content)
         self._greeting_label.setObjectName("pageGreeting")
-        self._greeting_label.setFont(QFont("Arial Rounded MT Bold", 28, QFont.Weight.Bold))
+        typography = self._theme.typography
+        self._greeting_label.setFont(
+            QFont(
+                typography.display_family,
+                typography.greeting_size,
+                QFont.Weight(typography.greeting_weight),
+            )
+        )
         content_layout.addWidget(self._greeting_label)
         self._page_subtext = QLabel(self._t(TranslationKey.DASHBOARD_SUBTEXT_UNAVAILABLE), content)
         self._page_subtext.setObjectName("heroSubtext")
@@ -660,6 +696,7 @@ class MainWindow(QMainWindow):
         self._modes_page.dispose()
         self._history_page.dispose()
         self._dictionary_page.dispose()
+        self._audio_page.dispose()
         self._settings_page.dispose()
         if self._owns_history_deletion and self._history_deletion is not None:
             self._history_deletion.close()

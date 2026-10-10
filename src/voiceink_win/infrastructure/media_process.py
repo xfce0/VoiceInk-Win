@@ -17,6 +17,9 @@ from voiceink_win.domain import CancellationToken, ResourceLimitExceededError
 
 from .process import _process_is_alive, _run_process_reaper
 
+_CREATE_SUSPENDED = 0x00000004
+_CREATE_NO_WINDOW = 0x08000000
+
 
 def _set_signature(function, argtypes, restype) -> None:
     function.argtypes = argtypes
@@ -519,7 +522,7 @@ class WindowsJobObjectProcessRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
-                creationflags=0x00000004,  # CREATE_SUSPENDED
+                creationflags=_CREATE_SUSPENDED | _CREATE_NO_WINDOW,
             )
             generation.process = process
             job.assign(process)
