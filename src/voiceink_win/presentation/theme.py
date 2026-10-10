@@ -231,6 +231,16 @@ QLabel#pageError {{
     border-radius: 8px;
     padding: 8px 10px;
 }}
+QLabel#pageUnavailable {{
+    background: {theme.state_bg};
+    color: {theme.state_text};
+    border: 1px solid {theme.card_border};
+    border-radius: 7px;
+    padding: 5px 8px;
+}}
+QLabel#inlineError {{
+    color: {theme.error_text};
+}}
 QTextEdit {{
     background: {theme.empty_card};
     color: {theme.text};
