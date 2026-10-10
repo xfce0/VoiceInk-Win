@@ -53,6 +53,8 @@ from .widgets import WaveformWidget
 SIDEBAR_WIDTH = 208
 SIDEBAR_ITEM_HEIGHT = 44
 SIDEBAR_ICON_SIZE = 28
+MAIN_WINDOW_WIDTH = 950
+MAIN_WINDOW_HEIGHT = 750
 
 
 class _SnapshotBridge(QObject):
@@ -309,8 +311,7 @@ class MainWindow(QMainWindow):
             controller, self, self._theme, locale_config=self._locale_config
         )
         self.setWindowTitle(self._t(TranslationKey.APP_TITLE))
-        self.setMinimumSize(860, 600)
-        self.resize(950, 750)
+        self.setFixedSize(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
         self.setStyleSheet(stylesheet_for(self._theme))
         self._build_ui()
         self._render(controller.snapshot)
@@ -425,31 +426,32 @@ class MainWindow(QMainWindow):
         return sidebar
 
     def _select_page(self, label: str) -> None:
-        if label == "Dashboard":
-            self._pages.setCurrentIndex(0)
-        elif label == "Transcribe":
-            self._pages.setCurrentIndex(1)
-        elif label == "Modes":
-            self._pages.setCurrentIndex(2)
-            self._modes_page.refresh()
-        elif label == "History":
-            self._pages.setCurrentIndex(3)
-            self._history_page.refresh()
-        elif label == "Dictionary":
-            self._pages.setCurrentIndex(4)
-            self._dictionary_page.refresh()
-        elif label == "AI Models":
-            self._pages.setCurrentIndex(5)
-        elif label == "Audio":
-            self._pages.setCurrentIndex(6)
-            self._audio_page.refresh()
-        elif label == "Settings":
-            self._pages.setCurrentIndex(7)
-            self._settings_page.refresh()
-        else:
+        page_indices = {
+            "Dashboard": 0,
+            "Transcribe": 1,
+            "Modes": 2,
+            "History": 3,
+            "Dictionary": 4,
+            "AI Models": 5,
+            "Audio": 6,
+            "Settings": 7,
+        }
+        page_index = page_indices.get(label)
+        if page_index is None:
             return
         for name, button in self._nav_buttons.items():
             button.setChecked(name == label)
+        self._pages.setCurrentIndex(page_index)
+        if label == "Modes":
+            self._modes_page.refresh()
+        elif label == "History":
+            self._history_page.refresh()
+        elif label == "Dictionary":
+            self._dictionary_page.refresh()
+        elif label == "Audio":
+            self._audio_page.refresh()
+        elif label == "Settings":
+            self._settings_page.refresh()
 
     def apply_theme(self, theme: ThemeTokens) -> None:
         self._theme = theme

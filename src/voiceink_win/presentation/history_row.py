@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -39,6 +40,7 @@ class HistoryRow(QFrame):
         self._folder_available = folder_available
         self._expanded = False
         self.setObjectName("historyRow")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._build_ui(metadata)
         self.apply_locale()
 

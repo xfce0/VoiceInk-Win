@@ -150,6 +150,8 @@ class DictionaryPage(QWidget):
         root.addWidget(self._state_panel)
         self._list = QListWidget(self)
         self._list.setObjectName("dictionaryList")
+        self._list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._list.setSpacing(6)
         self._list.setMinimumHeight(110)
         self._list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -282,7 +284,7 @@ class DictionaryPage(QWidget):
             )
             self._row_widgets[entry.id] = row
             self._list.setItemWidget(item, row)
-            item.setSizeHint(row.sizeHint())
+            self._resize_row(item, row)
         self._list.setVisible(bool(entries) and not unavailable)
         self._set_editor_enabled(not unavailable)
         if unavailable:
@@ -482,6 +484,18 @@ class DictionaryPage(QWidget):
         for row_id, row in self._row_widgets.items():
             row.set_selected(row_id == entry_id)
 
+    def _resize_row(self, item: QListWidgetItem, row: _DictionaryRow) -> None:
+        item.setSizeHint(QSize(self._list.viewport().width(), row.sizeHint().height()))
+        self._list.doItemsLayout()
+
+    def _resize_rows(self) -> None:
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            entry_id = item.data(Qt.ItemDataRole.UserRole)
+            row = self._row_widgets.get(entry_id)
+            if row is not None:
+                self._resize_row(item, row)
+
     def _set_editor_title(self) -> None:
         self._editor_title.setText(
             self._t(
@@ -515,6 +529,10 @@ class DictionaryPage(QWidget):
 
     def _t(self, key: TranslationKey, **values: object) -> str:
         return translate(key, self._locale_config.locale, **values)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._resize_rows()
 
     def _next_operation(self) -> int:
         self._operation += 1

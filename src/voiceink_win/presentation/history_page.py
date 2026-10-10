@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -152,6 +153,8 @@ class HistoryPage(QWidget):
         root.addWidget(self._metadata)
         self._list = QListWidget(self)
         self._list.setObjectName("historyList")
+        self._list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._list.setSpacing(8)
         self._list.setFrameShape(QListWidget.Shape.NoFrame)
         self._list.currentItemChanged.connect(self._select_item)
@@ -287,7 +290,7 @@ class HistoryPage(QWidget):
             row.clicked.connect(lambda record_id=record.id: self._row_clicked(record_id))
             self._rows[record.id] = row
             self._list.setItemWidget(item, row)
-            item.setSizeHint(row.sizeHint())
+            self._resize_row(item, row)
         self._previous.setEnabled(bool(self._cursor_stack))
         self._next.setEnabled(self._has_more)
         self._status.setText(self._t(TranslationKey.COMMON_READY))
@@ -334,8 +337,16 @@ class HistoryPage(QWidget):
         self._list.setCurrentItem(item)
 
     def _resize_row(self, item: QListWidgetItem, row: HistoryRow) -> None:
-        item.setSizeHint(row.sizeHint())
+        item.setSizeHint(QSize(self._list.viewport().width(), row.sizeHint().height()))
         self._list.doItemsLayout()
+
+    def _resize_rows(self) -> None:
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            record_id = item.data(Qt.ItemDataRole.UserRole)
+            row = self._rows.get(record_id)
+            if row is not None:
+                self._resize_row(item, row)
 
     def _show_unavailable(self) -> None:
         self._status.clear()
@@ -656,6 +667,10 @@ class HistoryPage(QWidget):
 
     def _t(self, key: TranslationKey, **values: object) -> str:
         return translate(key, self._locale_config.locale, **values)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._resize_rows()
 
     def dispose(self) -> None:
         self._disposed = True

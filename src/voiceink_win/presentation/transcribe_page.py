@@ -184,8 +184,10 @@ class TranscribePage(QWidget):
         scroll = QScrollArea(self)
         scroll.setObjectName("transcribeQueueScroll")
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         queue = QWidget(scroll)
+        queue.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._queue_layout = QVBoxLayout(queue)
         self._queue_layout.setContentsMargins(0, 0, 0, 0)
         self._queue_layout.setSpacing(10)
@@ -250,6 +252,7 @@ class TranscribePage(QWidget):
     def _build_item(self, item: TranscriptionQueueItemSnapshot) -> QFrame:
         frame = QFrame(self)
         frame.setObjectName("transcribeItem")
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
