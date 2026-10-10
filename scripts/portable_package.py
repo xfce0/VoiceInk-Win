@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK_TEMPLATE = ROOT / ".github" / "native-smoke" / "artifact-lock.template.json"
 PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
+CANONICAL_LAUNCH_TARGET = "voiceink-shell.exe"
+CANONICAL_LAUNCH_SUBSYSTEM = "windows-gui"
 SIDECAR_RUNTIME_DLLS = frozenset(
     {
         "concrt140.dll",
@@ -152,6 +154,10 @@ def build_package(
         descriptor = {
             "schema": "voiceink.runtime.package.v1",
             "version": 1,
+            "launch": {
+                "executable": CANONICAL_LAUNCH_TARGET,
+                "subsystem": CANONICAL_LAUNCH_SUBSYSTEM,
+            },
             "executable_artifact_id": next(
                 key for key, value in artifacts.items() if value is sidecar_lock
             ),
@@ -200,7 +206,7 @@ def build_package(
             'set "VOICEINK_FFMPEG_PATH="\n'
             'set "VOICEINK_IMPORT_WORKSPACE_ROOT="\n'
             'set "VOICEINK_IMPORT_ROOTS="\n'
-            '"%~dp0voiceink-shell.exe" %*\n',
+            f'"%~dp0{CANONICAL_LAUNCH_TARGET}" %*\n',
             encoding="ascii",
         )
         output.parent.mkdir(parents=True, exist_ok=True)
