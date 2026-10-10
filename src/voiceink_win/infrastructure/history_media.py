@@ -72,6 +72,8 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._playback_request = 0
         self._error_signal: Any | None = None
         self._error_slot: Callable[..., None] | None = None
+        self._status_signal: Any | None = None
+        self._status_slot: Callable[..., None] | None = None
         if self._platform_name != "nt":
             return
         try:
@@ -89,6 +91,7 @@ class WindowsHistoryAudioPlaybackAdapter:
             self._audio_output = audio_output_factory()
             self._player.setAudioOutput(self._audio_output)
             self._error_signal = getattr(self._player, "errorOccurred", None)
+            self._status_signal = getattr(self._player, "mediaStatusChanged", None)
             is_available = getattr(self._player, "isAvailable", None)
             if callable(is_available) and not is_available():
                 self._player = None
@@ -108,24 +111,23 @@ class WindowsHistoryAudioPlaybackAdapter:
     def is_available(self) -> bool:
         return self._platform_name == "nt" and self._player is not None
 
-    def play(
-        self,
-        resolved_artifact: Path,
-        on_failure: Callable[[Exception], None] | None = None,
-    ) -> None:
+    def set_failure_callback(self, callback: Callable[[Exception], None] | None) -> None:
+        self._failure_callback = callback
+
+    def play(self, resolved_artifact: Path) -> None:
         if not self.is_available() or self._url_factory is None:
             raise RuntimeError("history audio playback is unavailable")
         self._playback_error = None
-        self._failure_callback = on_failure
         self._playback_request += 1
         request = self._playback_request
         if self._error_signal is not None:
-            if self._error_slot is not None:
-                disconnect = getattr(self._error_signal, "disconnect", None)
-                if callable(disconnect):
-                    disconnect(self._error_slot)
+            self._disconnect_signal(self._error_signal, self._error_slot)
             self._error_slot = lambda *_args: self._on_playback_error(request)
             self._error_signal.connect(self._error_slot)
+        if self._status_signal is not None:
+            self._disconnect_signal(self._status_signal, self._status_slot)
+            self._status_slot = lambda status: self._on_media_status(request, status)
+            self._status_signal.connect(self._status_slot)
         self._play_in_progress = True
         try:
             self._player.setSource(self._url_factory(str(resolved_artifact)))
@@ -141,7 +143,33 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._playback_error = RuntimeError("history audio playback failed")
         if self._play_in_progress or self._failure_callback is None:
             return
-        self._failure_callback(self._playback_error)
+        callback = self._failure_callback
+        self._failure_callback = None
+        self._disconnect_playback_signals()
+        callback(self._playback_error)
+
+    def _on_media_status(self, request: int, status: Any) -> None:
+        if request != self._playback_request:
+            return
+        status_name = getattr(status, "name", str(status))
+        if status_name == "EndOfMedia":
+            self._playback_request += 1
+            self._failure_callback = None
+            self._disconnect_playback_signals()
+
+    @staticmethod
+    def _disconnect_signal(signal: Any | None, slot: Callable[..., None] | None) -> None:
+        if signal is None or slot is None:
+            return
+        disconnect = getattr(signal, "disconnect", None)
+        if callable(disconnect):
+            disconnect(slot)
+
+    def _disconnect_playback_signals(self) -> None:
+        self._disconnect_signal(self._error_signal, self._error_slot)
+        self._disconnect_signal(self._status_signal, self._status_slot)
+        self._error_slot = None
+        self._status_slot = None
 
     def close(self) -> None:
         if self._player is not None:
@@ -161,12 +189,11 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._audio_output = None
         self._failure_callback = None
         self._playback_request += 1
-        if self._error_signal is not None and self._error_slot is not None:
-            disconnect = getattr(self._error_signal, "disconnect", None)
-            if callable(disconnect):
-                disconnect(self._error_slot)
+        self._disconnect_playback_signals()
         self._error_signal = None
         self._error_slot = None
+        self._status_signal = None
+        self._status_slot = None
 
 
 __all__ = [

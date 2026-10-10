@@ -376,6 +376,9 @@ class HistoryPage(QWidget):
 
     def _select_item(self, item: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         record_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        previous_id = self._selected.id if self._selected is not None else None
+        if previous_id != record_id:
+            self._media_operation += 1
         self._selected = next((record for record in self._records if record.id == record_id), None)
         for row_id, row in self._rows.items():
             selected = row_id == record_id

@@ -294,7 +294,7 @@ def test_reveal_revalidates_after_inspection(tmp_path: Path) -> None:
     assert reveal.paths == []
 
 
-def test_artifact_resolution_failure_is_an_error(tmp_path: Path, caplog) -> None:
+def test_artifact_resolution_failure_is_unavailable(tmp_path: Path, caplog) -> None:
     store = _FakeArtifacts(tmp_path / "history" / "item.wav")
     store.error = PermissionError("artifact lookup denied")
     service = HistoryMediaActionService(store, _FakePlayback(), _FakeReveal())
@@ -303,9 +303,9 @@ def test_artifact_resolution_failure_is_an_error(tmp_path: Path, caplog) -> None
         availability = service.inspect(_record())
         result = service.play(_record())
 
-    assert availability.audio.state is HistoryMediaState.ERROR
-    assert availability.audio.code is HistoryMediaCode.OPERATION_FAILED
-    assert result.code is HistoryMediaCode.OPERATION_FAILED
+    assert availability.audio.state is HistoryMediaState.UNAVAILABLE
+    assert availability.audio.code is HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
+    assert result.code is HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
     assert any(
         getattr(record, "failure_stage", None) == "resolve"
         and getattr(record, "exception_type", None) == "PermissionError"
@@ -439,7 +439,8 @@ def test_windows_audio_adapter_reports_asynchronous_error() -> None:
     )
 
     failures: list[Exception] = []
-    adapter.play(Path(r"C:\Windows\Temp\item.wav"), on_failure=failures.append)
+    adapter.set_failure_callback(failures.append)
+    adapter.play(Path(r"C:\Windows\Temp\item.wav"))
     player.errorOccurred.emit()
 
     assert [str(error) for error in failures] == ["history audio playback failed"]
