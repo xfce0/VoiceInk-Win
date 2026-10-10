@@ -23,14 +23,22 @@ from voiceink_win.infrastructure import (
 
 
 class _FakePlayback:
-    def __init__(self, available: bool = True, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        available: bool = True,
+        error: Exception | None = None,
+        availability_error: Exception | None = None,
+    ) -> None:
         self.available = available
         self.error = error
+        self.availability_error = availability_error
         self.paths: list[Path] = []
         self.availability_checks = 0
 
     def is_available(self) -> bool:
         self.availability_checks += 1
+        if self.availability_error is not None:
+            raise self.availability_error
         return self.available
 
     def play(self, path: Path) -> None:
@@ -40,11 +48,14 @@ class _FakePlayback:
 
 
 class _FakeReveal:
-    def __init__(self, available: bool = True) -> None:
+    def __init__(self, available: bool = True, availability_error: Exception | None = None) -> None:
         self.available = available
+        self.availability_error = availability_error
         self.paths: list[Path] = []
 
     def is_available(self) -> bool:
+        if self.availability_error is not None:
+            raise self.availability_error
         return self.available
 
     def reveal(self, path: Path) -> None:
@@ -174,6 +185,61 @@ def test_adapter_failure_is_safe_and_does_not_log_paths_or_exception_text(
         getattr(record, "reason_code", None) == HistoryMediaCode.OPERATION_FAILED.value
         for record in caplog.records
     )
+    operation_log = next(
+        record
+        for record in caplog.records
+        if getattr(record, "reason_code", None) == HistoryMediaCode.OPERATION_FAILED.value
+    )
+    assert operation_log.failure_stage == "operation"
+    assert operation_log.exception_type == "RuntimeError"
+
+
+def test_capability_failure_is_unavailable_and_structured_for_play(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = AudioArtifactStore(tmp_path / "audio")
+    store.write("history/item.wav", b"wav")
+    service = HistoryMediaActionService(
+        store,
+        _FakePlayback(availability_error=RuntimeError("player unavailable")),
+        _FakeReveal(),
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = service.play(_record())
+
+    assert result.code is HistoryMediaCode.PLATFORM_UNAVAILABLE
+    capability_log = next(
+        record
+        for record in caplog.records
+        if getattr(record, "failure_stage", None) == "capability"
+    )
+    assert capability_log.reason_code == HistoryMediaCode.PLATFORM_UNAVAILABLE.value
+    assert capability_log.exception_type == "RuntimeError"
+
+
+def test_capability_failure_is_unavailable_and_structured_for_reveal(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = AudioArtifactStore(tmp_path / "audio")
+    store.write("history/item.wav", b"wav")
+    service = HistoryMediaActionService(
+        store,
+        _FakePlayback(),
+        _FakeReveal(availability_error=RuntimeError("explorer unavailable")),
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = service.reveal(_record())
+
+    assert result.code is HistoryMediaCode.PLATFORM_UNAVAILABLE
+    capability_log = next(
+        record
+        for record in caplog.records
+        if getattr(record, "failure_stage", None) == "capability"
+    )
+    assert capability_log.reason_code == HistoryMediaCode.PLATFORM_UNAVAILABLE.value
+    assert capability_log.exception_type == "RuntimeError"
 
 
 def test_action_revalidates_after_inspection(tmp_path: Path) -> None:
