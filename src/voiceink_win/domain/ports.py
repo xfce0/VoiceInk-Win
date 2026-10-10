@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 from .audio_capture import InputDevice, MicrophoneStatus
 from .models import AsrCapabilities, AsrRequest, RuntimeHealth, TranscriptResult
+from .shortcuts import GlobalShortcut
 
 
 class AsrRuntime(Protocol):
@@ -28,6 +30,20 @@ class AsrRequestHandle(Protocol):
     def await_quiescence(self, deadline: float | None = None) -> None: ...
 
     def release(self) -> None: ...
+
+
+class GlobalShortcutRegistration(Protocol):
+    """A registered shortcut that owns its native registration lifetime."""
+
+    def unregister(self) -> None: ...
+
+
+class GlobalShortcutPort(Protocol):
+    """Register one process callback without exposing platform event details."""
+
+    def register(
+        self, shortcut: GlobalShortcut, callback: Callable[[], None]
+    ) -> GlobalShortcutRegistration: ...
 
 
 class AudioCaptureSession(Protocol):

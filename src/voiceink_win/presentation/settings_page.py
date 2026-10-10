@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -44,10 +46,12 @@ class SettingsPage(QWidget):
         persistence: PersistenceService | None,
         parent: QWidget | None = None,
         locale_config: LocaleConfig | None = None,
+        on_start_stop_hotkey_changed: Callable[[str], object] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("settingsPage")
         self._persistence = persistence
+        self._on_start_stop_hotkey_changed = on_start_stop_hotkey_changed
         self._locale_config = locale_config or LocaleConfig(parent=self)
         self._locale_callback = self.apply_locale
         self._locale_config.locale_changed.connect(
@@ -227,6 +231,9 @@ class SettingsPage(QWidget):
             self._cancel_hotkey.setText(str(settings.hotkeys.get("cancel", "")))
         if not unavailable:
             self._locale_config.set_locale(settings.language)
+            shortcut = str(settings.hotkeys.get("start_stop", "")).strip()
+            if shortcut and self._on_start_stop_hotkey_changed is not None:
+                self._on_start_stop_hotkey_changed(shortcut)
         self.theme_changed.emit(settings.theme_mode.value)
         self._set_controls_enabled(not unavailable)
         self._model_value.setText(self._preference_text(settings.model_preferences))
@@ -280,13 +287,14 @@ class SettingsPage(QWidget):
         self._status.setText(self._t(TranslationKey.COMMON_SAVING))
         self._bridge.watch(
             self._persistence.update_settings({field: value}),
-            lambda result, error: self._saved(generation, sequence, result, error),
+            lambda result, error: self._saved(generation, sequence, field, result, error),
         )
 
     def _saved(
         self,
         generation: int,
         sequence: int,
+        field: str,
         result: Settings | None,
         error: BaseException | None,
     ) -> None:
@@ -298,6 +306,10 @@ class SettingsPage(QWidget):
         else:
             if result is not None:
                 self._settings = result
+                if field == "hotkeys.start_stop" and self._on_start_stop_hotkey_changed is not None:
+                    shortcut = str(result.hotkeys.get("start_stop", "")).strip()
+                    if shortcut:
+                        self._on_start_stop_hotkey_changed(shortcut)
             self._status.setText(self._t(TranslationKey.COMMON_SAVED))
 
     def _preference_text(self, preferences: dict[str, object]) -> str:

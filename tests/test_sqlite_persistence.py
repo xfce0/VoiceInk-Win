@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,8 @@ import pytest
 
 from voiceink_win.application import HistoryDeletionService, PersistenceService
 from voiceink_win.domain import (
+    AudioArtifactQuotaError,
+    CanonicalAudio,
     DictionaryEntry,
     HistoryRecord,
     HistoryStatus,
@@ -60,6 +63,18 @@ class _TestArtifactSecurityAdapter:
 def _portable_artifacts(path: Path) -> AudioArtifactStore:
     adapter: WindowsMediaSecurityAdapter | None = _TestArtifactSecurityAdapter()
     return AudioArtifactStore(path, windows_adapter=adapter)
+
+
+def _portable_artifacts_with_limits(
+    path: Path, *, max_bytes: int, quota: int
+) -> AudioArtifactStore:
+    adapter: WindowsMediaSecurityAdapter | None = _TestArtifactSecurityAdapter()
+    return AudioArtifactStore(
+        path,
+        windows_adapter=adapter,
+        max_artifact_bytes=max_bytes,
+        quota_bytes=quota,
+    )
 
 
 def _native_safety_artifacts(path: Path) -> AudioArtifactStore:
@@ -181,6 +196,30 @@ def test_history_pagination_is_newest_first_and_delete_is_atomic(
     ]
 
 
+def test_history_search_cursor_keeps_equal_timestamp_tie_breaker(
+    store: SQLitePersistence,
+) -> None:
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    records = (
+        _record("old", created_at - timedelta(seconds=1), "older"),
+        _record("equal-a", created_at, "needle equal a"),
+        _record("equal-b", created_at, "needle equal b"),
+        _record("middle", created_at + timedelta(seconds=1), "needle middle"),
+        _record("newest", created_at + timedelta(seconds=2), "needle newest"),
+    )
+    for record in records:
+        store.upsert_history(record).result(timeout=2)
+
+    first_page = store.list_history(search="needle", limit=2).result(timeout=2)
+    second_page = store.list_history(
+        search="needle", cursor=first_page.next_cursor, limit=2
+    ).result(timeout=2)
+
+    assert [record.id for record in first_page.records] == ["newest", "middle"]
+    assert [record.id for record in second_page.records] == ["equal-b", "equal-a"]
+    assert second_page.has_more is False
+
+
 def test_concurrent_background_submissions_are_serialized(store: SQLitePersistence) -> None:
     records = [
         _record(f"record-{index}", datetime(2026, 1, 1, tzinfo=UTC), str(index))
@@ -234,6 +273,37 @@ def test_audio_paths_reject_traversal_and_writes_are_atomic(
     target = artifacts.write("history/sample.wav", b"new audio")
     assert target.read_bytes() == b"new audio"
     assert target.parent == paths.audio / "history"
+
+
+def test_normalized_audio_artifacts_use_private_safe_names_and_reveal_only_regular_files(
+    tmp_path: Path,
+) -> None:
+    artifacts = _portable_artifacts(tmp_path / "audio")
+    relative_path = artifacts.save_normalized_audio(
+        CanonicalAudio(b"\x01\x00" * 800), "job/with-user-source-name"
+    )
+
+    assert relative_path.startswith("history/")
+    assert Path(relative_path).name.endswith(".wav")
+    revealed = artifacts.reveal_path(relative_path)
+    assert revealed.parent == tmp_path / "audio" / "history"
+    with wave.open(str(revealed), "rb") as audio:
+        assert audio.getnchannels() == 1
+        assert audio.getframerate() == 16_000
+        assert audio.getsampwidth() == 2
+        assert audio.readframes(audio.getnframes()) == b"\x01\x00" * 800
+
+    with pytest.raises(InvalidAudioArtifactPathError):
+        artifacts.reveal_path("../outside.wav")
+
+
+def test_audio_artifact_quota_is_enforced_before_replacement(tmp_path: Path) -> None:
+    artifacts = _portable_artifacts_with_limits(tmp_path / "audio", max_bytes=512, quota=100)
+
+    with pytest.raises(AudioArtifactQuotaError, match="quota"):
+        artifacts.save_normalized_audio(CanonicalAudio(b"\x00\x00" * 100), "job-1")
+
+    assert list((tmp_path / "audio").rglob("*.wav")) == []
 
 
 def test_migration_checksums_detect_drift_and_missing_package_files(tmp_path: Path) -> None:

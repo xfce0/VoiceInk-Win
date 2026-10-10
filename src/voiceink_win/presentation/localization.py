@@ -135,6 +135,9 @@ class TranslationKey(StrEnum):
 
     HISTORY_TITLE = "history.title"
     HISTORY_SUBTITLE = "history.subtitle"
+    HISTORY_SEARCH_PLACEHOLDER = "history.search_placeholder"
+    HISTORY_SEARCH = "history.search"
+    HISTORY_SEARCH_ACCESSIBLE = "history.search_accessible"
     HISTORY_LOADING = "history.loading"
     HISTORY_EMPTY = "history.empty"
     HISTORY_EMPTY_RECORD = "history.empty_record"
@@ -151,6 +154,14 @@ class TranslationKey(StrEnum):
     HISTORY_COPYING = "history.copying"
     HISTORY_COPIED = "history.copied"
     HISTORY_COPY_ERROR = "history.copy_error"
+    HISTORY_AUDIO = "history.audio"
+    HISTORY_AUDIO_UNAVAILABLE = "history.audio_unavailable"
+    HISTORY_AUDIO_STARTED = "history.audio_started"
+    HISTORY_AUDIO_ERROR = "history.audio_error"
+    HISTORY_FOLDER = "history.folder"
+    HISTORY_FOLDER_UNAVAILABLE = "history.folder_unavailable"
+    HISTORY_FOLDER_OPENED = "history.folder_opened"
+    HISTORY_FOLDER_ERROR = "history.folder_error"
     HISTORY_DELETE = "history.delete"
     HISTORY_DELETE_TITLE = "history.delete_title"
     HISTORY_DELETE_CONFIRM = "history.delete_confirm"
@@ -174,12 +185,22 @@ class TranslationKey(StrEnum):
 
     DICTIONARY_TITLE = "dictionary.title"
     DICTIONARY_SUBTITLE = "dictionary.subtitle"
+    DICTIONARY_EMPTY = "dictionary.empty"
+    DICTIONARY_EMPTY_DETAIL = "dictionary.empty_detail"
+    DICTIONARY_LOADING_DETAIL = "dictionary.loading_detail"
+    DICTIONARY_ERROR_DETAIL = "dictionary.error_detail"
     DICTIONARY_PHRASE = "dictionary.phrase"
     DICTIONARY_REPLACEMENT = "dictionary.replacement"
     DICTIONARY_ENABLED = "dictionary.enabled"
     DICTIONARY_NEW = "dictionary.new"
+    DICTIONARY_EDIT = "dictionary.edit"
     DICTIONARY_SAVE = "dictionary.save"
     DICTIONARY_DELETE = "dictionary.delete"
+    DICTIONARY_RETRY = "dictionary.retry"
+    DICTIONARY_EDIT_ACCESSIBLE = "dictionary.edit_accessible"
+    DICTIONARY_DELETE_ACCESSIBLE = "dictionary.delete_accessible"
+    DICTIONARY_EDITOR_NEW = "dictionary.editor_new"
+    DICTIONARY_EDITOR_EDIT = "dictionary.editor_edit"
     DICTIONARY_PHRASE_REQUIRED = "dictionary.phrase_required"
     DICTIONARY_SAVE_ERROR = "dictionary.save_error"
     DICTIONARY_DELETE_TITLE = "dictionary.delete_title"
@@ -531,6 +552,13 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "Saved transcripts are loaded from local SQLite storage, newest first.",
         "Сохранённые расшифровки загружаются из локального SQLite, сначала новые.",
     ),
+    TranslationKey.HISTORY_SEARCH_PLACEHOLDER: _entry(
+        "Search source or transcript", "Поиск по источнику или расшифровке"
+    ),
+    TranslationKey.HISTORY_SEARCH: _entry("Search", "Найти"),
+    TranslationKey.HISTORY_SEARCH_ACCESSIBLE: _entry(
+        "Search transcript history", "Поиск по истории расшифровок"
+    ),
     TranslationKey.HISTORY_LOADING: _entry("Loading history...", "Загрузка истории..."),
     TranslationKey.HISTORY_EMPTY: _entry("No transcripts yet.", "Расшифровок пока нет."),
     TranslationKey.HISTORY_EMPTY_RECORD: _entry("Empty transcript", "Пустая расшифровка"),
@@ -552,6 +580,18 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.HISTORY_COPIED: _entry("Copied", "Скопировано"),
     TranslationKey.HISTORY_COPY_ERROR: _entry(
         "Could not copy the transcript.", "Не удалось скопировать расшифровку."
+    ),
+    TranslationKey.HISTORY_AUDIO: _entry("Audio", "Аудио"),
+    TranslationKey.HISTORY_AUDIO_UNAVAILABLE: _entry("Audio unavailable", "Аудио недоступно"),
+    TranslationKey.HISTORY_AUDIO_STARTED: _entry("Playing audio", "Воспроизведение аудио"),
+    TranslationKey.HISTORY_AUDIO_ERROR: _entry(
+        "Could not play the audio.", "Не удалось воспроизвести аудио."
+    ),
+    TranslationKey.HISTORY_FOLDER: _entry("Folder", "Папка"),
+    TranslationKey.HISTORY_FOLDER_UNAVAILABLE: _entry("Folder unavailable", "Папка недоступна"),
+    TranslationKey.HISTORY_FOLDER_OPENED: _entry("Opened folder", "Папка открыта"),
+    TranslationKey.HISTORY_FOLDER_ERROR: _entry(
+        "Could not open the folder.", "Не удалось открыть папку."
     ),
     TranslationKey.HISTORY_DELETE: _entry("Delete", "Удалить"),
     TranslationKey.HISTORY_DELETE_TITLE: _entry("Delete transcript", "Удалить расшифровку"),
@@ -593,15 +633,37 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.DICTIONARY_TITLE: _entry("Dictionary", "Словарь"),
     TranslationKey.DICTIONARY_SUBTITLE: _entry(
-        "Store replacement rules now. Applying them to transcription is not enabled in this build.",
-        "Сохраняйте правила замен. Применение к расшифровке в этой сборке не включено.",
+        "Keep names and terms consistent in every transcription.",
+        "Сохраняйте единообразие имён и терминов в каждой расшифровке.",
+    ),
+    TranslationKey.DICTIONARY_EMPTY: _entry("No replacement rules yet.", "Правил замен пока нет."),
+    TranslationKey.DICTIONARY_EMPTY_DETAIL: _entry(
+        "Add a phrase to keep names and terms consistent.",
+        "Добавьте фразу, чтобы сохранять единообразие имён и терминов.",
+    ),
+    TranslationKey.DICTIONARY_LOADING_DETAIL: _entry(
+        "Loading your saved rules...", "Загружаем сохранённые правила..."
+    ),
+    TranslationKey.DICTIONARY_ERROR_DETAIL: _entry(
+        "Rules could not be loaded. Check local storage and try again.",
+        "Не удалось загрузить правила. Проверьте локальное хранилище и повторите попытку.",
     ),
     TranslationKey.DICTIONARY_PHRASE: _entry("Phrase", "Фраза"),
-    TranslationKey.DICTIONARY_REPLACEMENT: _entry("Replacement", "Замена"),
+    TranslationKey.DICTIONARY_REPLACEMENT: _entry("Replace with", "Заменять на"),
     TranslationKey.DICTIONARY_ENABLED: _entry("Rule enabled", "Правило включено"),
-    TranslationKey.DICTIONARY_NEW: _entry("New", "Новое"),
-    TranslationKey.DICTIONARY_SAVE: _entry("Save", "Сохранить"),
+    TranslationKey.DICTIONARY_NEW: _entry("Add rule", "Добавить правило"),
+    TranslationKey.DICTIONARY_EDIT: _entry("Edit", "Изменить"),
+    TranslationKey.DICTIONARY_SAVE: _entry("Save rule", "Сохранить правило"),
     TranslationKey.DICTIONARY_DELETE: _entry("Delete", "Удалить"),
+    TranslationKey.DICTIONARY_RETRY: _entry("Try again", "Повторить"),
+    TranslationKey.DICTIONARY_EDIT_ACCESSIBLE: _entry(
+        "Edit dictionary rule", "Изменить правило словаря"
+    ),
+    TranslationKey.DICTIONARY_DELETE_ACCESSIBLE: _entry(
+        "Delete dictionary rule", "Удалить правило словаря"
+    ),
+    TranslationKey.DICTIONARY_EDITOR_NEW: _entry("New rule", "Новое правило"),
+    TranslationKey.DICTIONARY_EDITOR_EDIT: _entry("Edit rule", "Изменение правила"),
     TranslationKey.DICTIONARY_PHRASE_REQUIRED: _entry("Enter a phrase.", "Введите фразу."),
     TranslationKey.DICTIONARY_SAVE_ERROR: _entry(
         "Could not save this rule. The phrase may already exist.",

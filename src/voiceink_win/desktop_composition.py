@@ -7,6 +7,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from inspect import Parameter, signature
+from pathlib import Path
 from threading import Lock, Thread, current_thread
 from typing import Protocol
 
@@ -41,6 +42,12 @@ class DesktopComposition(Protocol):
     def artifact_cleanup(self) -> Callable[[str], None]: ...
 
     @property
+    def artifact_reveal(self) -> Callable[[str], Path]: ...
+
+    @property
+    def artifact_folder(self) -> Path: ...
+
+    @property
     def history_deletion(self) -> HistoryDeletionService: ...
 
     def close(self) -> None: ...
@@ -52,6 +59,9 @@ class _DesktopComposition:
     transcribe_controller: TranscribePageController
     persistence: PersistenceService
     artifact_cleanup: Callable[[str], None]
+    artifact_reveal: Callable[[str], Path]
+    artifact_folder: Path
+    audio_artifact_port: object
     history_deletion: HistoryDeletionService
     readiness_timeout: float | None = field(default=None, repr=False)
     _backend: object | None = field(default=None, init=False, repr=False)
@@ -110,6 +120,7 @@ class _DesktopComposition:
             backend = _build_backend(
                 build_application_from_environment,
                 self.persistence,
+                audio_artifact_port=self.audio_artifact_port,
                 readiness_timeout=self.readiness_timeout,
             )
             backend.start()
@@ -168,6 +179,7 @@ def _build_backend(
     history_port: PersistenceService,
     *,
     readiness_timeout: float | None = None,
+    audio_artifact_port: object | None = None,
 ) -> object:
     """Support narrow test builders without weakening production history wiring."""
     parameters = signature(builder).parameters
@@ -179,6 +191,10 @@ def _build_backend(
         kwargs["history_port"] = history_port
     if readiness_timeout is not None and ("readiness_timeout" in parameters or accepts_keywords):
         kwargs["readiness_timeout"] = readiness_timeout
+    if audio_artifact_port is not None and (
+        "audio_artifact_port" in parameters or accepts_keywords
+    ):
+        kwargs["audio_artifact_port"] = audio_artifact_port
     return builder(**kwargs)
 
 
@@ -210,6 +226,9 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
         transcribe_controller=transcribe_controller,
         persistence=persistence,
         artifact_cleanup=artifacts.delete,
+        artifact_reveal=artifacts.reveal_path,
+        artifact_folder=artifacts.folder_path,
+        audio_artifact_port=artifacts,
         history_deletion=history_deletion,
         readiness_timeout=readiness_timeout,
     )

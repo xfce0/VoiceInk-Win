@@ -10,10 +10,12 @@ from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
 from .errors import InvalidInputError
+from .models import CanonicalAudio
 from .transcribe import TranscriptVariant
 
 
@@ -73,6 +75,10 @@ class InvalidAudioArtifactPathError(PersistenceError, ValueError):
     """An audio reference is not a safe relative path."""
 
 
+class AudioArtifactQuotaError(PersistenceError):
+    """The local audio-artifact quota would be exceeded."""
+
+
 @dataclass(frozen=True, slots=True)
 class HistoryRecord:
     id: str = field(default_factory=lambda: uuid4().hex)
@@ -125,6 +131,8 @@ class HistoryRecord:
 
 @dataclass(frozen=True, slots=True)
 class HistoryPage:
+    """A page ordered newest-first by ``created_at`` and then ``id``."""
+
     records: tuple[HistoryRecord, ...]
     offset: int
     limit: int
@@ -223,6 +231,14 @@ class HistoryPort(Protocol):
     ) -> Future[None]: ...
 
     def list_pending_history_deletions(self) -> Future[tuple[PendingHistoryDeletion, ...]]: ...
+
+
+class HistoryAudioArtifactPort(Protocol):
+    def save_normalized_audio(self, audio: CanonicalAudio, artifact_id: str) -> str: ...
+
+    def delete(self, relative_path: str) -> None: ...
+
+    def reveal_path(self, relative_path: str) -> Path: ...
 
 
 class DictionaryPort(Protocol):

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from voiceink_win.application import (
+    GlobalToggleShortcutService,
     HistoryDeletionService,
     PersistenceService,
     ShellController,
@@ -33,7 +34,7 @@ from .ai_models_page import AIModelsPage
 from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
-from .history_page import HistoryPage
+from .history_page import HistoryAudioPort, HistoryFolderPort, HistoryPage
 from .icon_registry import SIDEBAR_ITEMS
 from .localization import (
     LocaleConfig,
@@ -132,15 +133,19 @@ class FloatingRecorderWindow(QFrame):
     def _toggle_recording(self) -> None:
         state = self._controller.snapshot.state
         if state is ShellState.RECORDING:
-            if self._controller.stop_recording():
-                self._timer = QTimer(self)
-                self._timer.setSingleShot(True)
-                self._timer.setInterval(220)
-                self._timer.timeout.connect(self._complete_processing)
-                self._timer.start()
+            self._controller.stop_recording()
             return
         if state is not ShellState.PROCESSING:
             self._controller.start_recording()
+
+    def _schedule_processing(self) -> None:
+        if self._timer is not None:
+            return
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(220)
+        self._timer.timeout.connect(self._complete_processing)
+        self._timer.start()
 
     def _complete_processing(self) -> None:
         self._timer = None
@@ -234,6 +239,8 @@ class FloatingRecorderWindow(QFrame):
         self._record_button.style().unpolish(self._record_button)
         self._record_button.style().polish(self._record_button)
         self._waveform.set_active(snapshot.state is ShellState.RECORDING)
+        if snapshot.state is ShellState.PROCESSING:
+            self._schedule_processing()
 
     def closeEvent(self, event) -> None:
         self.dismiss()
@@ -251,8 +258,13 @@ class MainWindow(QMainWindow):
         locale_config: LocaleConfig | None = None,
         persistence: PersistenceService | None = None,
         artifact_cleanup=None,
+        artifact_reveal=None,
+        artifact_folder=None,
         history_deletion: HistoryDeletionService | None = None,
         model_metadata: ModelMetadata | None = None,
+        global_shortcut: GlobalToggleShortcutService | None = None,
+        audio_port: HistoryAudioPort | None = None,
+        folder_port: HistoryFolderPort | None = None,
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
@@ -270,11 +282,16 @@ class MainWindow(QMainWindow):
         self._persistence = persistence
         self._model_metadata = model_metadata or discover_model_metadata()
         self._artifact_cleanup = artifact_cleanup
+        self._audio_port = audio_port
+        self._folder_port = folder_port
+        self._artifact_reveal = artifact_reveal
+        self._artifact_folder = artifact_folder
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None
             else None
         )
+        self._global_shortcut = global_shortcut
         self._owns_history_deletion = history_deletion is None and (
             self._history_deletion is not None
         )
@@ -298,6 +315,13 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._render(controller.snapshot)
         self.apply_locale()
+        if self._global_shortcut is not None:
+            self._global_shortcut.register()
+
+    def _update_global_shortcut(self, shortcut: str) -> object | None:
+        if self._global_shortcut is None:
+            return None
+        return self._global_shortcut.update_shortcut(shortcut)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -321,7 +345,11 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             artifact_cleanup=self._artifact_cleanup,
+            artifact_reveal=self._artifact_reveal,
+            artifact_folder=self._artifact_folder,
             history_deletion=self._history_deletion,
+            audio_port=self._audio_port,
+            folder_port=self._folder_port,
         )
         self._pages.addWidget(self._history_page)
         self._dictionary_page = DictionaryPage(
@@ -337,7 +365,10 @@ class MainWindow(QMainWindow):
         )
         self._pages.addWidget(self._audio_page)
         self._settings_page = SettingsPage(
-            self._persistence, self._pages, locale_config=self._locale_config
+            self._persistence,
+            self._pages,
+            locale_config=self._locale_config,
+            on_start_stop_hotkey_changed=self._update_global_shortcut,
         )
         self._settings_page.theme_changed.connect(self.apply_theme_preference)
         self._pages.addWidget(self._settings_page)
@@ -701,6 +732,8 @@ class MainWindow(QMainWindow):
                 pass
             self._locale_connected = False
         self._disconnect_theme_signal()
+        if self._global_shortcut is not None:
+            self._global_shortcut.unregister()
         self._recorder.dispose()
         self._transcribe_page.dispose()
         self._modes_page.dispose()
