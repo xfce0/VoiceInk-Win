@@ -78,6 +78,10 @@ class TranslationKey(StrEnum):
     SETTINGS_TITLE = "settings.title"
     SETTINGS_SUBTITLE = "settings.subtitle"
     SETTINGS_LANGUAGE = "settings.language"
+    SETTINGS_THEME = "settings.theme"
+    SETTINGS_THEME_SYSTEM = "settings.theme_system"
+    SETTINGS_THEME_LIGHT = "settings.theme_light"
+    SETTINGS_THEME_DARK = "settings.theme_dark"
     SETTINGS_ENGLISH = "settings.english"
     SETTINGS_RUSSIAN = "settings.russian"
     SETTINGS_AUTO_COPY = "settings.auto_copy"
@@ -377,6 +381,10 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "функция среды доступна.",
     ),
     TranslationKey.SETTINGS_LANGUAGE: _entry("Language", "Язык"),
+    TranslationKey.SETTINGS_THEME: _entry("Dashboard theme", "Тема панели"),
+    TranslationKey.SETTINGS_THEME_SYSTEM: _entry("System", "Системная"),
+    TranslationKey.SETTINGS_THEME_LIGHT: _entry("Light", "Светлая"),
+    TranslationKey.SETTINGS_THEME_DARK: _entry("Dark", "Тёмная"),
     TranslationKey.SETTINGS_ENGLISH: _entry("English", "Английский"),
     TranslationKey.SETTINGS_RUSSIAN: _entry("Russian", "Русский"),
     TranslationKey.SETTINGS_AUTO_COPY: _entry(
