@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Signal
@@ -295,6 +296,7 @@ class MainWindow(QMainWindow):
         )
         self._global_shortcut = global_shortcut
         self._global_hotkey_settings = global_hotkey_settings
+        self._close_handler: Callable[[object], None] | None = None
         self._owns_history_deletion = history_deletion is None and (
             self._history_deletion is not None
         )
@@ -317,6 +319,9 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._render(controller.snapshot)
         self.apply_locale()
+
+    def set_close_handler(self, handler: Callable[[object], None] | None) -> None:
+        self._close_handler = handler
 
     def _update_global_shortcut(self, shortcut: str) -> object | None:
         if self._global_hotkey_settings is not None:
@@ -733,6 +738,9 @@ class MainWindow(QMainWindow):
         return self._t(TranslationKey.GREETING_DEFAULT)
 
     def closeEvent(self, event) -> None:
+        if self._close_handler is not None:
+            self._close_handler(event)
+            return
         self.dispose()
         event.accept()
 
