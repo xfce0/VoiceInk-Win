@@ -355,7 +355,7 @@ can be retried independently.
   enhancement is enabled by default for the selected mode. The page contract
   remains optional-enhancement-safe without this decision.
 - Approve the Windows file-picker and drag-and-drop adapter details, including
-  trusted import roots and user-facing path permission errors.
+  user-facing errors for unreadable or unsupported local files.
 - Complete the Parakeet runtime/model artifact decision from
   `spec/features/003-parakeet-runtime-integration.md` before claiming real
   transcription on Windows.

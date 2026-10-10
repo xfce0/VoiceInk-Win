@@ -2742,6 +2742,29 @@ def test_source_symlink_is_rejected_without_following_target(tmp_path: Path) -> 
 
 
 @POSIX_ONLY
+def test_source_file_is_allowed_from_any_local_directory(tmp_path: Path) -> None:
+    source = source_file(tmp_path)
+    store = LocalMediaSnapshotStore(tmp_path / "private")
+
+    admitted = store.validate_source(source, max_bytes=100)
+
+    assert admitted.path == source.resolve()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires the native Windows snapshot backend")
+def test_windows_source_file_is_allowed_from_any_local_directory(tmp_path: Path) -> None:
+    source = source_file(tmp_path)
+    store = WindowsMediaSnapshotStore(tmp_path / "private")
+    try:
+        admitted = store.validate_source(source, max_bytes=100)
+        assert admitted.path == source.absolute()
+    finally:
+        if "admitted" in locals():
+            store.release_source(admitted)
+        store.close()
+
+
+@POSIX_ONLY
 @pytest.mark.parametrize("kind", ["directory", "fifo"])
 def test_source_admission_rejects_non_regular_files(tmp_path: Path, kind: str) -> None:
     candidate = tmp_path / kind

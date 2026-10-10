@@ -16,7 +16,7 @@ This feature accepts local audio/video files, normalizes them to the canonical a
 
 ## Functional Requirements
 
-1. The application must accept only canonicalized local regular files inside configured import roots; symlinks, Windows reparse points, UNC paths, and network protocols must be rejected unless an explicit trusted-input policy is approved. Invalid input is a rejected request, not a terminal job result.
+1. The application must accept canonicalized local regular files from any local directory; symlinks, Windows reparse points, UNC paths, and network protocols must be rejected. Invalid input is a rejected request, not a terminal job result.
 2. The application must reserve queue capacity before creating a temporary workspace using a per-job `ReservationToken` with atomic states `held -> committed -> released`; workspace/enqueue failure may release `held`, while only the job-level terminal CAS or supervisor recovery may release `committed`. All releases are idempotent and owner-checked. Capacity counts all admitted non-terminal jobs, including queued, running, and `retry_waiting` jobs.
 3. The queue must be FIFO, bounded, and initially limited to one active worker.
 4. FFmpeg must produce one non-empty RIFF/WAV artifact with mono, 16 kHz, signed PCM S16LE samples.

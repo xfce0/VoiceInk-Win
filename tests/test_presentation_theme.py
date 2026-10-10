@@ -28,6 +28,12 @@ def test_stylesheet_contains_dark_surface_tokens_for_every_dashboard_layer() -> 
     assert "QFrame#sidebar" in stylesheet
     assert "QScrollArea#dashboardScroll > QWidget#qt_scrollarea_viewport" in stylesheet
     assert "QWidget#dashboardContent" in stylesheet
+    assert "QPushButton#actionButton" in stylesheet
+    assert "border-radius: 9px;" in stylesheet
+    assert "QPushButton:pressed" in stylesheet
+    assert "QPushButton#primaryButton:focus" in stylesheet
+    assert "QPushButton#primaryButton:disabled" in stylesheet
+    assert "QPushButton#actionButton:disabled" in stylesheet
     assert f"background: {DARK_THEME.card};" in stylesheet
     assert f"background: {DARK_THEME.empty_card};" in stylesheet
     assert f"background: {DARK_THEME.hero};" in stylesheet

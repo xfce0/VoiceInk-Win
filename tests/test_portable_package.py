@@ -107,6 +107,39 @@ def test_build_package_stages_and_discovers_verified_runtime(tmp_path: Path) -> 
     assert Path(packaged.environment["VOICEINK_FFMPEG_PATH"]) == output / "tools" / "ffmpeg.exe"
     assert (output / "voiceink-shell.cmd").is_file()
 
+    descriptor_path = output / "voiceink-package.json"
+    descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    descriptor.pop("import_roots")
+    descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+    without_legacy_roots = load_packaged_runtime(
+        root=output,
+        trusted_artifacts={
+            "sidecar": {
+                "version": "0.2.0",
+                "provenance_url": "https://example.invalid/sidecar",
+                "sha256": _sha256(sidecar),
+                "license": "Apache-2.0",
+                "path": "runtime/nemo-speech.exe",
+            },
+            "parakeet": {
+                "version": "model-1",
+                "provenance_url": "https://example.invalid/model",
+                "sha256": _sha256(model),
+                "license": "CC-BY-4.0",
+                "path": "models/parakeet.gguf",
+            },
+            "ffmpeg": {
+                "version": "7.1.1",
+                "provenance_url": "https://example.invalid/ffmpeg",
+                "sha256": _sha256(ffmpeg),
+                "license": "GPL-3.0-or-later",
+                "path": "tools/ffmpeg.exe",
+            },
+        },
+    )
+    assert without_legacy_roots is not None
+    assert without_legacy_roots.environment["VOICEINK_IMPORT_ROOTS"] == ""
+
 
 def test_build_package_rejects_changed_pinned_artifact(tmp_path: Path) -> None:
     ffmpeg = b"ffmpeg"

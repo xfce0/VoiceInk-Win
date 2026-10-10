@@ -266,19 +266,24 @@ def test_application_rolls_back_workers_when_runtime_start_fails() -> None:
 def test_imported_media_configuration_is_disabled_or_rejected_explicitly() -> None:
     ffmpeg = _absolute_test_path("ffmpeg.exe")
     workspace = _absolute_test_path("workspace")
-    imports = _absolute_test_path("imports")
     assert ImportedMediaConfiguration.from_environment({}) is None
     assert (
         ImportedMediaConfiguration.from_environment({"VOICEINK_FFMPEG_PATH": str(ffmpeg)}) is None
     )
 
-    with pytest.raises(ConfigurationError, match="VOICEINK_IMPORT_ROOTS"):
+    assert (
         ImportedMediaConfiguration.from_environment(
             {
                 "VOICEINK_FFMPEG_PATH": str(ffmpeg),
                 "VOICEINK_IMPORT_WORKSPACE_ROOT": str(workspace),
+                "VOICEINK_FFMPEG_VERSION": "ffmpeg-test",
+                "VOICEINK_FFMPEG_PROVENANCE_URL": "https://example.invalid/ffmpeg",
+                "VOICEINK_FFMPEG_SHA256": "1" * 64,
+                "VOICEINK_FFMPEG_LICENSE": "GPL-3.0-or-later",
             }
         )
+        is not None
+    )
 
     with pytest.raises(ConfigurationError, match="metadata path does not match"):
         ImportedMediaConfiguration(
@@ -291,7 +296,6 @@ def test_imported_media_configuration_is_disabled_or_rejected_explicitly() -> No
                 _absolute_test_path("other-ffmpeg.exe"),
             ),
             workspace,
-            (imports,),
         )
 
 
@@ -539,7 +543,6 @@ def test_composition_rollback_closes_imported_service_and_asr(
             tmp_path / "ffmpeg",
         ),
         tmp_path / "work",
-        (tmp_path,),
     )
     with pytest.raises(RuntimeError, match="application construction failed"):
         build_application(
@@ -566,13 +569,10 @@ def test_composition_wires_one_asr_service_into_imported_media(
         "GPL-3.0-or-later",
         ffmpeg,
     )
-    import_root = tmp_path / "inputs"
-    import_root.mkdir()
     configuration = ImportedMediaConfiguration(
         ffmpeg,
         ffmpeg_artifact,
         tmp_path / "work",
-        (import_root,),
     )
     captured: dict[str, object] = {}
 

@@ -125,7 +125,7 @@ def load_packaged_runtime(
         return None
 
     descriptor = _read_descriptor(descriptor_path)
-    expected = {
+    required = {
         "schema",
         "version",
         "executable_artifact_id",
@@ -135,9 +135,9 @@ def load_packaged_runtime(
         "artifacts",
         "ffmpeg",
         "workspace_root",
-        "import_roots",
     }
-    if set(descriptor) != expected:
+    allowed = required | {"import_roots"}
+    if set(descriptor) not in (required, allowed):
         raise _invalid("packaged runtime descriptor schema is malformed")
     if descriptor["schema"] != PACKAGE_SCHEMA or descriptor["version"] != 1:
         raise _invalid("packaged runtime descriptor schema is unsupported")
@@ -199,12 +199,9 @@ def load_packaged_runtime(
         allowed_path=ffmpeg_path,
     )
     workspace = _relative_directory(package_root, descriptor["workspace_root"], "workspace_root")
-    import_roots_value = descriptor["import_roots"]
-    if not isinstance(import_roots_value, list) or not import_roots_value:
-        raise _invalid("packaged runtime import_roots must be a non-empty list")
-    import_roots = tuple(
-        _relative_directory(package_root, value, "import_roots") for value in import_roots_value
-    )
+    import_roots_value = descriptor.get("import_roots", [])
+    if not isinstance(import_roots_value, list):
+        raise _invalid("packaged runtime import_roots must be a list")
 
     artifact_lock = {
         "schema": "voiceink.runtime.artifact-lock.v1",
@@ -229,7 +226,7 @@ def load_packaged_runtime(
         "VOICEINK_FFMPEG_SHA256": ffmpeg_manifest.sha256,
         "VOICEINK_FFMPEG_LICENSE": ffmpeg_manifest.license,
         "VOICEINK_IMPORT_WORKSPACE_ROOT": str(workspace),
-        "VOICEINK_IMPORT_ROOTS": os.pathsep.join(str(path) for path in import_roots),
+        "VOICEINK_IMPORT_ROOTS": "",
     }
     return PackagedRuntime(package_root, manifest, artifact_lock, environment)
 

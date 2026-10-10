@@ -417,7 +417,7 @@ def _run(report_path: Path, report: dict[str, object]) -> int:
         temporary_directory = _NativeSmokeTemporaryDirectory(report)
         with temporary_directory as temporary:
             root = Path(temporary) / "workspace"
-            store = WindowsMediaSnapshotStore(root, import_roots=(fixture.parent,))
+            store = WindowsMediaSnapshotStore(root)
             temporary_directory.store = store
             report["failure_stage"] = "snapshot_security"
             report["snapshot_security"] = _run_snapshot_security_probes(
@@ -722,8 +722,7 @@ def _run_snapshot_security_probes(
 ) -> dict[str, bool]:
     from voiceink_win.infrastructure import WindowsMediaSnapshotStore
 
-    (root / "inputs").mkdir(parents=True, exist_ok=True)
-    store = WindowsMediaSnapshotStore(root / "workspaces", import_roots=(root / "inputs",))
+    store = WindowsMediaSnapshotStore(root / "workspaces")
     try:
         return _run_snapshot_security_probes_with_store(store, root, report)
     finally:
