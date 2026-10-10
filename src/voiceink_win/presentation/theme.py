@@ -246,12 +246,13 @@ QListWidget#historyList {{
     background: transparent;
     border: none;
     outline: none;
-    padding: 2px;
+    padding: 0px;
 }}
 QListWidget#historyList::item {{
     background: transparent;
     border: none;
     padding: 0;
+    margin: 0px;
 }}
 QFrame#historyRow {{
     background: {theme.card};
@@ -362,7 +363,7 @@ QListWidget#dictionaryList {{
     background: transparent;
     border: none;
     outline: none;
-    padding: 2px;
+    padding: 0px;
 }}
 QListWidget#dictionaryList:focus {{
     border: 1px solid {theme.nav_focus_border};
@@ -372,6 +373,7 @@ QListWidget#dictionaryList::item {{
     background: transparent;
     border: none;
     padding: 0px;
+    margin: 0px;
 }}
 QFrame#dictionaryState, QFrame#dictionaryEditor {{
     background: {theme.card};

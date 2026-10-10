@@ -362,6 +362,14 @@ class HistoryPage(QWidget):
             height = row.sizeHint().height()
         item.setSizeHint(QSize(width, height))
         self._list.doItemsLayout()
+        position = row.mapTo(self._list.viewport(), row.rect().topLeft())
+        overflow = position.x() + row.width() - self._list.viewport().width()
+        if overflow > 0:
+            width = max(0, width - overflow)
+            row.resize(width, max(1, row.height()))
+            height = row.heightForWidth(width)
+            item.setSizeHint(QSize(width, height if height > 0 else row.sizeHint().height()))
+            self._list.doItemsLayout()
 
     def _resize_rows(self) -> None:
         for _ in range(3):
