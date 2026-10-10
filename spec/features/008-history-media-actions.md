@@ -36,8 +36,8 @@ audible playback assertions in headless tests.
 5. Missing or invalid artifacts map to unavailable safe reason codes. Platform
    capability failures map to `PLATFORM_UNAVAILABLE`; operation failures map to
    `OPERATION_FAILED` and safe structured logs.
-6. Windows reveal uses the absolute system Explorer executable and passes the
-   `/select,` argument and target path as separate process arguments.
+6. Windows reveal uses the absolute system Explorer executable and passes one
+   `/select,"<absolute-path>"` process argument, preserving spaces and Unicode.
 7. Qt playback owns its player/output lifetime, reports asynchronous errors once,
    ignores stale playback requests, resets the media source before release, and
    releases resources even when cleanup steps fail.
