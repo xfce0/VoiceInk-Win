@@ -103,6 +103,7 @@ class HistoryPage(QWidget):
         self._cursor_stack: list[str | None] = []
         self._generation = 0
         self._operation = 0
+        self._media_operation = 0
         self._disposed = False
         self._build_ui()
         self.refresh()
@@ -202,6 +203,7 @@ class HistoryPage(QWidget):
         if self._disposed:
             return
         self._operation += 1
+        self._media_operation += 1
         if push_cursor:
             self._cursor_stack.append(self._cursor)
         if isinstance(cursor, int):
@@ -437,13 +439,13 @@ class HistoryPage(QWidget):
         if self._media_actions is None:
             return
         self._select_record_if_needed(record.id)
-        operation = self._next_operation()
+        media_operation = self._next_media_operation()
         self._render_media_result(
             record,
             self._media_actions.play(
                 record,
                 on_result=lambda result: self._queue_media_result(
-                    record, result, "audio", operation
+                    record, result, "audio", media_operation
                 ),
             ),
             "audio",
@@ -454,12 +456,12 @@ class HistoryPage(QWidget):
         record: HistoryRecord,
         result: HistoryMediaActionResult,
         action: str,
-        operation: int,
+        media_operation: int,
     ) -> None:
         if self._disposed:
             return
         self._bridge.post(
-            lambda: self._render_media_result_if_current(record, result, action, operation)
+            lambda: self._render_media_result_if_current(record, result, action, media_operation)
         )
 
     def _render_media_result_if_current(
@@ -467,9 +469,9 @@ class HistoryPage(QWidget):
         record: HistoryRecord,
         result: HistoryMediaActionResult,
         action: str,
-        operation: int,
+        media_operation: int,
     ) -> None:
-        if self._disposed or operation != self._operation:
+        if self._disposed or media_operation != self._media_operation:
             return
         self._render_media_result(record, result, action)
 
@@ -477,6 +479,7 @@ class HistoryPage(QWidget):
         if self._media_actions is None:
             return
         self._select_record_if_needed(record.id)
+        self._next_media_operation()
         self._render_media_result(record, self._media_actions.reveal(record), "folder")
 
     def _render_media_result(
@@ -668,11 +671,16 @@ class HistoryPage(QWidget):
     def _select_record_if_needed(self, record_id: str) -> None:
         if self._selected is not None and self._selected.id == record_id:
             return
+        self._media_operation += 1
         self._row_clicked(record_id)
 
     def _next_operation(self) -> int:
         self._operation += 1
         return self._operation
+
+    def _next_media_operation(self) -> int:
+        self._media_operation += 1
+        return self._media_operation
 
     def _previous_page(self) -> None:
         if self._cursor_stack:
@@ -755,6 +763,7 @@ class HistoryPage(QWidget):
         self._disposed = True
         self._generation += 1
         self._operation += 1
+        self._media_operation += 1
         if self._owns_history_deletion and self._history_deletion is not None:
             self._history_deletion.close()
         try:

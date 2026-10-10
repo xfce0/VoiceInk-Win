@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,12 +69,31 @@ class _FakeArtifacts:
         self.path = path
         self.references: list[str] = []
         self.fail = False
+        self.error: Exception | None = None
 
     def reveal_path(self, reference: str) -> Path:
         self.references.append(reference)
+        if self.error is not None:
+            raise self.error
         if self.fail:
             raise FileNotFoundError(reference)
         return self.path
+
+
+class _TestWindowsAdapter:
+    def validate_source(self, _path: Path) -> None:
+        pass
+
+    def cleanup_workspace(self, _path: Path) -> None:
+        pass
+
+    def delete_artifact(self, _root: Path, _relative_path: str) -> None:
+        pass
+
+
+def _artifact_store(path: Path) -> AudioArtifactStore:
+    adapter = _TestWindowsAdapter() if os.name == "nt" else None
+    return AudioArtifactStore(path, windows_adapter=adapter)
 
 
 def _record(artifact: str | None = "history/item.wav") -> HistoryRecord:
@@ -88,7 +108,7 @@ def _record(artifact: str | None = "history/item.wav") -> HistoryRecord:
 
 
 def test_actions_resolve_and_pass_the_same_stored_artifact(tmp_path: Path) -> None:
-    store = AudioArtifactStore(tmp_path / "audio")
+    store = _artifact_store(tmp_path / "audio")
     store.write("history/item.wav", b"wav")
     playback = _FakePlayback()
     reveal = _FakeReveal()
@@ -134,7 +154,7 @@ def test_actions_resolve_and_pass_the_same_stored_artifact(tmp_path: Path) -> No
 def test_invalid_or_missing_artifacts_never_call_platform_ports(
     tmp_path: Path, artifact: str | None, setup
 ) -> None:
-    store = AudioArtifactStore(tmp_path / "audio")
+    store = _artifact_store(tmp_path / "audio")
     setup(store)
     playback = _FakePlayback()
     reveal = _FakeReveal()
@@ -153,7 +173,7 @@ def test_invalid_or_missing_artifacts_never_call_platform_ports(
 
 
 def test_unavailable_platform_is_truthful_and_does_not_invoke_action(tmp_path: Path) -> None:
-    store = AudioArtifactStore(tmp_path / "audio")
+    store = _artifact_store(tmp_path / "audio")
     store.write("history/item.wav", b"wav")
     playback = _FakePlayback(available=False)
     service = HistoryMediaActionService(store, playback, _FakeReveal(available=False))
@@ -171,7 +191,7 @@ def test_adapter_failure_is_safe_and_does_not_log_paths_or_exception_text(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     artifact = tmp_path / "private" / "item.wav"
-    store = AudioArtifactStore(tmp_path / "audio")
+    store = _artifact_store(tmp_path / "audio")
     store.write("history/item.wav", b"wav")
     error = RuntimeError(f"cannot play {artifact}: private transcript")
     service = HistoryMediaActionService(store, _FakePlayback(error=error), _FakeReveal())
@@ -198,7 +218,7 @@ def test_adapter_failure_is_safe_and_does_not_log_paths_or_exception_text(
 def test_capability_failure_is_unavailable_and_structured_for_play(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    store = AudioArtifactStore(tmp_path / "audio")
+    store = _artifact_store(tmp_path / "audio")
     store.write("history/item.wav", b"wav")
     service = HistoryMediaActionService(
         store,
@@ -222,7 +242,7 @@ def test_capability_failure_is_unavailable_and_structured_for_play(
 def test_capability_failure_is_unavailable_and_structured_for_reveal(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    store = AudioArtifactStore(tmp_path / "audio")
+    store = _artifact_store(tmp_path / "audio")
     store.write("history/item.wav", b"wav")
     service = HistoryMediaActionService(
         store,
@@ -272,6 +292,25 @@ def test_reveal_revalidates_after_inspection(tmp_path: Path) -> None:
 
     assert result.code is HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
     assert reveal.paths == []
+
+
+def test_artifact_resolution_failure_is_an_error(tmp_path: Path, caplog) -> None:
+    store = _FakeArtifacts(tmp_path / "history" / "item.wav")
+    store.error = PermissionError("artifact lookup denied")
+    service = HistoryMediaActionService(store, _FakePlayback(), _FakeReveal())
+
+    with caplog.at_level(logging.INFO):
+        availability = service.inspect(_record())
+        result = service.play(_record())
+
+    assert availability.audio.state is HistoryMediaState.ERROR
+    assert availability.audio.code is HistoryMediaCode.OPERATION_FAILED
+    assert result.code is HistoryMediaCode.OPERATION_FAILED
+    assert any(
+        getattr(record, "failure_stage", None) == "resolve"
+        and getattr(record, "exception_type", None) == "PermissionError"
+        for record in caplog.records
+    )
 
 
 def test_windows_reveal_adapter_selects_the_exact_artifact() -> None:
@@ -346,6 +385,7 @@ def test_windows_audio_adapter_uses_the_exact_artifact() -> None:
         player_factory=lambda: player,
         audio_output_factory=lambda: output,
         url_factory=lambda value: value,
+        empty_url_factory=lambda: None,
     )
     artifact = Path(r"C:\Users\Test User\VoiceInk\аудио\history\item.wav")
 
@@ -356,6 +396,7 @@ def test_windows_audio_adapter_uses_the_exact_artifact() -> None:
     assert player.source == str(artifact)
     assert player.play_calls == 1
     adapter.close()
+    assert player.source is None
 
 
 def test_windows_audio_adapter_reports_asynchronous_error() -> None:
