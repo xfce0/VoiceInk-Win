@@ -99,22 +99,43 @@ def test_unavailable_persistence_uses_neutral_page_states(application: QApplicat
 
         assert not settings._availability.isHidden()
         assert settings._availability.text() == "Local storage is unavailable."
-        assert settings._model_value.text() == "Unavailable in this build."
-        assert settings._audio_value.text() == "Unavailable in this build."
+        assert settings._model_value.text() == "Not available."
+        assert settings._audio_value.text() == "Not available."
         assert settings._error.text() == ""
+        assert not settings._language_combo.isEnabled()
+        assert not settings._theme_combo.isEnabled()
 
         assert not history._availability.isHidden()
         assert history._availability.text() == "Local storage is unavailable."
         assert history._error.text() == ""
 
-        assert not dictionary._availability.isHidden()
-        assert dictionary._availability.text() == "Local storage is unavailable."
-        assert dictionary._error.text() == ""
+        assert not dictionary._state_panel.isHidden()
+        assert dictionary._state_title.text() == "Could not complete the operation."
+        assert dictionary._state_detail.text() == "Local storage is unavailable."
+        assert dictionary._error.text() == "Local storage is unavailable."
         assert settings._error.objectName() == "inlineError"
         assert history._error.objectName() == "inlineError"
-        assert dictionary._error.objectName() == "inlineError"
+        assert dictionary._error.objectName() == "pageError"
     finally:
         window.close()
+
+
+def test_settings_capability_placeholder_stays_inline_when_storage_is_available(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    window = _window(application, service)
+    try:
+        window._select_page("Settings")
+        page = window._settings_page
+        _wait(application, lambda: not page._loading)
+        assert page._availability.isHidden()
+        assert page._model_value.text() == "Not available."
+        assert page._audio_value.text() == "Not available."
+        assert page._language_combo.isEnabled()
+    finally:
+        window.close()
+        store.close().result(timeout=2)
 
 
 def test_settings_roundtrip_reloads_language_mode_and_hotkeys(
@@ -277,7 +298,7 @@ def test_dictionary_crud_is_async_and_validates_phrase(
         assert page._state_title.text() == "No replacement rules yet."
         page._save.click()
         assert page._error.text() == "Enter a phrase."
-        assert page._error.objectName() == "inlineError"
+        assert page._error.objectName() == "pageError"
         page._phrase.setText("Voice Ink")
         page._replacement.setText("VoiceInk")
         page._save.click()

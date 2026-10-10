@@ -45,7 +45,10 @@ def test_english_is_the_default_locale_and_preserves_shipped_labels(
         assert config.locale is Locale.ENGLISH
         assert window._nav_buttons["Dashboard"].text() == "Dashboard"
         assert window._nav_buttons["Transcribe"].text() == "Transcribe"
-        assert window._state_pill.text() == "Recording unavailable"
+        assert window._state_pill.text() == "Recording not available"
+        assert window._hero_headline.text() == "Microphone recording is not available."
+        assert window._insights_button.text() == "Insights unavailable"
+        assert window._settings_page._model_value.text() == "Not available."
         assert window._transcribe_page._choose_button.text() == "Choose Files"
     finally:
         window.close()
@@ -61,8 +64,21 @@ def test_russian_locale_translates_shell_and_transcribe_page(
         assert window._nav_buttons["Dashboard"].text() == "Панель"
         assert window._nav_buttons["Transcribe"].text() == "Транскрибация"
         assert window._state_pill.text() == "Запись недоступна"
+        assert window._page_subtext.text() == "Запись с микрофона сейчас недоступна."
+        assert window._hero_headline.text() == "Запись с микрофона недоступна."
+        assert window._hero_detail.text() == (
+            "Захват с микрофона недоступен, поэтому новые расшифровки с микрофона создать нельзя."
+        )
+        assert window._transcript_metadata.text() == "Запись с микрофона недоступна"
+        assert window._transcript_text.text() == "Расшифровки с микрофона недоступны."
+        assert window._insights_button.text() == "Аналитика недоступна"
+        assert window._settings_page._model_value.text() == "Недоступно."
         assert window._transcribe_page._choose_button.text() == "Выбрать файлы"
         assert window._recorder._record_button.text() == "Недоступно"
+        assert (
+            window._recorder._record_button.accessibleDescription()
+            == "Запись с микрофона недоступна."
+        )
     finally:
         window.close()
 
@@ -96,7 +112,7 @@ def test_russian_locale_translates_neutral_availability_states(
     window = MainWindow(ShellController.unavailable(), locale_config=LocaleConfig(Locale.RUSSIAN))
     try:
         assert window._settings_page._availability.text() == "Локальное хранилище недоступно."
-        assert window._settings_page._model_value.text() == "Недоступно в этой сборке."
+        assert window._settings_page._model_value.text() == "Недоступно."
         assert window._history_page._availability.text() == "Локальное хранилище недоступно."
         assert window._dictionary_page._state_detail.text() == "Локальное хранилище недоступно."
         assert translate(TranslationKey.SETTINGS_SAVE_ERROR, Locale.RUSSIAN) == (
@@ -144,12 +160,14 @@ def test_runtime_locale_change_updates_widgets_on_the_qt_event_loop(
         assert window._nav_buttons["Dashboard"].text() == "Панель"
         assert window._transcribe_page._add_button.text() == "Добавить файлы"
         assert window._recorder._status.text() == "Готово"
+        assert window._insights_button.text() == "Аналитика недоступна"
 
         assert config.set_locale("unsupported")
         application.processEvents()
         assert config.locale is Locale.ENGLISH
         assert window._nav_buttons["Dashboard"].text() == "Dashboard"
         assert window._transcribe_page._add_button.text() == "Add Files"
+        assert window._insights_button.text() == "Insights unavailable"
     finally:
         window.close()
 

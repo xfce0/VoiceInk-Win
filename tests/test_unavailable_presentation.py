@@ -36,32 +36,38 @@ def application() -> QApplication:
 def test_unavailable_presentation_uses_exact_copy_and_no_active_timers(
     application: QApplication,
 ) -> None:
-    del application
     from voiceink_win.application import ShellController
 
     window = MainWindow(ShellController.unavailable())
+    window.show()
+    application.processEvents()
     recorder = window._recorder
 
-    assert window._state_pill.text() == "Recording unavailable"
-    assert window._page_subtext.text() == (
-        "Recording cannot start because microphone capture and ASR are not included."
+    assert window._state_pill.text() == "Recording not available"
+    assert window._page_subtext.text() == ("Microphone recording is not available right now.")
+    assert window._hero_headline.text() == "Microphone recording is not available."
+    assert window._hero_detail.text() == (
+        "Microphone capture is not available, so new microphone transcripts cannot be created."
     )
-    assert window._hero_headline.text() == "Recording is unavailable in this build."
-    assert window._hero_detail.text() == "Microphone capture and ASR are not included."
-    assert window._transcript_metadata.text() == "Capability unavailable"
-    assert window._transcript_text.text() == (
-        "Transcripts are unavailable because recording and ASR are not included."
-    )
-    assert recorder._status.text() == "Unavailable"
-    assert recorder._record_button.text() == "Unavailable"
+    assert window._transcript_metadata.text() == "Microphone recording unavailable"
+    assert window._transcript_text.text() == "Microphone transcripts are not available."
+    assert recorder._status.text() == "Not available"
+    assert recorder._record_button.text() == "Not available"
     assert not recorder._record_button.isEnabled()
     assert recorder._record_button.accessibleName() == "Recording unavailable"
-    assert "Microphone capture is not connected" in recorder._record_button.accessibleDescription()
+    assert (
+        recorder._record_button.accessibleDescription() == "Microphone recording is not available."
+    )
     assert recorder._waveform._timer is None
     assert not recorder._waveform._active
     assert recorder._timer is None
-    assert not window._open_recorder_button.isEnabled()
-    assert window._open_recorder_button.text() == "Recorder unavailable"
+    assert window._open_recorder_button.isEnabled()
+    assert window._open_recorder_button.text() == "Open recorder"
+    assert window._insights_button.text() == "Insights unavailable"
+    assert not window._insights_button.isEnabled()
+    window._open_recorder_button.click()
+    application.processEvents()
+    assert recorder.isVisible()
 
     rendered_text = " ".join(
         widget.text()

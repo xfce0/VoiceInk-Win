@@ -69,7 +69,7 @@ def test_audio_page_loads_preferences_and_keeps_native_controls_unavailable(
         window._select_page("Audio")
         page = window._audio_page
         _wait(application, lambda: not page._loading)
-        assert window._pages.currentIndex() == 5
+        assert window._pages.currentIndex() == 6
         assert page._input_route_combo.currentData() == "selected_device"
         assert page._mute_while_recording.isChecked()
         assert page._pause_media_while_recording.isChecked()
