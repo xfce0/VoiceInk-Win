@@ -93,6 +93,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     global_shortcut = GlobalToggleShortcutService(
         composition.controller, create_global_shortcut_port()
     )
+    application.aboutToQuit.connect(composition.close)
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
