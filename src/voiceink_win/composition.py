@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, Lock
 
-from voiceink_win.application import AsrApplicationService, ImportedMediaTranscriptionService
+from voiceink_win.application import (
+    AsrApplicationService,
+    ImportedMediaTranscriptionService,
+    MicrophoneRecordingService,
+)
 from voiceink_win.domain import (
     AsrCapabilities,
     AsrRequest,
@@ -33,6 +37,7 @@ from voiceink_win.infrastructure import (
     SubprocessSupervisor,
     UrllibLoopbackTransport,
     VerifiedFfmpegArtifact,
+    WindowsAudioInputAdapter,
     create_media_snapshot_store,
     load_packaged_runtime,
     load_runtime_configuration,
@@ -163,12 +168,14 @@ class BackendApplication:
     _runtime: NeMoSidecarRuntime
     _proxy: LoopbackProxy
     _imported_media: ImportedMediaTranscriptionService | None = None
+    _microphone: MicrophoneRecordingService | None = None
     _lifecycle_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _started: bool = False
     _closed: bool = False
     _closing: bool = False
     _failed: bool = False
     _imported_media_closed: bool = False
+    _microphone_closed: bool = False
     _asr_closed: bool = False
     _proxy_closed: bool = False
     _close_done: Event = field(default_factory=Event, init=False, repr=False)
@@ -222,6 +229,11 @@ class BackendApplication:
     def capabilities(self) -> AsrCapabilities:
         return self._asr.capabilities()
 
+    @property
+    def microphone(self) -> MicrophoneRecordingService | None:
+        """Expose the explicit microphone port without adding a UI path."""
+        return self._microphone
+
     def transcribe(self, request: AsrRequest) -> TranscriptResult:
         return self._asr.transcribe(request)
 
@@ -256,6 +268,13 @@ class BackendApplication:
 
     def _close_owned_application_services(self) -> list[BaseException]:
         errors: list[BaseException] = []
+        if self._microphone is not None and not self._microphone_closed:
+            try:
+                self._microphone.close()
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self._microphone_closed = True
         if self._imported_media is not None and not self._imported_media_closed:
             try:
                 self._imported_media.close(close_asr=False)
@@ -352,6 +371,7 @@ def build_application_from_configuration(
     proxy = LoopbackProxy(sidecar_endpoint, listen_endpoint=endpoint)
     asr: AsrApplicationService | None = None
     imported_service: ImportedMediaTranscriptionService | None = None
+    microphone: MicrophoneRecordingService | None = None
     try:
         endpoint = proxy.endpoint
         executable_manifest = _artifact_manifest(configuration, "executable")
@@ -382,18 +402,24 @@ def build_application_from_configuration(
             supervisor,
         )
         asr = AsrApplicationService(runtime)
+        microphone = MicrophoneRecordingService(WindowsAudioInputAdapter(), asr)
         if imported_media is not None:
             imported_service = (
                 _build_imported_media_service(imported_media, asr)
                 if history_port is None
                 else _build_imported_media_service(imported_media, asr, history_port)
             )
-        return BackendApplication(asr, runtime, proxy, imported_service)
+        return BackendApplication(asr, runtime, proxy, imported_service, microphone)
     except BaseException as error:
         cleanup_errors: list[BaseException] = []
         if imported_service is not None:
             try:
                 imported_service.close(close_asr=False)
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if microphone is not None:
+            try:
+                microphone.close()
             except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
         if asr is not None:
