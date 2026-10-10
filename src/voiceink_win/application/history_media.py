@@ -87,8 +87,8 @@ class HistoryMediaActionService:
             capability = HistoryMediaCapability(HistoryMediaState.UNAVAILABLE, missing)
             return HistoryMediaAvailability(capability, capability)
         return HistoryMediaAvailability(
-            audio=self._capability(self._audio, artifact),
-            reveal=self._capability(self._reveal, artifact),
+            audio=self._capability(record, self._audio, artifact, "audio"),
+            reveal=self._capability(record, self._reveal, artifact, "reveal"),
         )
 
     def play(self, record: HistoryRecord) -> HistoryMediaActionResult:
@@ -128,16 +128,25 @@ class HistoryMediaActionService:
     def _resolve(self, record: HistoryRecord) -> tuple[Path | None, HistoryMediaCode | None]:
         reference = record.audio_artifact_path
         if not isinstance(reference, str) or not reference.strip():
+            self._log(record, "resolve", HistoryMediaCode.NO_ARTIFACT, logging.INFO)
             return None, HistoryMediaCode.NO_ARTIFACT
         try:
             return self._artifacts.reveal_path(reference), None
         except Exception:
+            self._log(
+                record,
+                "resolve",
+                HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID,
+                logging.INFO,
+            )
             return None, HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
 
     def _capability(
         self,
+        record: HistoryRecord,
         port: HistoryAudioPlaybackPort | HistoryArtifactRevealPort | None,
         artifact: Path | None,
+        action: str,
     ) -> HistoryMediaCapability:
         if port is None or artifact is None:
             return HistoryMediaCapability(
@@ -146,6 +155,7 @@ class HistoryMediaActionService:
         try:
             available = port.is_available()
         except Exception:
+            self._log(record, action, HistoryMediaCode.OPERATION_FAILED, logging.WARNING)
             return HistoryMediaCapability(
                 HistoryMediaState.ERROR, HistoryMediaCode.OPERATION_FAILED
             )
@@ -160,19 +170,21 @@ class HistoryMediaActionService:
     def _unavailable(
         self, record: HistoryRecord, action: str, code: HistoryMediaCode
     ) -> HistoryMediaActionResult:
-        logger.info(
-            "history media action unavailable",
-            extra={"history_id": record.id, "action": action, "reason_code": code.value},
-        )
+        self._log(record, action, code, logging.INFO)
         return HistoryMediaActionResult(code)
 
     def _failed(self, record: HistoryRecord, action: str) -> HistoryMediaActionResult:
         code = HistoryMediaCode.OPERATION_FAILED
-        logger.warning(
-            "history media action failed",
+        self._log(record, action, code, logging.WARNING)
+        return HistoryMediaActionResult(code)
+
+    @staticmethod
+    def _log(record: HistoryRecord, action: str, code: HistoryMediaCode, level: int) -> None:
+        logger.log(
+            level,
+            "history media outcome",
             extra={"history_id": record.id, "action": action, "reason_code": code.value},
         )
-        return HistoryMediaActionResult(code)
 
 
 __all__ = [
