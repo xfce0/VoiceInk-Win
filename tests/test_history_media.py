@@ -192,16 +192,34 @@ def test_action_revalidates_after_inspection(tmp_path: Path) -> None:
     assert store.references == [record.audio_artifact_path, record.audio_artifact_path]
 
 
+def test_reveal_revalidates_after_inspection(tmp_path: Path) -> None:
+    store = _FakeArtifacts(tmp_path / "history" / "item.wav")
+    reveal = _FakeReveal()
+    service = HistoryMediaActionService(store, _FakePlayback(), reveal)
+    record = _record()
+
+    assert service.inspect(record).reveal.available
+    store.fail = True
+
+    result = service.reveal(record)
+
+    assert result.code is HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
+    assert reveal.paths == []
+
+
 def test_windows_reveal_adapter_selects_the_exact_artifact() -> None:
     commands: list[list[str]] = []
     adapter = WindowsHistoryArtifactRevealAdapter(platform_name="nt", launcher=commands.append)
-    artifact = Path(r"C:\Users\test\VoiceInk\audio\history\item.wav")
+    artifact = Path(r"C:\Users\Test User\VoiceInk\аудио\history\item.wav")
 
     assert adapter.is_available()
     adapter.reveal(artifact)
 
     assert commands == [
-        ["explorer.exe", r'/select,"C:\Users\test\VoiceInk\audio\history\item.wav"']
+        [
+            "explorer.exe",
+            r'/select,"C:\Users\Test User\VoiceInk\аудио\history\item.wav"',
+        ]
     ]
 
 
@@ -232,7 +250,7 @@ def test_windows_audio_adapter_uses_the_exact_artifact() -> None:
         audio_output_factory=lambda: output,
         url_factory=lambda value: value,
     )
-    artifact = Path(r"C:\Users\test\VoiceInk\audio\history\item.wav")
+    artifact = Path(r"C:\Users\Test User\VoiceInk\аудио\history\item.wav")
 
     assert adapter.is_available()
     adapter.play(artifact)
