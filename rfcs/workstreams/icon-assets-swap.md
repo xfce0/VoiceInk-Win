@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed. This RFC records the correction only; implementation is intentionally
-deferred.
+Implemented. The existing SVG and PNG assets now serve their corrected product
+roles without changing their bytes.
 
 ## Summary
 
@@ -19,19 +19,18 @@ new brand asset:
 The filenames should follow the corrected roles after implementation. The
 existing SVG and PNG bytes remain unchanged.
 
-## Evidence and Current Pipeline
+## Evidence and Previous Pipeline
 
-The current presentation registry sets `SidebarItem("Transcribe", ...,
-"voiceink-transcribe.png")`. `qt_icons._render_asset()` resolves that file
-through `branding_asset_paths()` and rasterizes it for all sidebar states and
-device-pixel-ratio scales.
+Before this correction, the presentation registry set
+`SidebarItem("Transcribe", ..., "voiceink-transcribe.png")`.
+`qt_icons._render_asset()` resolved that file through `branding_asset_paths()`
+and rasterized it for all sidebar states and device-pixel-ratio scales.
 
-The current application path is separate: `application_icon()` resolves
-`voiceink-shell.ico`, then `voiceink-shell.svg`; `app.py` installs that icon on
-`QApplication` and copies it to `MainWindow`. The Windows frontend builder
-passes the generated `voiceink-shell.ico` to PyInstaller's `--icon` option and
-bundles the ICO, SVG, and PNG as runtime data in both the GUI and smoke
-executables.
+Before this correction, `application_icon()` resolved `voiceink-shell.ico`,
+then `voiceink-shell.svg`; `app.py` installed that icon on `QApplication` and
+copied it to `MainWindow`. The Windows frontend builder passed the generated
+`voiceink-shell.ico` to PyInstaller's `--icon` option and bundled the ICO, SVG,
+and PNG as runtime data in both the GUI and smoke executables.
 
 ## Exact Source/Target Mapping
 
