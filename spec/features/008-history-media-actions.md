@@ -40,7 +40,8 @@ audible playback assertions in headless tests.
    `/select,"<absolute-path>"` process argument, preserving spaces and Unicode.
 7. Qt playback owns its player/output lifetime, reports asynchronous errors once,
    ignores stale playback requests, resets the media source before release, and
-   releases resources even when cleanup steps fail.
+   releases resources even when cleanup steps fail. Composition teardown runs
+   before the Qt event loop shuts down so deferred QObject deletion is delivered.
 8. History media callbacks are queued onto the Qt thread and invalidated by
    record changes, refreshes, newer media commands, and page disposal.
 9. Tests inject artifact and platform ports. They do not depend on Explorer,
