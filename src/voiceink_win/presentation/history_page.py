@@ -185,6 +185,9 @@ class HistoryPage(QWidget):
 
     def refresh(self) -> None:
         self._cursor_stack.clear()
+        self._cursor = None
+        self._offset = 0
+        self._next_cursor = None
         self._load(None)
 
     def _load(self, cursor: str | int | None, *, push_cursor: bool = False) -> None:
@@ -319,6 +322,9 @@ class HistoryPage(QWidget):
 
     def _search_submitted(self) -> None:
         self._cursor_stack.clear()
+        self._cursor = None
+        self._offset = 0
+        self._next_cursor = None
         self._load(None)
 
     def _export_selected(self, format_name: str) -> None:

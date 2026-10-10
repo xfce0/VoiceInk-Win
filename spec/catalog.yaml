@@ -72,6 +72,9 @@ documents:
     kind: rfc
     status: proposed
     implementation_allowed: false
+  - path: rfcs/workstreams/history-newest-first.md
+    kind: rfc
+    status: implemented
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed

@@ -172,6 +172,30 @@ def test_history_pagination_is_newest_first_and_delete_is_atomic(
     ]
 
 
+def test_history_search_cursor_keeps_equal_timestamp_tie_breaker(
+    store: SQLitePersistence,
+) -> None:
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    records = (
+        _record("old", created_at - timedelta(seconds=1), "older"),
+        _record("equal-a", created_at, "needle equal a"),
+        _record("equal-b", created_at, "needle equal b"),
+        _record("middle", created_at + timedelta(seconds=1), "needle middle"),
+        _record("newest", created_at + timedelta(seconds=2), "needle newest"),
+    )
+    for record in records:
+        store.upsert_history(record).result(timeout=2)
+
+    first_page = store.list_history(search="needle", limit=2).result(timeout=2)
+    second_page = store.list_history(
+        search="needle", cursor=first_page.next_cursor, limit=2
+    ).result(timeout=2)
+
+    assert [record.id for record in first_page.records] == ["newest", "middle"]
+    assert [record.id for record in second_page.records] == ["equal-b", "equal-a"]
+    assert second_page.has_more is False
+
+
 def test_concurrent_background_submissions_are_serialized(store: SQLitePersistence) -> None:
     records = [
         _record(f"record-{index}", datetime(2026, 1, 1, tzinfo=UTC), str(index))

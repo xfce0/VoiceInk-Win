@@ -155,8 +155,8 @@ class SQLitePersistence(PersistencePort):
             clauses.append("deletion_state = 'active'")
             if cursor is not None:
                 created_at, record_id = _decode_cursor(cursor)
-                clauses.append("(created_at < ? OR (created_at = ? AND id < ?))")
-                parameters.extend((created_at, created_at, record_id))
+                clauses.append("(created_at, id) < (?, ?)")
+                parameters.extend((created_at, record_id))
             if search and search.strip():
                 pattern = _like_pattern(search.strip())
                 clauses.append(
