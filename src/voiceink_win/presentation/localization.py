@@ -585,7 +585,7 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.HISTORY_FOLDER: _entry("Folder", "Папка"),
     TranslationKey.HISTORY_FOLDER_UNAVAILABLE: _entry("Folder unavailable", "Папка недоступна"),
-    TranslationKey.HISTORY_FOLDER_OPENED: _entry("Opened folder", "Папка открыта"),
+    TranslationKey.HISTORY_FOLDER_OPENED: _entry("Opened in file viewer", "Открыто в проводнике"),
     TranslationKey.HISTORY_FOLDER_ERROR: _entry(
         "Could not open the folder.", "Не удалось открыть папку."
     ),

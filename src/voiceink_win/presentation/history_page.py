@@ -6,7 +6,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from typing import Protocol
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
@@ -25,7 +24,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from voiceink_win.application import PersistenceService
+from voiceink_win.application import (
+    HistoryMediaActionResult,
+    HistoryMediaActionService,
+    HistoryMediaCode,
+    PersistenceService,
+)
 from voiceink_win.application.persistence import HistoryDeletionService
 from voiceink_win.application.transcribe_output import (
     LocalTextFilePort,
@@ -48,18 +52,6 @@ from .history_row import HistoryRow
 from .localization import LocaleConfig, TranslationKey, translate
 
 
-class HistoryAudioPort(Protocol):
-    """Play a validated opaque audio-artifact reference."""
-
-    def play(self, artifact_reference: str) -> None: ...
-
-
-class HistoryFolderPort(Protocol):
-    """Reveal a validated opaque source-folder reference."""
-
-    def reveal(self, folder_reference: str) -> None: ...
-
-
 class HistoryPage(QWidget):
     """Load, inspect, and act on records without waiting on the Qt thread."""
 
@@ -69,19 +61,14 @@ class HistoryPage(QWidget):
         parent: QWidget | None = None,
         locale_config: LocaleConfig | None = None,
         artifact_cleanup: Callable[[str], None] | None = None,
-        artifact_reveal: Callable[[str], Path] | None = None,
-        artifact_folder: Path | None = None,
         history_deletion: HistoryDeletionService | None = None,
         text_files: TextFilePort | None = None,
-        audio_port: HistoryAudioPort | None = None,
-        folder_port: HistoryFolderPort | None = None,
+        media_actions: HistoryMediaActionService | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("historyPage")
         self._persistence = persistence
         self._artifact_cleanup = artifact_cleanup
-        self._artifact_reveal = artifact_reveal
-        self._artifact_folder = artifact_folder
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None
@@ -93,8 +80,7 @@ class HistoryPage(QWidget):
         if self._owns_history_deletion:
             self._history_deletion.start()
         self._text_files = text_files or LocalTextFilePort()
-        self._audio_port = audio_port
-        self._folder_port = folder_port
+        self._media_actions = media_actions
         self._export_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="history-export"
         )
@@ -313,12 +299,13 @@ class HistoryPage(QWidget):
         self._error.clear()
 
     def _build_row(self, record: HistoryRecord) -> HistoryRow:
+        availability = self._media_actions.inspect(record) if self._media_actions else None
         row = HistoryRow(
             record,
             self._record_metadata(record),
             self._locale_config,
-            audio_available=bool(record.audio_artifact_path and self._audio_port),
-            folder_available=bool(self._folder_reference(record) and self._folder_port),
+            audio_available=availability.audio.available if availability else False,
+            folder_available=availability.reveal.available if availability else False,
             parent=self._list,
         )
         row.copy_button.clicked.connect(lambda: self._copy_record(record))
@@ -440,29 +427,54 @@ class HistoryPage(QWidget):
         )
 
     def _play_audio(self, record: HistoryRecord) -> None:
-        if self._audio_port is None or not record.audio_artifact_path:
+        if self._media_actions is None:
             return
         self._select_record_if_needed(record.id)
-        try:
-            self._audio_port.play(record.audio_artifact_path)
-        except BaseException:
-            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.HISTORY_AUDIO_ERROR))
-        else:
-            self._status.setText(self._t(TranslationKey.HISTORY_AUDIO_STARTED))
+        self._render_media_result(record, self._media_actions.play(record), "audio")
 
     def _reveal_folder(self, record: HistoryRecord) -> None:
-        reference = self._folder_reference(record)
-        if self._folder_port is None or reference is None:
+        if self._media_actions is None:
             return
         self._select_record_if_needed(record.id)
-        try:
-            self._folder_port.reveal(reference)
-        except BaseException:
-            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.HISTORY_FOLDER_ERROR))
-        else:
-            self._status.setText(self._t(TranslationKey.HISTORY_FOLDER_OPENED))
+        self._render_media_result(record, self._media_actions.reveal(record), "folder")
+
+    def _render_media_result(
+        self, record: HistoryRecord, result: HistoryMediaActionResult, action: str
+    ) -> None:
+        row = self._rows.get(record.id)
+        if result.code is HistoryMediaCode.STARTED:
+            self._status.setText(
+                self._t(
+                    TranslationKey.HISTORY_AUDIO_STARTED
+                    if action == "audio"
+                    else TranslationKey.HISTORY_FOLDER_OPENED
+                )
+            )
+            self._error.clear()
+            return
+        if result.code is not HistoryMediaCode.OPERATION_FAILED:
+            self._status.setText(
+                self._t(
+                    TranslationKey.HISTORY_AUDIO_UNAVAILABLE
+                    if action == "audio"
+                    else TranslationKey.HISTORY_FOLDER_UNAVAILABLE
+                )
+            )
+            self._error.clear()
+            if row is not None:
+                row.set_media_available(
+                    audio=False if action == "audio" else None,
+                    folder=False if action == "folder" else None,
+                )
+            return
+        self._status.setText(self._t(TranslationKey.COMMON_ERROR))
+        self._error.setText(
+            self._t(
+                TranslationKey.HISTORY_AUDIO_ERROR
+                if action == "audio"
+                else TranslationKey.HISTORY_FOLDER_ERROR
+            )
+        )
 
     def _search_submitted(self) -> None:
         self._cursor_stack.clear()
@@ -655,11 +667,6 @@ class HistoryPage(QWidget):
                 TranscriptionSource.PASTE.value: TranslationKey.HISTORY_SOURCE_PASTE,
             }.get(source, TranslationKey.HISTORY_SOURCE_OTHER)
         )
-
-    @staticmethod
-    def _folder_reference(record: HistoryRecord) -> str | None:
-        value = record.source_metadata.get("folder_reference")
-        return value.strip() if isinstance(value, str) and value.strip() else None
 
     def apply_locale(self, _locale: str | None = None) -> None:
         del _locale

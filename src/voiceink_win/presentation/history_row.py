@@ -176,6 +176,13 @@ class HistoryRow(QFrame):
     def set_metadata(self, metadata: str) -> None:
         self._metadata.setText(metadata)
 
+    def set_media_available(self, *, audio: bool | None = None, folder: bool | None = None) -> None:
+        if audio is not None:
+            self._audio_available = audio
+        if folder is not None:
+            self._folder_available = folder
+        self.apply_locale()
+
     def apply_locale(self, _locale: str | None = None) -> None:
         del _locale
         locale = self._locale_config.locale
