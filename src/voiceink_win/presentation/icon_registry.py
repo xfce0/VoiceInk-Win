@@ -12,6 +12,7 @@ class SidebarItem:
     tile_color: str
     icon_foreground: str
     enabled: bool
+    asset_filename: str | None = None
 
 
 LUCIDE_PATHS = {
@@ -55,7 +56,14 @@ LUCIDE_PATHS = {
 SIDEBAR_ITEMS = (
     SidebarItem("Dashboard", "dashboard", "#e8892e", "#24170f", True),
     SidebarItem("Modes", "modes", "#6256c9", "#ffffff", True),
-    SidebarItem("Transcribe", "transcribe", "#db594b", "#ffffff", True),
+    SidebarItem(
+        "Transcribe",
+        "transcribe",
+        "#db594b",
+        "#ffffff",
+        True,
+        "voiceink-transcribe.png",
+    ),
     SidebarItem("History", "history", "#df4f82", "#2a101d", True),
     SidebarItem("Dictionary", "dictionary", "#3478d4", "#ffffff", True),
     SidebarItem("AI Models", "models", "#986d4b", "#24150d", True),

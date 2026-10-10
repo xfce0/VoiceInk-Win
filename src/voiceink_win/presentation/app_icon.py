@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtGui import QIcon
 
 ICON_FILENAMES = ("voiceink-shell.ico", "voiceink-shell.svg")
+TRANSCRIPTION_ICON_FILENAME = "voiceink-transcribe.png"
 
 
 def application_icon_paths(
@@ -18,6 +19,37 @@ def application_icon_paths(
     source_file: Path | None = None,
 ) -> tuple[Path, ...]:
     """Return bundled, executable-adjacent, and source-checkout icon candidates."""
+    return branding_asset_paths(
+        ICON_FILENAMES,
+        frozen_root=frozen_root,
+        executable=executable,
+        source_file=source_file,
+    )
+
+
+def transcription_icon_paths(
+    *,
+    frozen_root: Path | None = None,
+    executable: Path | None = None,
+    source_file: Path | None = None,
+) -> tuple[Path, ...]:
+    """Return runtime candidates for the branded Transcribe navigation asset."""
+    return branding_asset_paths(
+        (TRANSCRIPTION_ICON_FILENAME,),
+        frozen_root=frozen_root,
+        executable=executable,
+        source_file=source_file,
+    )
+
+
+def branding_asset_paths(
+    filenames: Iterable[str],
+    *,
+    frozen_root: Path | None = None,
+    executable: Path | None = None,
+    source_file: Path | None = None,
+) -> tuple[Path, ...]:
+    """Return bundled, executable-adjacent, and source-checkout asset candidates."""
     if frozen_root is None:
         frozen_value = getattr(sys, "_MEIPASS", None)
         frozen_root = Path(frozen_value) if isinstance(frozen_value, str) else None
@@ -34,7 +66,7 @@ def application_icon_paths(
     candidates: list[Path] = []
     seen: set[Path] = set()
     for root in roots:
-        for filename in ICON_FILENAMES:
+        for filename in filenames:
             candidate = root / filename
             if candidate not in seen:
                 candidates.append(candidate)

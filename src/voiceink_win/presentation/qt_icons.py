@@ -1,4 +1,4 @@
-"""Qt rendering for the repository-owned sidebar SVG icons."""
+"""Qt rendering for repository-owned sidebar vector and branding icons."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
+from .app_icon import branding_asset_paths
 from .icon_registry import LUCIDE_PATHS, SidebarItem
 
 ICON_SCALE_FACTORS = (1, 1.25, 1.5, 2, 2.5, 3)
@@ -49,6 +50,9 @@ def sidebar_svg(item: SidebarItem, size: int = 28, *, disabled: bool = False) ->
 
 def _render(item: SidebarItem, size: int, scale: float, *, disabled: bool = False) -> QPixmap:
     """Rasterize repository-owned SVG paths at a logical size and explicit DPR."""
+    if item.asset_filename is not None:
+        return _render_asset(item, size, scale, disabled=disabled)
+
     physical_size = round(size * scale)
     svg = sidebar_svg(item, size, disabled=disabled)
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
@@ -58,6 +62,41 @@ def _render(item: SidebarItem, size: int, scale: float, *, disabled: bool = Fals
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     renderer.render(painter)
+    painter.end()
+    pixmap.setDevicePixelRatio(scale)
+    return pixmap
+
+
+def _render_asset(item: SidebarItem, size: int, scale: float, *, disabled: bool) -> QPixmap:
+    """Rasterize a repository-owned branding asset at a logical size and DPR."""
+    asset_filename = item.asset_filename
+    if asset_filename is None:
+        raise ValueError(f"Missing sidebar asset name for {item.icon_name}")
+    physical_size = round(size * scale)
+    source = next(
+        (path for path in branding_asset_paths((asset_filename,)) if path.is_file()),
+        None,
+    )
+    if source is None:
+        raise ValueError(f"Missing sidebar asset for {item.icon_name}: {asset_filename}")
+
+    source_pixmap = QPixmap(str(source))
+    if source_pixmap.isNull():
+        raise ValueError(f"Invalid sidebar asset for {item.icon_name}: {source}")
+    pixmap = QPixmap(QSize(physical_size, physical_size))
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.drawPixmap(
+        pixmap.rect(),
+        source_pixmap.scaled(
+            pixmap.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        ),
+    )
+    if disabled:
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(_muted_color(item.icon_foreground)))
     painter.end()
     pixmap.setDevicePixelRatio(scale)
     return pixmap

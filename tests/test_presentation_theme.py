@@ -22,6 +22,18 @@ def test_theme_selection_returns_complete_light_and_dark_palettes() -> None:
     assert DARK_THEME.accent == "#d86820"
 
 
+def test_typography_tokens_raise_shared_weights_without_changing_sizes() -> None:
+    typography = DASHBOARD_GOOD_MORNING_TYPOGRAPHY
+
+    assert typography.body_size == 13
+    assert typography.sidebar_size == 13
+    assert typography.body_weight > 500
+    assert typography.sidebar_weight > 600
+    assert typography.control_weight > 600
+    assert typography.strong_weight > typography.control_weight
+    assert typography.display_weight > typography.strong_weight
+
+
 def test_stylesheet_contains_dark_surface_tokens_for_every_dashboard_layer() -> None:
     stylesheet = stylesheet_for(DARK_THEME)
 
@@ -52,6 +64,18 @@ def test_stylesheet_distinguishes_neutral_unavailability_from_inline_errors() ->
     assert "QLabel#inlineError" in stylesheet
     inline_error = stylesheet.split("QLabel#inlineError", 1)[1].split("}", 1)[0]
     assert "background:" not in inline_error
+
+
+def test_light_theme_uses_light_recorder_surfaces() -> None:
+    stylesheet = stylesheet_for(LIGHT_THEME)
+
+    assert LIGHT_THEME.recorder != DARK_THEME.recorder
+    assert LIGHT_THEME.recorder_control != DARK_THEME.recorder_control
+    assert f"background: {LIGHT_THEME.recorder};" in stylesheet
+    assert f"background: {LIGHT_THEME.recorder_control};" in stylesheet
+    assert f"color: {LIGHT_THEME.recorder_text};" in stylesheet
+    assert f"background: {DARK_THEME.recorder};" not in stylesheet
+    assert f"background: {DARK_THEME.recorder_control};" not in stylesheet
 
 
 def test_unknown_system_scheme_is_safe_and_defaults_to_light() -> None:
