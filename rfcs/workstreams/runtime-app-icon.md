@@ -2,7 +2,8 @@
 
 ## Status
 
-Approved / Implemented.
+Approved / Implemented. The icon role assignment is maintained by
+`icon-assets-swap.md`.
 
 ## Summary
 
@@ -14,12 +15,12 @@ identity as the packaged executable.
 
 - `QApplication.setWindowIcon()` is configured during shell startup.
 - The created `MainWindow` receives the same icon explicitly.
-- Runtime lookup prefers the generated `voiceink-shell.ico`, then the existing
-  repository-owned `voiceink-shell.svg`.
+- Runtime lookup prefers the corrected `voiceink-transcribe.png`, then the
+  generated `voiceink-transcribe.ico`.
 - Frozen bundle, executable-adjacent, and source-checkout locations are tried.
 - Missing or unusable assets return an empty `QIcon` and do not block startup.
 - PyInstaller keeps its existing `--icon` executable metadata behavior and also
-  bundles the generated ICO and SVG for runtime lookup.
+  bundles the generated ICO, PNG, and sidebar SVG for runtime lookup.
 
 ## Scope
 
