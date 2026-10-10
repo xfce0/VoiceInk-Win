@@ -17,6 +17,7 @@ except ImportError:
 
 from tests.support.fake_shell import FakeShellBackend
 from voiceink_win.application import ShellController
+from voiceink_win.presentation.dictionary_page import DictionaryPage
 from voiceink_win.presentation.localization import (
     CATALOG,
     Locale,
@@ -64,6 +65,28 @@ def test_russian_locale_translates_shell_and_transcribe_page(
         assert window._recorder._record_button.text() == "Недоступно"
     finally:
         window.close()
+
+
+def test_dictionary_page_translates_header_editor_and_state_actions(
+    application: QApplication,
+) -> None:
+    config = LocaleConfig()
+    page = DictionaryPage(None, locale_config=config)
+    try:
+        assert page._title.text() == "Dictionary"
+        assert page._new.text() == "Add rule"
+        assert page._save.text() == "Save rule"
+        page._show_state("Error", "Storage error", action=True)
+        assert page._state_action.text() == "Try again"
+
+        assert config.set_locale(Locale.RUSSIAN)
+        application.processEvents()
+        assert page._title.text() == "Словарь"
+        assert page._new.text() == "Добавить правило"
+        assert page._save.text() == "Сохранить правило"
+        assert page._state_action.text() == "Повторить"
+    finally:
+        page.dispose()
 
 
 def test_unsupported_locale_values_fall_back_to_english(

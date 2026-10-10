@@ -72,6 +72,9 @@ documents:
     kind: rfc
     status: proposed
     implementation_allowed: false
+  - path: rfcs/workstreams/dictionary-visual-redesign.md
+    kind: rfc
+    status: proposed
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed
