@@ -15,6 +15,7 @@ from voiceink_win.application import (
     GlobalHotkeySettingsService,
     GlobalToggleShortcutService,
     HistoryDeletionService,
+    MicrophoneRecorderController,
     PersistenceService,
     ShellController,
     TranscribePageController,
@@ -34,6 +35,9 @@ logger = logging.getLogger(__name__)
 class DesktopComposition(Protocol):
     @property
     def controller(self) -> ShellController: ...
+
+    @property
+    def recorder(self) -> MicrophoneRecorderController: ...
 
     @property
     def transcribe_controller(self) -> TranscribePageController: ...
@@ -65,6 +69,7 @@ class DesktopComposition(Protocol):
 @dataclass(slots=True)
 class _DesktopComposition:
     controller: ShellController
+    recorder: MicrophoneRecorderController
     transcribe_controller: TranscribePageController
     persistence: PersistenceService
     artifact_cleanup: Callable[[str], None]
@@ -107,6 +112,7 @@ class _DesktopComposition:
         except Exception:
             logger.exception("failed to unregister global shortcut")
         self.transcribe_controller.close(timeout=3.0)
+        self.recorder.close(3.0)
         with self._lock:
             backend = self._backend
             self._backend = None
@@ -139,6 +145,7 @@ class _DesktopComposition:
                 readiness_timeout=self.readiness_timeout,
             )
             backend.start()
+            self.recorder.attach_service(getattr(backend, "microphone", None))
         except (
             ConfigurationError,
             MissingModelError,
@@ -240,6 +247,7 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
     global_shortcut = GlobalToggleShortcutService(controller, create_global_shortcut_port())
     composition = _DesktopComposition(
         controller=controller,
+        recorder=MicrophoneRecorderController(),
         transcribe_controller=transcribe_controller,
         persistence=persistence,
         artifact_cleanup=artifacts.delete,

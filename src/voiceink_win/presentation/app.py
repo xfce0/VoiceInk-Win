@@ -114,6 +114,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             history_deletion=getattr(composition, "history_deletion", None),
             global_shortcut=composition.global_shortcut,
             global_hotkey_settings=composition.global_hotkey_settings,
+            recorder_controller=getattr(composition, "recorder", None),
         )
         window.setWindowIcon(application.windowIcon())
         if color_scheme_changed is not None:
