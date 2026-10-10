@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -50,9 +50,13 @@ class _DictionaryRow(QFrame):
         text.setSpacing(2)
         self._phrase = QLabel(entry.phrase, self)
         self._phrase.setObjectName("dictionaryPhrase")
+        self._phrase.setWordWrap(True)
+        self._phrase.setMinimumWidth(0)
         text.addWidget(self._phrase)
         self._replacement = QLabel(f"→ {entry.replacement}", self)
         self._replacement.setObjectName("dictionaryReplacement")
+        self._replacement.setWordWrap(True)
+        self._replacement.setMinimumWidth(0)
         text.addWidget(self._replacement)
         layout.addLayout(text, 1)
 
@@ -66,7 +70,11 @@ class _DictionaryRow(QFrame):
         layout.addWidget(self._delete)
 
     def sizeHint(self) -> QSize:
-        return QSize(0, 66)
+        return QSize(0, max(66, super().sizeHint().height()))
+
+    def heightForWidth(self, width: int) -> int:
+        layout = self.layout()
+        return max(66, layout.heightForWidth(width)) if layout is not None else 66
 
     def apply_locale(self, edit_label: str, delete_label: str, edit_description: str) -> None:
         self._edit.setText(edit_label)
@@ -151,6 +159,7 @@ class DictionaryPage(QWidget):
         self._list = QListWidget(self)
         self._list.setObjectName("dictionaryList")
         self._list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._list.setMinimumWidth(0)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._list.setSpacing(6)
         self._list.setMinimumHeight(110)
@@ -284,7 +293,7 @@ class DictionaryPage(QWidget):
             )
             self._row_widgets[entry.id] = row
             self._list.setItemWidget(item, row)
-            self._resize_row(item, row)
+        self._resize_rows()
         self._list.setVisible(bool(entries) and not unavailable)
         self._set_editor_enabled(not unavailable)
         if unavailable:
@@ -485,16 +494,29 @@ class DictionaryPage(QWidget):
             row.set_selected(row_id == entry_id)
 
     def _resize_row(self, item: QListWidgetItem, row: _DictionaryRow) -> None:
-        item.setSizeHint(QSize(self._list.viewport().width(), row.sizeHint().height()))
+        width = self._list.viewport().width()
+        if width <= 0:
+            return
+        row.resize(width, max(1, row.height()))
+        row.updateGeometry()
+        height = row.heightForWidth(width)
+        item.setSizeHint(QSize(width, height))
         self._list.doItemsLayout()
 
     def _resize_rows(self) -> None:
-        for index in range(self._list.count()):
-            item = self._list.item(index)
-            entry_id = item.data(Qt.ItemDataRole.UserRole)
-            row = self._row_widgets.get(entry_id)
-            if row is not None:
-                self._resize_row(item, row)
+        for _ in range(3):
+            width = self._list.viewport().width()
+            if width <= 0:
+                return
+            for index in range(self._list.count()):
+                item = self._list.item(index)
+                entry_id = item.data(Qt.ItemDataRole.UserRole)
+                row = self._row_widgets.get(entry_id)
+                if row is not None:
+                    self._resize_row(item, row)
+            self._list.doItemsLayout()
+            if self._list.viewport().width() == width:
+                return
 
     def _set_editor_title(self) -> None:
         self._editor_title.setText(
@@ -533,6 +555,7 @@ class DictionaryPage(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._resize_rows()
+        QTimer.singleShot(0, self._resize_rows)
 
     def _next_operation(self) -> int:
         self._operation += 1

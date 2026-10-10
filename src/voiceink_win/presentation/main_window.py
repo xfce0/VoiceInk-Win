@@ -34,6 +34,7 @@ from .ai_models_page import AIModelsPage
 from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
+from .geometry import MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, SIDEBAR_WIDTH
 from .history_page import HistoryAudioPort, HistoryFolderPort, HistoryPage
 from .icon_registry import SIDEBAR_ITEMS
 from .localization import (
@@ -50,11 +51,8 @@ from .theme import ThemeMode, ThemeTokens, stylesheet_for, theme_for
 from .transcribe_page import TranscribePage
 from .widgets import WaveformWidget
 
-SIDEBAR_WIDTH = 208
 SIDEBAR_ITEM_HEIGHT = 44
 SIDEBAR_ICON_SIZE = 28
-MAIN_WINDOW_WIDTH = 950
-MAIN_WINDOW_HEIGHT = 750
 
 
 class _SnapshotBridge(QObject):
