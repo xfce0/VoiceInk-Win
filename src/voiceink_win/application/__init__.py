@@ -9,6 +9,7 @@ from .asr_service import (
 from .cancellation import CancellationTokenSource, EventCancellationToken
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
+from .microphone_service import MicrophoneRecordingHandle, MicrophoneRecordingService
 from .persistence import HistoryDeletionService, PersistenceService
 from .shell_controller import ShellController, ShellTranscriptionBackend
 from .transcribe_controller import ImportedMediaPort, TranscribePageController
@@ -27,6 +28,8 @@ __all__ = [
     "ReservationState",
     "ReservationToken",
     "SystemClock",
+    "MicrophoneRecordingHandle",
+    "MicrophoneRecordingService",
     "PersistenceService",
     "HistoryDeletionService",
     "ShellController",

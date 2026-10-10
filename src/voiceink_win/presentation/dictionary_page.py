@@ -64,6 +64,10 @@ class DictionaryPage(QWidget):
         self._subtitle.setObjectName("heroSubtext")
         self._subtitle.setWordWrap(True)
         root.addWidget(self._subtitle)
+        self._availability = QLabel(self)
+        self._availability.setObjectName("pageUnavailable")
+        self._availability.setWordWrap(True)
+        root.addWidget(self._availability)
         body = QHBoxLayout()
         body.setSpacing(14)
         self._list = QListWidget(self)
@@ -103,7 +107,7 @@ class DictionaryPage(QWidget):
         self._status.setObjectName("metadata")
         editor.addWidget(self._status)
         self._error = QLabel(self)
-        self._error.setObjectName("pageError")
+        self._error.setObjectName("inlineError")
         self._error.setWordWrap(True)
         editor.addWidget(self._error)
         editor.addStretch(1)
@@ -117,6 +121,9 @@ class DictionaryPage(QWidget):
         self._generation += 1
         self._operation += 1
         generation = self._generation
+        self._availability.clear()
+        self._availability.setVisible(False)
+        self._error.clear()
         if self._persistence is None:
             self._render_entries((), unavailable=True)
             return
@@ -136,8 +143,7 @@ class DictionaryPage(QWidget):
             return
         if error or entries is None:
             self._set_loading(False)
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
-            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
+            self._show_unavailable()
             return
         self._entries = entries
         self._set_loading(False)
@@ -147,6 +153,9 @@ class DictionaryPage(QWidget):
         self._list.setEnabled(not loading)
         self._set_editor_enabled(not loading)
         if loading:
+            self._availability.clear()
+            self._availability.setVisible(False)
+            self._error.clear()
             self._status.setText(self._t(TranslationKey.COMMON_LOADING))
 
     def _render_entries(self, entries: tuple[DictionaryEntry, ...], *, unavailable: bool) -> None:
@@ -156,22 +165,26 @@ class DictionaryPage(QWidget):
             label = f"{entry.phrase} -> {entry.replacement}"
             item = QListWidgetItem(label, self._list)
             item.setData(Qt.ItemDataRole.UserRole, entry.id)
-        self._status.setText(
-            self._t(
-                TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE
-                if unavailable
-                else TranslationKey.COMMON_READY
-            )
-        )
-        self._error.setText(
-            self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE) if unavailable else ""
-        )
+        self._status.setText("" if unavailable else self._t(TranslationKey.COMMON_READY))
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+        self._availability.setVisible(unavailable)
+        self._error.clear()
+        self._list.setEnabled(not unavailable)
+        self._set_editor_enabled(not unavailable)
         self._delete.setEnabled(False)
         if selected_id is not None:
             for index in range(self._list.count()):
                 if self._list.item(index).data(Qt.ItemDataRole.UserRole) == selected_id:
                     self._list.setCurrentRow(index)
                     break
+
+    def _show_unavailable(self) -> None:
+        self._status.clear()
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+        self._availability.setVisible(True)
+        self._error.clear()
+        self._list.setEnabled(False)
+        self._set_editor_enabled(False)
 
     def _select_item(self, item: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         entry_id = item.data(Qt.ItemDataRole.UserRole) if item else None
@@ -294,6 +307,7 @@ class DictionaryPage(QWidget):
         del _locale
         self._title.setText(self._t(TranslationKey.DICTIONARY_TITLE))
         self._subtitle.setText(self._t(TranslationKey.DICTIONARY_SUBTITLE))
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
         self._phrase_label.setText(self._t(TranslationKey.DICTIONARY_PHRASE))
         self._replacement_label.setText(self._t(TranslationKey.DICTIONARY_REPLACEMENT))
         self._enabled.setText(self._t(TranslationKey.DICTIONARY_ENABLED))
