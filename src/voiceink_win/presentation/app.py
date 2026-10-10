@@ -102,6 +102,8 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             transcribe_controller=composition.transcribe_controller,
             persistence=getattr(composition, "persistence", None),
             artifact_cleanup=getattr(composition, "artifact_cleanup", None),
+            artifact_reveal=getattr(composition, "artifact_reveal", None),
+            artifact_folder=getattr(composition, "artifact_folder", None),
             history_deletion=getattr(composition, "history_deletion", None),
             global_shortcut=global_shortcut,
         )

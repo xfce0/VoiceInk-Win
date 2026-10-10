@@ -45,6 +45,7 @@ class GlobalShortcutPort(Protocol):
         self, shortcut: GlobalShortcut, callback: Callable[[], None]
     ) -> GlobalShortcutRegistration: ...
 
+
 class AudioCaptureSession(Protocol):
     """Single-use capture session owned by the infrastructure adapter."""
 
