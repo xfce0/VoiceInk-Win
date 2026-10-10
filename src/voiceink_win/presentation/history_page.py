@@ -28,6 +28,7 @@ from voiceink_win.application import (
     HistoryMediaActionResult,
     HistoryMediaActionService,
     HistoryMediaCode,
+    HistoryMediaState,
     PersistenceService,
 )
 from voiceink_win.application.persistence import HistoryDeletionService
@@ -306,6 +307,12 @@ class HistoryPage(QWidget):
             self._locale_config,
             audio_available=availability.audio.available if availability else False,
             folder_available=availability.reveal.available if availability else False,
+            audio_error=availability.audio.state is HistoryMediaState.ERROR
+            if availability
+            else False,
+            folder_error=availability.reveal.state is HistoryMediaState.ERROR
+            if availability
+            else False,
             parent=self._list,
         )
         row.copy_button.clicked.connect(lambda: self._copy_record(record))
@@ -465,6 +472,8 @@ class HistoryPage(QWidget):
                 row.set_media_available(
                     audio=False if action == "audio" else None,
                     folder=False if action == "folder" else None,
+                    audio_error=False if action == "audio" else None,
+                    folder_error=False if action == "folder" else None,
                 )
             return
         self._status.setText(self._t(TranslationKey.COMMON_ERROR))

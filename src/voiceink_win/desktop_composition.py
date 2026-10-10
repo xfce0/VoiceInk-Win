@@ -95,7 +95,10 @@ class _DesktopComposition:
             self._backend = None
         if backend is not None:
             self._close_backend_safely(backend)
-        self.media_actions.close()
+        try:
+            self.media_actions.close()
+        except Exception:
+            logger.exception("failed to close history media adapters")
         try:
             self.history_deletion.close()
         except Exception:

@@ -503,7 +503,7 @@ def test_history_media_result_states_are_localized(application: QApplication, pe
         assert not row.audio_button.isEnabled()
         row.folder_button.click()
         assert page._status.text() == "Ошибка"
-        assert page._error.text() == "Не удалось открыть папку."
+        assert page._error.text() == "Не удалось показать аудиоартефакт."
     finally:
         page.dispose()
         store.close().result(timeout=2)
