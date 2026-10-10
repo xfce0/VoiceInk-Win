@@ -223,7 +223,10 @@ def test_history_load_select_copy_delete_and_cleanup(
         page = window._history_page
         _wait(application, lambda: page._list.count() == 1)
         page._list.setCurrentRow(0)
-        assert page._rows[record.id].width() == page._list.viewport().width()
+        row = page._rows[record.id]
+        row_position = row.mapTo(page._list.viewport(), row.rect().topLeft())
+        assert row.width() <= page._list.viewport().width()
+        assert row_position.x() + row.width() <= page._list.viewport().width()
         assert page._text.toPlainText() == "A stored transcript"
         page._copy.click()
         _wait(application, lambda: page._status.text() in {"Copied", "Скопировано"})
@@ -488,4 +491,119 @@ def test_history_actions_stay_in_their_row_at_fixed_width_and_follow_locale(
         assert row.copy_button.text() == "Копировать"
     finally:
         page.dispose()
+        store.close().result(timeout=2)
+
+
+def test_fixed_window_history_geometry_handles_long_bilingual_content_and_locales(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    records = (
+        HistoryRecord(
+            id="history-geometry-long",
+            created_at=datetime(2026, 1, 2, tzinfo=UTC),
+            duration=123.4,
+            original_text=(
+                "English transcript content that must wrap inside the fixed shell.\n"
+                "Русский текст истории должен переноситься внутри строки "
+                "без горизонтальной обрезки.\n"
+            )
+            * 8,
+            source_metadata={
+                "source_name": (
+                    "Very long English meeting source name Русское имя записи "
+                    "with enough content to wrap safely.wav"
+                )
+            },
+        ),
+        HistoryRecord(
+            id="history-geometry-second",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            original_text="Second transcript keeps the list vertically scrollable.",
+            source_metadata={"source_name": "second-record.wav"},
+        ),
+    )
+    for record in records:
+        store.upsert_history(record).result(timeout=2)
+
+    locale_config = LocaleConfig(Locale.RUSSIAN)
+    window = MainWindow(
+        ShellController.unavailable(), persistence=service, locale_config=locale_config
+    )
+    window.show()
+
+    def assert_geometry() -> None:
+        page = window._history_page
+        viewport = page._list.viewport()
+        assert viewport.width() > 0
+        assert page._list.horizontalScrollBar().isVisible() is False
+        assert page._list.horizontalScrollBarPolicy() is Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        for index in range(page._list.count()):
+            item = page._list.item(index)
+            row = page._rows[item.data(Qt.ItemDataRole.UserRole)]
+            assert item.sizeHint().width() <= viewport.width()
+            assert row.width() <= viewport.width()
+            row_position = row.mapTo(viewport, row.rect().topLeft())
+            assert row_position.x() + row.width() <= viewport.width()
+            controls = [row.variant_combo, *row.findChildren(QPushButton, "historyAction")]
+            assert all(row.rect().contains(control.geometry()) for control in controls)
+            if row.expanded:
+                assert row._full_text.isVisibleTo(page)
+                assert row.rect().contains(row._full_text.geometry())
+
+    try:
+        window._select_page("History")
+        page = window._history_page
+        _wait(application, lambda: page._list.count() == 2)
+        assert_geometry()
+
+        page._list.setCurrentRow(0)
+        application.processEvents()
+        assert page._rows[records[0].id].expanded
+        assert_geometry()
+
+        locale_config.set_locale(Locale.ENGLISH)
+        application.processEvents()
+        assert page._rows[records[0].id].copy_button.text() == "Copy"
+        assert_geometry()
+    finally:
+        window.close()
+        store.close().result(timeout=2)
+
+
+def test_fixed_window_dictionary_rows_fit_long_russian_content(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    entry = DictionaryEntry(
+        id="dictionary-geometry-long",
+        phrase="Очень длинная русская фраза для проверки ширины строки и переноса текста",
+        replacement=(
+            "Длинная замена на русском и English replacement content that must stay inside "
+            "the dictionary row"
+        ),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    store.upsert_dictionary(entry).result(timeout=2)
+    window = MainWindow(
+        ShellController.unavailable(),
+        persistence=service,
+        locale_config=LocaleConfig(Locale.RUSSIAN),
+    )
+    window.show()
+    try:
+        window._select_page("Dictionary")
+        page = window._dictionary_page
+        _wait(application, lambda: page._list.count() == 1)
+        viewport = page._list.viewport()
+        row = page._row_widgets[entry.id]
+        assert page._list.horizontalScrollBar().isVisible() is False
+        assert row.width() <= viewport.width()
+        row_position = row.mapTo(viewport, row.rect().topLeft())
+        assert row_position.x() + row.width() <= viewport.width()
+        assert row.rect().contains(row._edit.geometry())
+        assert row.rect().contains(row._delete.geometry())
+    finally:
+        window.close()
         store.close().result(timeout=2)
