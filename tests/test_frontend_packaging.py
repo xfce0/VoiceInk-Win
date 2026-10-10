@@ -68,6 +68,14 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
     assert all(
         command[command.index("--icon") + 1] == str(icon_output) for command in pyinstaller_commands
     )
+    assert all(
+        f"{icon_output};{frontend_build.RUNTIME_ICON_DESTINATION}" in command
+        for command in pyinstaller_commands
+    )
+    assert all(
+        f"{frontend_build.ICON_SOURCE};{frontend_build.RUNTIME_ICON_DESTINATION}" in command
+        for command in pyinstaller_commands
+    )
     assert 'fill="#db594b"' in frontend_build.ICON_SOURCE.read_text(encoding="utf-8")
     assert 'd="M3 12h2l1.5-5L9 19l2-14 2.5 11 1.5-4H21"' in frontend_build.ICON_SOURCE.read_text(
         encoding="utf-8"
