@@ -75,6 +75,9 @@ documents:
   - path: rfcs/workstreams/history-newest-first.md
     kind: rfc
     status: implemented
+  - path: rfcs/workstreams/dictionary-visual-redesign.md
+    kind: rfc
+    status: proposed
   - path: rfcs/workstreams/audio-page-controls.md
     kind: rfc
     status: proposed
