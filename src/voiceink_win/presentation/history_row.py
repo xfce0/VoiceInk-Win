@@ -84,10 +84,16 @@ class HistoryRow(QFrame):
         header = QHBoxLayout()
         self._title = QLabel(self._source_name(), self)
         self._title.setObjectName("historyTitle")
+        self._title.setWordWrap(True)
+        self._title.setMinimumWidth(0)
+        self._title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         header.addWidget(self._title, 1)
         self._metadata = QLabel(metadata, self)
         self._metadata.setObjectName("metadata")
+        self._metadata.setWordWrap(True)
+        self._metadata.setMinimumWidth(0)
+        self._metadata.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self._metadata.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         header.addWidget(self._metadata)
         layout.addLayout(header)
@@ -95,12 +101,14 @@ class HistoryRow(QFrame):
         self._preview = QLabel(_preview_text(self._text()), self)
         self._preview.setObjectName("historyPreview")
         self._preview.setWordWrap(True)
+        self._preview.setMinimumWidth(0)
         self._preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self._preview)
 
         self._full_text = QLabel(self._text(), self)
         self._full_text.setObjectName("historyFullText")
         self._full_text.setWordWrap(True)
+        self._full_text.setMinimumWidth(0)
         self._full_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._full_text.setVisible(False)
         self._full_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -166,12 +174,18 @@ class HistoryRow(QFrame):
         self._expanded = expanded
         self._full_text.setVisible(expanded)
         self._preview.setVisible(not expanded)
+        self.updateGeometry()
 
     def set_record(self, record: HistoryRecord) -> None:
         self.record = record
         text = self._text()
         self._preview.setText(_preview_text(text))
         self._full_text.setText(text)
+        self.updateGeometry()
+
+    def heightForWidth(self, width: int) -> int:
+        layout = self.layout()
+        return layout.heightForWidth(width) if layout is not None else -1
 
     def set_metadata(self, metadata: str) -> None:
         self._metadata.setText(metadata)

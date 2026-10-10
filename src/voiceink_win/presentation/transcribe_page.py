@@ -188,6 +188,8 @@ class TranscribePage(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         queue = QWidget(scroll)
         queue.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        queue.setMinimumWidth(0)
+        self._queue = queue
         self._queue_layout = QVBoxLayout(queue)
         self._queue_layout.setContentsMargins(0, 0, 0, 0)
         self._queue_layout.setSpacing(10)
@@ -253,6 +255,7 @@ class TranscribePage(QWidget):
         frame = QFrame(self)
         frame.setObjectName("transcribeItem")
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        frame.setMinimumWidth(0)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
@@ -261,6 +264,8 @@ class TranscribePage(QWidget):
         name = QLabel(item.source_name, frame)
         name.setObjectName("sectionTitle")
         name.setToolTip(item.source_name)
+        name.setWordWrap(True)
+        name.setMinimumWidth(0)
         name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header.addWidget(name)
         hint = (
@@ -270,9 +275,11 @@ class TranscribePage(QWidget):
         )
         format_label = QLabel(hint, frame)
         format_label.setObjectName("muted")
+        format_label.setMinimumWidth(0)
         header.addWidget(format_label)
         status = QLabel(_status_text(item.state, self._locale_config.locale), frame)
         status.setObjectName("statePill")
+        status.setMinimumWidth(0)
         header.addWidget(status)
         layout.addLayout(header)
 
