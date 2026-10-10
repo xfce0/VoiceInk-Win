@@ -14,6 +14,16 @@ from .global_shortcut import (
     RecordingTogglePort,
     ShortcutAvailability,
 )
+from .history_media import (
+    HistoryArtifactRevealPort,
+    HistoryAudioPlaybackPort,
+    HistoryMediaActionResult,
+    HistoryMediaActionService,
+    HistoryMediaAvailability,
+    HistoryMediaCapability,
+    HistoryMediaCode,
+    HistoryMediaState,
+)
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
 from .microphone_recorder import MicrophoneRecorderController
@@ -41,6 +51,14 @@ __all__ = [
     "GlobalToggleShortcutService",
     "RecordingTogglePort",
     "ShortcutAvailability",
+    "HistoryArtifactRevealPort",
+    "HistoryAudioPlaybackPort",
+    "HistoryMediaActionResult",
+    "HistoryMediaActionService",
+    "HistoryMediaAvailability",
+    "HistoryMediaCapability",
+    "HistoryMediaCode",
+    "HistoryMediaState",
     "MicrophoneRecordingHandle",
     "MicrophoneRecordingService",
     "MicrophoneRecorderController",
