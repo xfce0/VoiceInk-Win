@@ -24,6 +24,10 @@ from .global_shortcut import (
     WindowsGlobalShortcutPort,
     create_global_shortcut_port,
 )
+from .history_media import (
+    WindowsHistoryArtifactRevealAdapter,
+    WindowsHistoryAudioPlaybackAdapter,
+)
 from .loopback_proxy import LoopbackProxy
 from .media_process import (
     ProcessCancelled,
@@ -198,4 +202,6 @@ __all__ = [
     "WindowsCaptureError",
     "WindowsCaptureFailureCode",
     "WindowsCaptureProvider",
+    "WindowsHistoryArtifactRevealAdapter",
+    "WindowsHistoryAudioPlaybackAdapter",
 ]
