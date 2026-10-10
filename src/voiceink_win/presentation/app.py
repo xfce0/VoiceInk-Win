@@ -69,6 +69,9 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
 
     application = QApplication.instance() or QApplication(sys.argv)
     application.setApplicationName("VoiceInk")
+    from .app_icon import application_icon
+
+    application.setWindowIcon(application_icon())
     from .theme import detect_system_theme, theme_for
 
     theme = theme_for(detect_system_theme(application))
@@ -96,6 +99,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             artifact_cleanup=getattr(composition, "artifact_cleanup", None),
             history_deletion=getattr(composition, "history_deletion", None),
         )
+        window.setWindowIcon(application.windowIcon())
         if color_scheme_changed is not None:
             window.connect_theme_signal(
                 color_scheme_changed,
