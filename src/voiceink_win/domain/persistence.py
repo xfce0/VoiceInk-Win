@@ -131,6 +131,8 @@ class HistoryRecord:
 
 @dataclass(frozen=True, slots=True)
 class HistoryPage:
+    """A page ordered newest-first by ``created_at`` and then ``id``."""
+
     records: tuple[HistoryRecord, ...]
     offset: int
     limit: int

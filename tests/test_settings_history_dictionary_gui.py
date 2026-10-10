@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from concurrent.futures import Future
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,6 +11,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QMessageBox
 except ImportError:
     if os.environ.get("VOICEINK_GUI_TESTS") == "1":
@@ -210,6 +211,56 @@ def test_history_load_select_copy_delete_and_cleanup(
     finally:
         window.close()
         store.close().result(timeout=2)
+
+
+def test_history_page_keeps_newest_first_order_across_load_pagination_and_search(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def record(record_id: str, timestamp: datetime, original: str, enhanced: str | None = None):
+        return HistoryRecord(
+            id=record_id,
+            source=TranscriptionSource.IMPORTED_FILE,
+            created_at=timestamp,
+            original_text=original,
+            enhanced_text=enhanced,
+            status=HistoryStatus.COMPLETED,
+        )
+
+    for item in (
+        record("old", created_at - timedelta(seconds=1), "older"),
+        record("equal-a", created_at, "equal a", "needle equal a"),
+        record("equal-b", created_at, "equal b", "needle equal b"),
+        record("middle", created_at + timedelta(seconds=1), "middle", "needle middle"),
+        record("newest", created_at + timedelta(seconds=2), "needle newest"),
+    ):
+        store.upsert_history(item).result(timeout=2)
+
+    def visible_ids(page: HistoryWidget) -> list[str]:
+        return [
+            page._list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(page._list.count())
+        ]
+
+    page = HistoryWidget(service)
+    page._limit = 2
+    page.refresh()
+    try:
+        _wait(application, lambda: visible_ids(page) == ["newest", "middle"])
+        page._next.click()
+        _wait(application, lambda: visible_ids(page) == ["equal-b", "equal-a"])
+        page._previous.click()
+        _wait(application, lambda: visible_ids(page) == ["newest", "middle"])
+
+        page._search.setText("needle")
+        page._search_button.click()
+        _wait(application, lambda: visible_ids(page) == ["newest", "middle"])
+        page._next.click()
+        _wait(application, lambda: visible_ids(page) == ["equal-b", "equal-a"])
+    finally:
+        page.dispose()
 
 
 def test_dictionary_crud_is_async_and_validates_phrase(
