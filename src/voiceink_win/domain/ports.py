@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from .audio_capture import InputDevice, MicrophoneStatus
 from .models import AsrCapabilities, AsrRequest, RuntimeHealth, TranscriptResult
 from .shortcuts import GlobalShortcut
 
@@ -43,3 +44,28 @@ class GlobalShortcutPort(Protocol):
     def register(
         self, shortcut: GlobalShortcut, callback: Callable[[], None]
     ) -> GlobalShortcutRegistration: ...
+
+class AudioCaptureSession(Protocol):
+    """Single-use capture session owned by the infrastructure adapter."""
+
+    def start(self) -> None: ...
+
+    def read_chunk(self, deadline: float | None = None) -> bytes | None: ...
+
+    def stop(self) -> None: ...
+
+    def cancel(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class AudioInputPort(Protocol):
+    """Explicit microphone boundary; native endpoint details stay outside it."""
+
+    def status(self) -> MicrophoneStatus: ...
+
+    def enumerate_devices(self, deadline: float | None = None) -> tuple[InputDevice, ...]: ...
+
+    def open(
+        self, selection_token: str | None = None, deadline: float | None = None
+    ) -> AudioCaptureSession: ...

@@ -72,9 +72,17 @@ documents:
     kind: rfc
     status: proposed
     implementation_allowed: false
+  - path: rfcs/workstreams/audio-page-controls.md
+    kind: rfc
+    status: proposed
+    implementation_allowed: true
+    native_enablement_allowed: false
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed
   - path: rfcs/workstreams/global-toggle-shortcut.md
+    kind: rfc
+    status: implemented
+  - path: rfcs/workstreams/windows-platform-autodetection.md
     kind: rfc
     status: implemented

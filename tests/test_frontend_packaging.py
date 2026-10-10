@@ -26,6 +26,8 @@ def test_make_build_contract_is_windows_only_and_reproducible() -> None:
     assert '--constraint "$(BUILD_CONSTRAINTS)"' in makefile
     assert "PyInstaller" in makefile
     assert "scripts/frontend_build.py" in makefile
+    assert "platform-check" in makefile
+    assert "$(MAKE) platform-check" in makefile
     assert "check: spec-check format-check lint test compile" in makefile
     assert "unrelated entries found" in (ROOT / "scripts" / "frontend_build.py").read_text(
         encoding="utf-8"
@@ -68,10 +70,30 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
     assert all(
         command[command.index("--icon") + 1] == str(icon_output) for command in pyinstaller_commands
     )
+    assert all(
+        f"{icon_output};{frontend_build.RUNTIME_ICON_DESTINATION}" in command
+        for command in pyinstaller_commands
+    )
+    assert all(
+        f"{frontend_build.ICON_SOURCE};{frontend_build.RUNTIME_ICON_DESTINATION}" in command
+        for command in pyinstaller_commands
+    )
     assert 'fill="#db594b"' in frontend_build.ICON_SOURCE.read_text(encoding="utf-8")
     assert 'd="M3 12h2l1.5-5L9 19l2-14 2.5 11 1.5-4H21"' in frontend_build.ICON_SOURCE.read_text(
         encoding="utf-8"
     )
+
+
+def test_frontend_build_reports_native_arm64_as_unsupported(monkeypatch) -> None:
+    def reject_native_arm64():
+        raise frontend_build.WindowsPlatformError(
+            "Native ARM64 Windows packaging is not supported by the artifact matrix."
+        )
+
+    monkeypatch.setattr(frontend_build, "detect_windows_platform", reject_native_arm64)
+
+    with pytest.raises(frontend_build.FrontendBuildError, match="Native ARM64"):
+        frontend_build._require_supported_host()
 
 
 def test_frontend_build_packages_the_complete_sqlite_migration_contract() -> None:
