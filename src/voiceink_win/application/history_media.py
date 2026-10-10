@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from voiceink_win.domain import HistoryAudioArtifactPort, HistoryRecord
+from voiceink_win.domain.persistence import InvalidAudioArtifactPathError
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,12 @@ class HistoryMediaActionService:
     def inspect(self, record: HistoryRecord) -> HistoryMediaAvailability:
         artifact, missing = self._resolve(record)
         if missing is not None:
-            capability = HistoryMediaCapability(HistoryMediaState.UNAVAILABLE, missing)
+            state = (
+                HistoryMediaState.ERROR
+                if missing is HistoryMediaCode.OPERATION_FAILED
+                else HistoryMediaState.UNAVAILABLE
+            )
+            capability = HistoryMediaCapability(state, missing)
             return HistoryMediaAvailability(capability, capability)
         return HistoryMediaAvailability(
             audio=self._capability(record, self._audio, artifact, "audio"),
@@ -166,7 +172,7 @@ class HistoryMediaActionService:
             return None, HistoryMediaCode.NO_ARTIFACT
         try:
             return self._artifacts.reveal_path(reference), None
-        except Exception as error:
+        except (FileNotFoundError, InvalidAudioArtifactPathError) as error:
             self._log(
                 record,
                 "resolve",
@@ -176,6 +182,16 @@ class HistoryMediaActionService:
                 exception_type=type(error).__name__,
             )
             return None, HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
+        except Exception as error:
+            self._log(
+                record,
+                "resolve",
+                HistoryMediaCode.OPERATION_FAILED,
+                logging.WARNING,
+                failure_stage="resolve",
+                exception_type=type(error).__name__,
+            )
+            return None, HistoryMediaCode.OPERATION_FAILED
 
     def _capability(
         self,

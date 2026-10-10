@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class WindowsHistoryArtifactRevealAdapter:
@@ -38,7 +41,7 @@ class WindowsHistoryArtifactRevealAdapter:
         buffer = ctypes.create_unicode_buffer(32768)
         length = ctypes.windll.kernel32.GetWindowsDirectoryW(buffer, len(buffer))
         if not length:
-            raise OSError("could not resolve the Windows system directory")
+            raise OSError("could not resolve the Windows directory")
         return str(Path(buffer.value) / "explorer.exe")
 
     @staticmethod
@@ -56,11 +59,13 @@ class WindowsHistoryAudioPlaybackAdapter:
         player_factory: Callable[[], Any] | None = None,
         audio_output_factory: Callable[[], Any] | None = None,
         url_factory: Callable[[str], Any] | None = None,
+        empty_url_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._platform_name = os.name if platform_name is None else platform_name
         self._player: Any | None = None
         self._audio_output: Any | None = None
         self._url_factory = url_factory
+        self._empty_url_factory = empty_url_factory
         self._playback_error: RuntimeError | None = None
         self._failure_callback: Callable[[Exception], None] | None = None
         self._play_in_progress = False
@@ -79,6 +84,7 @@ class WindowsHistoryAudioPlaybackAdapter:
                 player_factory = QMediaPlayer
                 audio_output_factory = QAudioOutput
                 self._url_factory = QUrl.fromLocalFile
+                self._empty_url_factory = QUrl
             self._player = player_factory()
             self._audio_output = audio_output_factory()
             self._player.setAudioOutput(self._audio_output)
@@ -87,7 +93,15 @@ class WindowsHistoryAudioPlaybackAdapter:
             if callable(is_available) and not is_available():
                 self._player = None
                 self._audio_output = None
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                "history audio adapter unavailable",
+                extra={
+                    "reason_code": "PLATFORM_UNAVAILABLE",
+                    "failure_stage": "initialization",
+                    "exception_type": type(error).__name__,
+                },
+            )
             self._player = None
             self._audio_output = None
 
@@ -131,10 +145,14 @@ class WindowsHistoryAudioPlaybackAdapter:
 
     def close(self) -> None:
         if self._player is not None:
-            self._player.stop()
-            delete_later = getattr(self._player, "deleteLater", None)
-            if delete_later is not None:
-                delete_later()
+            try:
+                if self._empty_url_factory is not None:
+                    self._player.setSource(self._empty_url_factory())
+                self._player.stop()
+            finally:
+                delete_later = getattr(self._player, "deleteLater", None)
+                if delete_later is not None:
+                    delete_later()
         if self._audio_output is not None:
             delete_later = getattr(self._audio_output, "deleteLater", None)
             if delete_later is not None:
