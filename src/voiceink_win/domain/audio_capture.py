@@ -21,14 +21,24 @@ class MicrophoneAvailability(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class MicrophoneCapability(StrEnum):
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+
+
 class CaptureErrorCode(StrEnum):
     UNAVAILABLE = "unavailable"
     BUSY = "busy"
+    PERMISSION_DENIED = "permission_denied"
     DEVICE_UNAVAILABLE = "device_unavailable"
+    UNSUPPORTED_FORMAT = "unsupported_format"
+    DEVICE_DISCONNECTED = "device_disconnected"
+    CAPTURE_OVERFLOW = "capture_overflow"
     INVALID_CHUNK = "invalid_chunk"
     RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
+    CLEANUP_FAILED = "cleanup_failed"
     FAILED = "failed"
 
 
@@ -129,6 +139,7 @@ class InputDevice:
 class MicrophoneStatus:
     availability: MicrophoneAvailability
     message: str
+    capability: MicrophoneCapability = MicrophoneCapability.SUPPORTED
 
 
 DEFAULT_CAPTURE_LIMITS = CaptureLimits()
