@@ -1527,7 +1527,7 @@ class ImportedMediaTranscriptionService:
         event = getattr(owner, "stage_owner_done", None)
         if callable(event):
             event = event()
-        if isinstance(event, (Event, QuiescenceFence)):
+        if isinstance(event, Event | QuiescenceFence):
             return event
         return None
 

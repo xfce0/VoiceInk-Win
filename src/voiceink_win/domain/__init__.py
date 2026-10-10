@@ -121,8 +121,22 @@ from .persistence import (
     TranscriptionSource,
     canonical_dictionary_key,
 )
-from .ports import AsrRequestHandle, AsrRuntime, AudioCaptureSession, AudioInputPort
+from .ports import (
+    AsrRequestHandle,
+    AsrRuntime,
+    AudioCaptureSession,
+    AudioInputPort,
+    GlobalShortcutPort,
+    GlobalShortcutRegistration,
+)
 from .shell import ShellSnapshot, ShellState
+from .shortcuts import (
+    DEFAULT_GLOBAL_TOGGLE_SHORTCUT,
+    GlobalShortcut,
+    ShortcutConflictError,
+    ShortcutRegistrationError,
+    ShortcutUnavailableError,
+)
 from .transcribe import (
     SUPPORTED_MEDIA_EXTENSIONS,
     SUPPORTED_MEDIA_FORMATS,
@@ -152,6 +166,13 @@ __all__ = [
     "AsrRequest",
     "AsrRuntime",
     "AsrRequestHandle",
+    "GlobalShortcutPort",
+    "GlobalShortcutRegistration",
+    "DEFAULT_GLOBAL_TOGGLE_SHORTCUT",
+    "GlobalShortcut",
+    "ShortcutConflictError",
+    "ShortcutRegistrationError",
+    "ShortcutUnavailableError",
     "AudioCaptureSession",
     "AudioInputPort",
     "BoundedPcm16Capture",

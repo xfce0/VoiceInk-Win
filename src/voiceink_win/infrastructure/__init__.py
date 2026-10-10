@@ -19,6 +19,11 @@ from .ffmpeg import (
     WavLimits,
     validate_wav,
 )
+from .global_shortcut import (
+    UnavailableGlobalShortcutPort,
+    WindowsGlobalShortcutPort,
+    create_global_shortcut_port,
+)
 from .loopback_proxy import LoopbackProxy
 from .media_process import (
     ProcessCancelled,
@@ -178,5 +183,8 @@ __all__ = [
     "create_media_snapshot_store",
     "make_wav",
     "validate_wav",
+    "UnavailableGlobalShortcutPort",
+    "WindowsGlobalShortcutPort",
+    "create_global_shortcut_port",
     "WindowsAudioInputAdapter",
 ]
