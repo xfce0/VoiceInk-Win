@@ -437,14 +437,41 @@ class HistoryPage(QWidget):
         if self._media_actions is None:
             return
         self._select_record_if_needed(record.id)
+        operation = self._next_operation()
         self._render_media_result(
             record,
             self._media_actions.play(
                 record,
-                on_result=lambda result: self._render_media_result(record, result, "audio"),
+                on_result=lambda result: self._queue_media_result(
+                    record, result, "audio", operation
+                ),
             ),
             "audio",
         )
+
+    def _queue_media_result(
+        self,
+        record: HistoryRecord,
+        result: HistoryMediaActionResult,
+        action: str,
+        operation: int,
+    ) -> None:
+        if self._disposed:
+            return
+        self._bridge.post(
+            lambda: self._render_media_result_if_current(record, result, action, operation)
+        )
+
+    def _render_media_result_if_current(
+        self,
+        record: HistoryRecord,
+        result: HistoryMediaActionResult,
+        action: str,
+        operation: int,
+    ) -> None:
+        if self._disposed or operation != self._operation:
+            return
+        self._render_media_result(record, result, action)
 
     def _reveal_folder(self, record: HistoryRecord) -> None:
         if self._media_actions is None:

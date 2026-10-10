@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -291,6 +292,24 @@ def test_windows_reveal_adapter_selects_the_exact_artifact() -> None:
             r'/select,"C:\Users\Test User\VoiceInk\аудио\history\item.wav"',
         ]
     ]
+
+
+def test_windows_reveal_adapter_uses_the_windows_directory(monkeypatch) -> None:
+    import ctypes
+
+    class Kernel32:
+        @staticmethod
+        def GetWindowsDirectoryW(buffer, _size) -> int:
+            buffer.value = r"C:\Windows"
+            return len(buffer.value)
+
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=Kernel32()), raising=False)
+    commands: list[list[str]] = []
+    adapter = WindowsHistoryArtifactRevealAdapter(platform_name="nt", launcher=commands.append)
+
+    adapter.reveal(Path(r"C:\Users\Test User\VoiceInk\audio\item.wav"))
+
+    assert commands[0][0] == str(Path(r"C:\Windows") / "explorer.exe")
 
 
 def test_windows_audio_adapter_uses_the_exact_artifact() -> None:

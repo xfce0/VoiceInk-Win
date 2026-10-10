@@ -36,7 +36,7 @@ class WindowsHistoryArtifactRevealAdapter:
         import ctypes
 
         buffer = ctypes.create_unicode_buffer(32768)
-        length = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+        length = ctypes.windll.kernel32.GetWindowsDirectoryW(buffer, len(buffer))
         if not length:
             raise OSError("could not resolve the Windows system directory")
         return str(Path(buffer.value) / "explorer.exe")
@@ -64,6 +64,9 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._playback_error: RuntimeError | None = None
         self._failure_callback: Callable[[Exception], None] | None = None
         self._play_in_progress = False
+        self._playback_request = 0
+        self._error_signal: Any | None = None
+        self._error_slot: Callable[..., None] | None = None
         if self._platform_name != "nt":
             return
         try:
@@ -79,9 +82,7 @@ class WindowsHistoryAudioPlaybackAdapter:
             self._player = player_factory()
             self._audio_output = audio_output_factory()
             self._player.setAudioOutput(self._audio_output)
-            error_signal = getattr(self._player, "errorOccurred", None)
-            if error_signal is not None:
-                error_signal.connect(self._on_playback_error)
+            self._error_signal = getattr(self._player, "errorOccurred", None)
             is_available = getattr(self._player, "isAvailable", None)
             if callable(is_available) and not is_available():
                 self._player = None
@@ -102,6 +103,15 @@ class WindowsHistoryAudioPlaybackAdapter:
             raise RuntimeError("history audio playback is unavailable")
         self._playback_error = None
         self._failure_callback = on_failure
+        self._playback_request += 1
+        request = self._playback_request
+        if self._error_signal is not None:
+            if self._error_slot is not None:
+                disconnect = getattr(self._error_signal, "disconnect", None)
+                if callable(disconnect):
+                    disconnect(self._error_slot)
+            self._error_slot = lambda *_args: self._on_playback_error(request)
+            self._error_signal.connect(self._error_slot)
         self._play_in_progress = True
         try:
             self._player.setSource(self._url_factory(str(resolved_artifact)))
@@ -110,14 +120,10 @@ class WindowsHistoryAudioPlaybackAdapter:
             self._play_in_progress = False
         if self._playback_error is not None:
             raise self._playback_error
-        playback_state = getattr(self._player, "playbackState", None)
-        if callable(playback_state):
-            state = playback_state()
-            state_name = getattr(state, "name", str(state))
-            if state_name not in {"PlayingState", "Playing"}:
-                raise RuntimeError("history audio playback did not start")
 
-    def _on_playback_error(self, *_args: Any) -> None:
+    def _on_playback_error(self, request: int) -> None:
+        if request != self._playback_request:
+            return
         self._playback_error = RuntimeError("history audio playback failed")
         if self._play_in_progress or self._failure_callback is None:
             return
@@ -136,6 +142,13 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._player = None
         self._audio_output = None
         self._failure_callback = None
+        self._playback_request += 1
+        if self._error_signal is not None and self._error_slot is not None:
+            disconnect = getattr(self._error_signal, "disconnect", None)
+            if callable(disconnect):
+                disconnect(self._error_slot)
+        self._error_signal = None
+        self._error_slot = None
 
 
 __all__ = [
