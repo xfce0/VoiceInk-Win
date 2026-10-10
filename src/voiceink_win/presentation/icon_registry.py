@@ -59,7 +59,7 @@ SIDEBAR_ITEMS = (
     SidebarItem("History", "history", "#df4f82", "#2a101d", True),
     SidebarItem("Dictionary", "dictionary", "#3478d4", "#ffffff", True),
     SidebarItem("AI Models", "models", "#986d4b", "#24150d", False),
-    SidebarItem("Audio", "audio", "#0f766e", "#ffffff", False),
+    SidebarItem("Audio", "audio", "#0f766e", "#ffffff", True),
     SidebarItem("Settings", "settings", "#64748b", "#ffffff", True),
     SidebarItem("VoiceInk Pro", "license", "#4eaf6c", "#12351f", False),
 )
