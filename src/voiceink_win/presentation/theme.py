@@ -212,6 +212,51 @@ QScrollArea#transcribeQueueScroll > QWidget#qt_scrollarea_viewport {{
     background: {theme.window};
     border: none;
 }}
+QListWidget#historyList {{
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 2px;
+}}
+QListWidget#historyList::item {{
+    background: transparent;
+    border: none;
+    padding: 0;
+}}
+QFrame#historyRow {{
+    background: {theme.card};
+    border: 1px solid {theme.card_border};
+    border-radius: 12px;
+}}
+QFrame#historyRow[selected="true"] {{
+    background: {theme.secondary_fill};
+    border-color: {theme.accent};
+}}
+QLabel#historyTitle {{
+    color: {theme.text};
+    font-size: 14px;
+    font-weight: 700;
+}}
+QLabel#historyPreview, QLabel#historyFullText {{
+    color: {theme.text};
+    font-size: 13px;
+}}
+QLabel#historyFullText {{
+    background: {theme.empty_card};
+    border-radius: 8px;
+    padding: 8px;
+}}
+QPushButton#historyAction {{
+    border-radius: 8px;
+    font-size: 11px;
+    padding: 5px 9px;
+}}
+QComboBox#historyVariant {{
+    border: 1px solid {theme.card_border};
+    border-radius: 8px;
+    color: {theme.muted};
+    padding: 4px 7px;
+}}
 QFrame#transcribeDropZone {{
     background: {theme.empty_card};
     border: 2px dashed {theme.empty_border};

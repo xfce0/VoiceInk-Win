@@ -91,6 +91,9 @@ class TranslationKey(StrEnum):
 
     HISTORY_TITLE = "history.title"
     HISTORY_SUBTITLE = "history.subtitle"
+    HISTORY_SEARCH_PLACEHOLDER = "history.search_placeholder"
+    HISTORY_SEARCH = "history.search"
+    HISTORY_SEARCH_ACCESSIBLE = "history.search_accessible"
     HISTORY_LOADING = "history.loading"
     HISTORY_EMPTY = "history.empty"
     HISTORY_EMPTY_RECORD = "history.empty_record"
@@ -107,6 +110,14 @@ class TranslationKey(StrEnum):
     HISTORY_COPYING = "history.copying"
     HISTORY_COPIED = "history.copied"
     HISTORY_COPY_ERROR = "history.copy_error"
+    HISTORY_AUDIO = "history.audio"
+    HISTORY_AUDIO_UNAVAILABLE = "history.audio_unavailable"
+    HISTORY_AUDIO_STARTED = "history.audio_started"
+    HISTORY_AUDIO_ERROR = "history.audio_error"
+    HISTORY_FOLDER = "history.folder"
+    HISTORY_FOLDER_UNAVAILABLE = "history.folder_unavailable"
+    HISTORY_FOLDER_OPENED = "history.folder_opened"
+    HISTORY_FOLDER_ERROR = "history.folder_error"
     HISTORY_DELETE = "history.delete"
     HISTORY_DELETE_TITLE = "history.delete_title"
     HISTORY_DELETE_CONFIRM = "history.delete_confirm"
@@ -400,6 +411,13 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "Saved transcripts are loaded from local SQLite storage, newest first.",
         "Сохранённые расшифровки загружаются из локального SQLite, сначала новые.",
     ),
+    TranslationKey.HISTORY_SEARCH_PLACEHOLDER: _entry(
+        "Search source or transcript", "Поиск по источнику или расшифровке"
+    ),
+    TranslationKey.HISTORY_SEARCH: _entry("Search", "Найти"),
+    TranslationKey.HISTORY_SEARCH_ACCESSIBLE: _entry(
+        "Search transcript history", "Поиск по истории расшифровок"
+    ),
     TranslationKey.HISTORY_LOADING: _entry("Loading history...", "Загрузка истории..."),
     TranslationKey.HISTORY_EMPTY: _entry("No transcripts yet.", "Расшифровок пока нет."),
     TranslationKey.HISTORY_EMPTY_RECORD: _entry("Empty transcript", "Пустая расшифровка"),
@@ -421,6 +439,18 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.HISTORY_COPIED: _entry("Copied", "Скопировано"),
     TranslationKey.HISTORY_COPY_ERROR: _entry(
         "Could not copy the transcript.", "Не удалось скопировать расшифровку."
+    ),
+    TranslationKey.HISTORY_AUDIO: _entry("Audio", "Аудио"),
+    TranslationKey.HISTORY_AUDIO_UNAVAILABLE: _entry("Audio unavailable", "Аудио недоступно"),
+    TranslationKey.HISTORY_AUDIO_STARTED: _entry("Playing audio", "Воспроизведение аудио"),
+    TranslationKey.HISTORY_AUDIO_ERROR: _entry(
+        "Could not play the audio.", "Не удалось воспроизвести аудио."
+    ),
+    TranslationKey.HISTORY_FOLDER: _entry("Folder", "Папка"),
+    TranslationKey.HISTORY_FOLDER_UNAVAILABLE: _entry("Folder unavailable", "Папка недоступна"),
+    TranslationKey.HISTORY_FOLDER_OPENED: _entry("Opened folder", "Папка открыта"),
+    TranslationKey.HISTORY_FOLDER_ERROR: _entry(
+        "Could not open the folder.", "Не удалось открыть папку."
     ),
     TranslationKey.HISTORY_DELETE: _entry("Delete", "Удалить"),
     TranslationKey.HISTORY_DELETE_TITLE: _entry("Delete transcript", "Удалить расшифровку"),
