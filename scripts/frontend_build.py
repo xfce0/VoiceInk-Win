@@ -9,6 +9,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from scripts.windows_platform import (
+        WindowsPlatform,
+        WindowsPlatformError,
+        detect_windows_platform,
+    )
+except ModuleNotFoundError:
+    from windows_platform import WindowsPlatform, WindowsPlatformError, detect_windows_platform
+
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 WORK = ROOT / "build" / "frontend"
@@ -16,6 +25,7 @@ ICON_BUILD_DIR = ROOT / "build" / "dist"
 ICON_SOURCE = ROOT / "packaging" / "voiceink-shell-windows-x64" / "voiceink-shell.svg"
 ICON_BUILDER = ROOT / "scripts" / "build_icon.py"
 ICON_OUTPUT = ICON_BUILD_DIR / "voiceink-shell.ico"
+RUNTIME_ICON_DESTINATION = "."
 PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
 VALIDATOR = ROOT / "scripts" / "frontend_package_smoke.py"
 ENTRYPOINT = ROOT / "scripts" / "frontend_entrypoint.py"
@@ -43,16 +53,16 @@ def _run(command: list[str], *, env: dict[str, str] | None = None) -> None:
         raise FrontendBuildError(f"Command failed with exit code {result.returncode}: {rendered}")
 
 
-def _require_supported_host() -> None:
-    if platform.system() != "Windows" or platform.machine().lower() not in {"amd64", "x86_64"}:
-        raise FrontendBuildError(
-            "Frontend packaging requires 64-bit Windows. "
-            "Run `make check` on macOS/Linux, or run `make build` on Windows 10/11 x64."
-        )
+def _require_supported_host() -> WindowsPlatform:
+    try:
+        profile = detect_windows_platform()
+    except WindowsPlatformError as error:
+        raise FrontendBuildError(str(error)) from error
     if sys.version_info[:2] not in {(3, 12), (3, 13), (3, 14)}:
         raise FrontendBuildError(
             f"Python 3.12, 3.13, or 3.14 is required; found {platform.python_version()}"
         )
+    return profile
 
 
 def _prepare_outputs() -> None:
@@ -114,6 +124,10 @@ def _build_executable(name: str, mode: str, python: str) -> None:
         "shiboken6",
         "--add-data",
         f"{MIGRATION_SOURCE};{MIGRATION_DESTINATION}",
+        "--add-data",
+        f"{ICON_OUTPUT};{RUNTIME_ICON_DESTINATION}",
+        "--add-data",
+        f"{ICON_SOURCE};{RUNTIME_ICON_DESTINATION}",
         "--distpath",
         str(DIST),
         "--workpath",
@@ -235,7 +249,8 @@ def _run_smoke() -> None:
 
 def main() -> int:
     try:
-        _require_supported_host()
+        profile = _require_supported_host()
+        print(f"frontend build: selected x64 settings ({profile.diagnostic})")
         _prepare_outputs()
         python = sys.executable
         _generate_icon(python)

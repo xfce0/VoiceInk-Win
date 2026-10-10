@@ -77,6 +77,7 @@ from .storage_paths import (
     normalise_relative_audio_path,
 )
 from .transport import TransportResponse, UrllibLoopbackTransport
+from .windows_microphone import WindowsAudioInputAdapter
 from .windows_snapshot import (
     WindowsKernel32,
     WindowsMediaSnapshotStore,
@@ -180,4 +181,5 @@ __all__ = [
     "make_wav",
     "validate_wav",
     "unavailable_model_metadata",
+    "WindowsAudioInputAdapter",
 ]

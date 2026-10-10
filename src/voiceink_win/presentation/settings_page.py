@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -16,15 +16,28 @@ from PySide6.QtWidgets import (
 )
 
 from voiceink_win.application import PersistenceService
-from voiceink_win.domain import Settings
+from voiceink_win.domain import Settings, ThemePreference
 
 from .async_tools import FutureBridge
 from .localization import SUPPORTED_LOCALES, Locale, LocaleConfig, TranslationKey, translate
 from .modes_page import MODE_IDS, MODE_NAMES
 
+THEME_PREFERENCES = (
+    ThemePreference.SYSTEM,
+    ThemePreference.LIGHT,
+    ThemePreference.DARK,
+)
+THEME_NAMES = {
+    ThemePreference.SYSTEM: TranslationKey.SETTINGS_THEME_SYSTEM,
+    ThemePreference.LIGHT: TranslationKey.SETTINGS_THEME_LIGHT,
+    ThemePreference.DARK: TranslationKey.SETTINGS_THEME_DARK,
+}
+
 
 class SettingsPage(QWidget):
     """Edit settings through the asynchronous application persistence port."""
+
+    theme_changed = Signal(str)
 
     def __init__(
         self,
@@ -65,6 +78,10 @@ class SettingsPage(QWidget):
         self._subtitle.setObjectName("heroSubtext")
         self._subtitle.setWordWrap(True)
         root.addWidget(self._subtitle)
+        self._availability = QLabel(content)
+        self._availability.setObjectName("pageUnavailable")
+        self._availability.setWordWrap(True)
+        root.addWidget(self._availability)
 
         form = QFormLayout()
         self._language_label = self._form_label(form, TranslationKey.SETTINGS_LANGUAGE)
@@ -75,6 +92,15 @@ class SettingsPage(QWidget):
         self._language_combo.currentIndexChanged.connect(self._language_changed)
         form.setWidget(0, QFormLayout.ItemRole.LabelRole, self._language_label)
         form.setWidget(0, QFormLayout.ItemRole.FieldRole, self._language_combo)
+
+        self._theme_label = self._form_label(form, TranslationKey.SETTINGS_THEME)
+        self._theme_combo = QComboBox(content)
+        self._theme_combo.setAccessibleName("Dashboard theme")
+        for preference in THEME_PREFERENCES:
+            self._theme_combo.addItem(preference.value, preference.value)
+        self._theme_combo.currentIndexChanged.connect(self._theme_changed)
+        form.setWidget(1, QFormLayout.ItemRole.LabelRole, self._theme_label)
+        form.setWidget(1, QFormLayout.ItemRole.FieldRole, self._theme_combo)
 
         self._auto_copy_label = QLabel(content)
         self._auto_copy_label.setObjectName("metadata")
@@ -131,7 +157,7 @@ class SettingsPage(QWidget):
         self._status.setObjectName("metadata")
         root.addWidget(self._status)
         self._error = QLabel(content)
-        self._error.setObjectName("pageError")
+        self._error.setObjectName("inlineError")
         self._error.setWordWrap(True)
         root.addWidget(self._error)
         scroll.setWidget(content)
@@ -151,6 +177,9 @@ class SettingsPage(QWidget):
         self._generation += 1
         self._save_sequence += 1
         generation = self._generation
+        self._availability.clear()
+        self._availability.setVisible(False)
+        self._error.clear()
         if self._persistence is None:
             self._apply_settings(Settings(), unavailable=True)
             return
@@ -170,8 +199,7 @@ class SettingsPage(QWidget):
         self._loading = False
         if error is not None:
             self._set_controls_enabled(False)
-            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+            self._show_unavailable()
             return
         self._apply_settings(settings or Settings(), unavailable=False)
 
@@ -179,6 +207,7 @@ class SettingsPage(QWidget):
         self._settings = settings
         with (
             QSignalBlocker(self._language_combo),
+            QSignalBlocker(self._theme_combo),
             QSignalBlocker(self._auto_copy),
             QSignalBlocker(self._mode_combo),
             QSignalBlocker(self._start_hotkey),
@@ -186,6 +215,9 @@ class SettingsPage(QWidget):
         ):
             self._language_combo.setCurrentIndex(
                 max(0, self._language_combo.findData(settings.language))
+            )
+            self._theme_combo.setCurrentIndex(
+                max(0, self._theme_combo.findData(settings.theme_mode.value))
             )
             self._auto_copy.setChecked(settings.auto_copy)
             self._mode_combo.setCurrentIndex(
@@ -195,23 +227,25 @@ class SettingsPage(QWidget):
             self._cancel_hotkey.setText(str(settings.hotkeys.get("cancel", "")))
         if not unavailable:
             self._locale_config.set_locale(settings.language)
+        self.theme_changed.emit(settings.theme_mode.value)
         self._set_controls_enabled(not unavailable)
         self._model_value.setText(self._preference_text(settings.model_preferences))
         self._audio_value.setText(self._preference_text(settings.audio_preferences))
-        self._status.setText(
-            self._t(
-                TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE
-                if unavailable
-                else TranslationKey.COMMON_READY
-            )
-        )
+        self._status.setText(self._t(TranslationKey.COMMON_READY) if not unavailable else "")
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+        self._availability.setVisible(unavailable)
         self._error.clear()
-        if unavailable:
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+
+    def _show_unavailable(self) -> None:
+        self._status.clear()
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+        self._availability.setVisible(True)
+        self._error.clear()
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         for control in (
             self._language_combo,
+            self._theme_combo,
             self._auto_copy,
             self._mode_combo,
             self._start_hotkey,
@@ -224,6 +258,13 @@ class SettingsPage(QWidget):
             return
         self._locale_config.set_locale(self._language_combo.itemData(index))
         self._save_field("language", self._language_combo.itemData(index))
+
+    def _theme_changed(self, index: int) -> None:
+        if self._loading or self._disposed or index < 0:
+            return
+        theme_mode = self._theme_combo.itemData(index)
+        self.theme_changed.emit(theme_mode)
+        self._save_field("theme_mode", theme_mode)
 
     def _save_current(self) -> None:
         if self._loading or self._disposed or self._persistence is None:
@@ -253,7 +294,7 @@ class SettingsPage(QWidget):
             return
         if error is not None:
             self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+            self._error.setText(self._t(TranslationKey.SETTINGS_SAVE_ERROR))
         else:
             if result is not None:
                 self._settings = result
@@ -268,7 +309,9 @@ class SettingsPage(QWidget):
         del _locale
         self._title.setText(self._t(TranslationKey.SETTINGS_TITLE))
         self._subtitle.setText(self._t(TranslationKey.SETTINGS_SUBTITLE))
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
         self._language_label.setText(self._t(TranslationKey.SETTINGS_LANGUAGE))
+        self._theme_label.setText(self._t(TranslationKey.SETTINGS_THEME))
         self._auto_copy_label.setText(self._t(TranslationKey.SETTINGS_AUTO_COPY))
         self._mode_label.setText(self._t(TranslationKey.SETTINGS_MODE))
         self._start_hotkey_label.setText(self._t(TranslationKey.SETTINGS_START_STOP_HOTKEY))
@@ -290,6 +333,8 @@ class SettingsPage(QWidget):
             )
         for index, mode_id in enumerate(MODE_IDS):
             self._mode_combo.setItemText(index, self._t(MODE_NAMES[mode_id]))
+        for index, preference in enumerate(THEME_PREFERENCES):
+            self._theme_combo.setItemText(index, self._t(THEME_NAMES[preference]))
 
     def _t(self, key: TranslationKey, **values: object) -> str:
         return translate(key, self._locale_config.locale, **values)

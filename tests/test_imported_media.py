@@ -2127,6 +2127,59 @@ def test_windows_runner_cleans_process_and_job_when_assignment_fails(monkeypatch
     assert runner._kernel32.CloseHandle.calls
 
 
+def test_windows_ffmpeg_runner_suppresses_console_window(monkeypatch) -> None:
+    class Function:
+        def __init__(self, value=True) -> None:
+            self.value = value
+            self.calls: list[tuple[object, ...]] = []
+
+        def __call__(self, *args):
+            self.calls.append(args)
+            return self.value
+
+    class FakeKernel32:
+        CreateJobObjectW = Function(ctypes.c_void_p(323))
+        SetInformationJobObject = Function()
+        AssignProcessToJobObject = Function()
+        TerminateJobObject = Function()
+        CloseHandle = Function()
+
+    class Process:
+        _handle = 656
+        pid = 4568
+
+    process = Process()
+    captured: dict[str, object] = {}
+
+    def popen(*args, **kwargs):
+        del args
+        captured.update(kwargs)
+        return process
+
+    monkeypatch.setattr(media_process.os, "name", "nt")
+    monkeypatch.setattr(media_process.subprocess, "Popen", popen)
+    monkeypatch.setattr(media_process, "_resume_suspended_process", lambda pid: None)
+    monkeypatch.setattr(
+        media_process.SubprocessRunner,
+        "_collect_process",
+        lambda *args, **kwargs: ProcessResult(b"", b"", 0),
+    )
+
+    runner = WindowsJobObjectProcessRunner(kernel32=FakeKernel32())
+    runner.run(
+        ["ffmpeg.exe"],
+        timeout=1,
+        cancellation=type("Token", (), {"is_cancelled": lambda self: False})(),
+        max_stdout_bytes=1024,
+        max_stderr_bytes=1024,
+    )
+
+    flags = captured["creationflags"]
+    assert isinstance(flags, int)
+    assert flags & 0x00000004  # CREATE_SUSPENDED keeps Job Object assignment safe.
+    assert flags & 0x08000000  # CREATE_NO_WINDOW prevents the file-transcription flash.
+
+
 def test_windows_runner_terminates_job_on_collector_exception(monkeypatch) -> None:
     class Function:
         def __init__(self, value=True) -> None:
