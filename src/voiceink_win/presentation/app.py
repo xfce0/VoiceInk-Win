@@ -31,7 +31,9 @@ def _run_session(
     event_loop: Callable[[], int],
     after_show: Callable[[_Window], None] | None = None,
     cleanup_window: Callable[[_Window], None] | None = None,
+    close_composition: Callable[[], None] | None = None,
 ) -> int:
+    close = composition.close if close_composition is None else close_composition
     window: _Window | None = None
     try:
         window = create_window()
@@ -47,7 +49,7 @@ def _run_session(
         except BaseException:
             pass
         try:
-            composition.close()
+            close()
         except BaseException:
             pass
         raise
@@ -56,7 +58,7 @@ def _run_session(
             if window is not None and cleanup_window is not None:
                 cleanup_window(window)
         finally:
-            composition.close()
+            close()
         return result
 
 
