@@ -92,6 +92,7 @@ class TranslationKey(StrEnum):
     SETTINGS_MODEL = "settings.model"
     SETTINGS_AUDIO = "settings.audio"
     SETTINGS_BACKEND_UNAVAILABLE = "settings.backend_unavailable"
+    SETTINGS_SAVE_ERROR = "settings.save_error"
 
     HISTORY_TITLE = "history.title"
     HISTORY_SUBTITLE = "history.subtitle"
@@ -130,6 +131,7 @@ class TranslationKey(StrEnum):
     HISTORY_EXPORT_ERROR = "history.export_error"
     HISTORY_PREVIOUS = "history.previous"
     HISTORY_NEXT = "history.next"
+    HISTORY_VARIANT_ERROR = "history.variant_error"
 
     DICTIONARY_TITLE = "dictionary.title"
     DICTIONARY_SUBTITLE = "dictionary.subtitle"
@@ -401,7 +403,11 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.SETTINGS_MODEL: _entry("Model preference", "Настройка модели"),
     TranslationKey.SETTINGS_AUDIO: _entry("Audio preference", "Настройка аудио"),
     TranslationKey.SETTINGS_BACKEND_UNAVAILABLE: _entry(
-        "Backend is not configured yet.", "Среда выполнения пока не настроена."
+        "Unavailable in this build.", "Недоступно в этой сборке."
+    ),
+    TranslationKey.SETTINGS_SAVE_ERROR: _entry(
+        "Could not save settings. Try again.",
+        "Не удалось сохранить настройки. Попробуйте ещё раз.",
     ),
     TranslationKey.HISTORY_TITLE: _entry("History", "История"),
     TranslationKey.HISTORY_SUBTITLE: _entry(
@@ -464,6 +470,10 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.HISTORY_PREVIOUS: _entry("Previous", "Назад"),
     TranslationKey.HISTORY_NEXT: _entry("Next", "Далее"),
+    TranslationKey.HISTORY_VARIANT_ERROR: _entry(
+        "Could not save the transcript variant. Try again.",
+        "Не удалось сохранить вариант расшифровки. Попробуйте ещё раз.",
+    ),
     TranslationKey.DICTIONARY_TITLE: _entry("Dictionary", "Словарь"),
     TranslationKey.DICTIONARY_SUBTITLE: _entry(
         "Store replacement rules now. Applying them to transcription is not enabled in this build.",

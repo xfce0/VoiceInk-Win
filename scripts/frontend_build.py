@@ -9,6 +9,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from scripts.windows_platform import (
+        WindowsPlatform,
+        WindowsPlatformError,
+        detect_windows_platform,
+    )
+except ModuleNotFoundError:
+    from windows_platform import WindowsPlatform, WindowsPlatformError, detect_windows_platform
+
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 WORK = ROOT / "build" / "frontend"
@@ -44,16 +53,16 @@ def _run(command: list[str], *, env: dict[str, str] | None = None) -> None:
         raise FrontendBuildError(f"Command failed with exit code {result.returncode}: {rendered}")
 
 
-def _require_supported_host() -> None:
-    if platform.system() != "Windows" or platform.machine().lower() not in {"amd64", "x86_64"}:
-        raise FrontendBuildError(
-            "Frontend packaging requires 64-bit Windows. "
-            "Run `make check` on macOS/Linux, or run `make build` on Windows 10/11 x64."
-        )
+def _require_supported_host() -> WindowsPlatform:
+    try:
+        profile = detect_windows_platform()
+    except WindowsPlatformError as error:
+        raise FrontendBuildError(str(error)) from error
     if sys.version_info[:2] not in {(3, 12), (3, 13), (3, 14)}:
         raise FrontendBuildError(
             f"Python 3.12, 3.13, or 3.14 is required; found {platform.python_version()}"
         )
+    return profile
 
 
 def _prepare_outputs() -> None:
@@ -240,7 +249,8 @@ def _run_smoke() -> None:
 
 def main() -> int:
     try:
-        _require_supported_host()
+        profile = _require_supported_host()
+        print(f"frontend build: selected x64 settings ({profile.diagnostic})")
         _prepare_outputs()
         python = sys.executable
         _generate_icon(python)
