@@ -28,9 +28,10 @@ from voiceink_win.application import (
 from voiceink_win.application.transcribe_output import LocalTextFilePort
 from voiceink_win.domain import ShellSnapshot, ShellState
 
+from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
-from .history_page import HistoryPage
+from .history_page import HistoryAudioPort, HistoryFolderPort, HistoryPage
 from .icon_registry import SIDEBAR_ITEMS
 from .localization import (
     LocaleConfig,
@@ -248,7 +249,11 @@ class MainWindow(QMainWindow):
         locale_config: LocaleConfig | None = None,
         persistence: PersistenceService | None = None,
         artifact_cleanup=None,
+        artifact_reveal=None,
+        artifact_folder=None,
         history_deletion: HistoryDeletionService | None = None,
+        audio_port: HistoryAudioPort | None = None,
+        folder_port: HistoryFolderPort | None = None,
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
@@ -265,6 +270,10 @@ class MainWindow(QMainWindow):
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
         self._persistence = persistence
         self._artifact_cleanup = artifact_cleanup
+        self._audio_port = audio_port
+        self._folder_port = folder_port
+        self._artifact_reveal = artifact_reveal
+        self._artifact_folder = artifact_folder
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None
@@ -316,13 +325,21 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             artifact_cleanup=self._artifact_cleanup,
+            artifact_reveal=self._artifact_reveal,
+            artifact_folder=self._artifact_folder,
             history_deletion=self._history_deletion,
+            audio_port=self._audio_port,
+            folder_port=self._folder_port,
         )
         self._pages.addWidget(self._history_page)
         self._dictionary_page = DictionaryPage(
             self._persistence, self._pages, locale_config=self._locale_config
         )
         self._pages.addWidget(self._dictionary_page)
+        self._audio_page = AudioPage(
+            self._persistence, self._pages, locale_config=self._locale_config
+        )
+        self._pages.addWidget(self._audio_page)
         self._settings_page = SettingsPage(
             self._persistence, self._pages, locale_config=self._locale_config
         )
@@ -394,8 +411,11 @@ class MainWindow(QMainWindow):
         elif label == "Dictionary":
             self._pages.setCurrentIndex(4)
             self._dictionary_page.refresh()
-        elif label == "Settings":
+        elif label == "Audio":
             self._pages.setCurrentIndex(5)
+            self._audio_page.refresh()
+        elif label == "Settings":
+            self._pages.setCurrentIndex(6)
             self._settings_page.refresh()
         else:
             return
@@ -688,6 +708,7 @@ class MainWindow(QMainWindow):
         self._modes_page.dispose()
         self._history_page.dispose()
         self._dictionary_page.dispose()
+        self._audio_page.dispose()
         self._settings_page.dispose()
         if self._owns_history_deletion and self._history_deletion is not None:
             self._history_deletion.close()

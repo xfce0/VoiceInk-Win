@@ -94,8 +94,36 @@ class TranslationKey(StrEnum):
     SETTINGS_BACKEND_UNAVAILABLE = "settings.backend_unavailable"
     SETTINGS_SAVE_ERROR = "settings.save_error"
 
+    AUDIO_TITLE = "audio.title"
+    AUDIO_SUBTITLE = "audio.subtitle"
+    AUDIO_DEVICE_SECTION = "audio.device_section"
+    AUDIO_DEVICE_ROUTE = "audio.device_route"
+    AUDIO_ROUTE_SYSTEM_DEFAULT = "audio.route.system_default"
+    AUDIO_ROUTE_SELECTED_DEVICE = "audio.route.selected_device"
+    AUDIO_ROUTE_PRIORITY_ORDER = "audio.route.priority_order"
+    AUDIO_DEVICE_LIST = "audio.device_list"
+    AUDIO_NO_DEVICES = "audio.no_devices"
+    AUDIO_DEVICE_UNAVAILABLE = "audio.device_unavailable"
+    AUDIO_SELECTED_DEVICE = "audio.selected_device"
+    AUDIO_RECORDING_BEHAVIOR = "audio.recording_behavior"
+    AUDIO_MUTE_WHILE_RECORDING = "audio.mute_while_recording"
+    AUDIO_PAUSE_MEDIA_WHILE_RECORDING = "audio.pause_media_while_recording"
+    AUDIO_RESUME_DELAY = "audio.resume_delay"
+    AUDIO_START_SOUND = "audio.start_sound"
+    AUDIO_STOP_SOUND = "audio.stop_sound"
+    AUDIO_SOUND_NONE = "audio.sound.none"
+    AUDIO_SOUND_BUILT_IN = "audio.sound.built_in"
+    AUDIO_SOUND_CUSTOM = "audio.sound.custom"
+    AUDIO_FORMAT = "audio.format"
+    AUDIO_FORMAT_VALUE = "audio.format_value"
+    AUDIO_BACKEND_UNAVAILABLE = "audio.backend_unavailable"
+    AUDIO_PREFERENCES_READ_ONLY = "audio.preferences_read_only"
+
     HISTORY_TITLE = "history.title"
     HISTORY_SUBTITLE = "history.subtitle"
+    HISTORY_SEARCH_PLACEHOLDER = "history.search_placeholder"
+    HISTORY_SEARCH = "history.search"
+    HISTORY_SEARCH_ACCESSIBLE = "history.search_accessible"
     HISTORY_LOADING = "history.loading"
     HISTORY_EMPTY = "history.empty"
     HISTORY_EMPTY_RECORD = "history.empty_record"
@@ -112,6 +140,14 @@ class TranslationKey(StrEnum):
     HISTORY_COPYING = "history.copying"
     HISTORY_COPIED = "history.copied"
     HISTORY_COPY_ERROR = "history.copy_error"
+    HISTORY_AUDIO = "history.audio"
+    HISTORY_AUDIO_UNAVAILABLE = "history.audio_unavailable"
+    HISTORY_AUDIO_STARTED = "history.audio_started"
+    HISTORY_AUDIO_ERROR = "history.audio_error"
+    HISTORY_FOLDER = "history.folder"
+    HISTORY_FOLDER_UNAVAILABLE = "history.folder_unavailable"
+    HISTORY_FOLDER_OPENED = "history.folder_opened"
+    HISTORY_FOLDER_ERROR = "history.folder_error"
     HISTORY_DELETE = "history.delete"
     HISTORY_DELETE_TITLE = "history.delete_title"
     HISTORY_DELETE_CONFIRM = "history.delete_confirm"
@@ -135,12 +171,22 @@ class TranslationKey(StrEnum):
 
     DICTIONARY_TITLE = "dictionary.title"
     DICTIONARY_SUBTITLE = "dictionary.subtitle"
+    DICTIONARY_EMPTY = "dictionary.empty"
+    DICTIONARY_EMPTY_DETAIL = "dictionary.empty_detail"
+    DICTIONARY_LOADING_DETAIL = "dictionary.loading_detail"
+    DICTIONARY_ERROR_DETAIL = "dictionary.error_detail"
     DICTIONARY_PHRASE = "dictionary.phrase"
     DICTIONARY_REPLACEMENT = "dictionary.replacement"
     DICTIONARY_ENABLED = "dictionary.enabled"
     DICTIONARY_NEW = "dictionary.new"
+    DICTIONARY_EDIT = "dictionary.edit"
     DICTIONARY_SAVE = "dictionary.save"
     DICTIONARY_DELETE = "dictionary.delete"
+    DICTIONARY_RETRY = "dictionary.retry"
+    DICTIONARY_EDIT_ACCESSIBLE = "dictionary.edit_accessible"
+    DICTIONARY_DELETE_ACCESSIBLE = "dictionary.delete_accessible"
+    DICTIONARY_EDITOR_NEW = "dictionary.editor_new"
+    DICTIONARY_EDITOR_EDIT = "dictionary.editor_edit"
     DICTIONARY_PHRASE_REQUIRED = "dictionary.phrase_required"
     DICTIONARY_SAVE_ERROR = "dictionary.save_error"
     DICTIONARY_DELETE_TITLE = "dictionary.delete_title"
@@ -409,10 +455,70 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "Could not save settings. Try again.",
         "Не удалось сохранить настройки. Попробуйте ещё раз.",
     ),
+    TranslationKey.AUDIO_TITLE: _entry("Audio", "Аудио"),
+    TranslationKey.AUDIO_SUBTITLE: _entry(
+        "Choose how local microphone recordings will use audio input when the "
+        "native backend is available.",
+        "Выберите, как локальные записи с микрофона будут использовать аудиовход, "
+        "когда станет доступна нативная среда.",
+    ),
+    TranslationKey.AUDIO_DEVICE_SECTION: _entry("Input device", "Устройство ввода"),
+    TranslationKey.AUDIO_DEVICE_ROUTE: _entry("Input route", "Источник ввода"),
+    TranslationKey.AUDIO_ROUTE_SYSTEM_DEFAULT: _entry(
+        "System default", "Системное устройство по умолчанию"
+    ),
+    TranslationKey.AUDIO_ROUTE_SELECTED_DEVICE: _entry("Selected device", "Выбранное устройство"),
+    TranslationKey.AUDIO_ROUTE_PRIORITY_ORDER: _entry("Priority order", "Порядок приоритета"),
+    TranslationKey.AUDIO_DEVICE_LIST: _entry("Available microphones", "Доступные микрофоны"),
+    TranslationKey.AUDIO_NO_DEVICES: _entry(
+        "No input devices are available in this build.",
+        "В этой сборке устройства ввода недоступны.",
+    ),
+    TranslationKey.AUDIO_DEVICE_UNAVAILABLE: _entry(
+        "Microphone enumeration is unavailable until the native audio backend is enabled.",
+        "Перечень микрофонов недоступен, пока не включена нативная аудиосреда.",
+    ),
+    TranslationKey.AUDIO_SELECTED_DEVICE: _entry("Selected device", "Выбранное устройство"),
+    TranslationKey.AUDIO_RECORDING_BEHAVIOR: _entry("Recording behavior", "Поведение записи"),
+    TranslationKey.AUDIO_MUTE_WHILE_RECORDING: _entry(
+        "Mute other audio while recording", "Отключать другой звук во время записи"
+    ),
+    TranslationKey.AUDIO_PAUSE_MEDIA_WHILE_RECORDING: _entry(
+        "Pause media while recording", "Приостанавливать медиа во время записи"
+    ),
+    TranslationKey.AUDIO_RESUME_DELAY: _entry(
+        "Resume delay (seconds)", "Задержка возобновления (секунды)"
+    ),
+    TranslationKey.AUDIO_START_SOUND: _entry("Start sound", "Звук начала"),
+    TranslationKey.AUDIO_STOP_SOUND: _entry("Stop sound", "Звук окончания"),
+    TranslationKey.AUDIO_SOUND_NONE: _entry("None", "Нет"),
+    TranslationKey.AUDIO_SOUND_BUILT_IN: _entry("Built-in", "Встроенный"),
+    TranslationKey.AUDIO_SOUND_CUSTOM: _entry("Custom", "Пользовательский"),
+    TranslationKey.AUDIO_FORMAT: _entry("Canonical format", "Канонический формат"),
+    TranslationKey.AUDIO_FORMAT_VALUE: _entry(
+        "Mono 16 kHz signed PCM16", "Моно, 16 кГц, знаковый PCM16"
+    ),
+    TranslationKey.AUDIO_BACKEND_UNAVAILABLE: _entry(
+        "Native microphone capture and playback are unavailable in this build.",
+        "Нативные захват с микрофона и воспроизведение недоступны в этой сборке.",
+    ),
+    TranslationKey.AUDIO_PREFERENCES_READ_ONLY: _entry(
+        "Audio preferences are shown from local storage and will apply when the "
+        "native backend is available.",
+        "Аудионастройки показаны из локального хранилища и применятся, когда станет "
+        "доступна нативная среда.",
+    ),
     TranslationKey.HISTORY_TITLE: _entry("History", "История"),
     TranslationKey.HISTORY_SUBTITLE: _entry(
         "Saved transcripts are loaded from local SQLite storage, newest first.",
         "Сохранённые расшифровки загружаются из локального SQLite, сначала новые.",
+    ),
+    TranslationKey.HISTORY_SEARCH_PLACEHOLDER: _entry(
+        "Search source or transcript", "Поиск по источнику или расшифровке"
+    ),
+    TranslationKey.HISTORY_SEARCH: _entry("Search", "Найти"),
+    TranslationKey.HISTORY_SEARCH_ACCESSIBLE: _entry(
+        "Search transcript history", "Поиск по истории расшифровок"
     ),
     TranslationKey.HISTORY_LOADING: _entry("Loading history...", "Загрузка истории..."),
     TranslationKey.HISTORY_EMPTY: _entry("No transcripts yet.", "Расшифровок пока нет."),
@@ -435,6 +541,18 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.HISTORY_COPIED: _entry("Copied", "Скопировано"),
     TranslationKey.HISTORY_COPY_ERROR: _entry(
         "Could not copy the transcript.", "Не удалось скопировать расшифровку."
+    ),
+    TranslationKey.HISTORY_AUDIO: _entry("Audio", "Аудио"),
+    TranslationKey.HISTORY_AUDIO_UNAVAILABLE: _entry("Audio unavailable", "Аудио недоступно"),
+    TranslationKey.HISTORY_AUDIO_STARTED: _entry("Playing audio", "Воспроизведение аудио"),
+    TranslationKey.HISTORY_AUDIO_ERROR: _entry(
+        "Could not play the audio.", "Не удалось воспроизвести аудио."
+    ),
+    TranslationKey.HISTORY_FOLDER: _entry("Folder", "Папка"),
+    TranslationKey.HISTORY_FOLDER_UNAVAILABLE: _entry("Folder unavailable", "Папка недоступна"),
+    TranslationKey.HISTORY_FOLDER_OPENED: _entry("Opened folder", "Папка открыта"),
+    TranslationKey.HISTORY_FOLDER_ERROR: _entry(
+        "Could not open the folder.", "Не удалось открыть папку."
     ),
     TranslationKey.HISTORY_DELETE: _entry("Delete", "Удалить"),
     TranslationKey.HISTORY_DELETE_TITLE: _entry("Delete transcript", "Удалить расшифровку"),
@@ -476,15 +594,37 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.DICTIONARY_TITLE: _entry("Dictionary", "Словарь"),
     TranslationKey.DICTIONARY_SUBTITLE: _entry(
-        "Store replacement rules now. Applying them to transcription is not enabled in this build.",
-        "Сохраняйте правила замен. Применение к расшифровке в этой сборке не включено.",
+        "Keep names and terms consistent in every transcription.",
+        "Сохраняйте единообразие имён и терминов в каждой расшифровке.",
+    ),
+    TranslationKey.DICTIONARY_EMPTY: _entry("No replacement rules yet.", "Правил замен пока нет."),
+    TranslationKey.DICTIONARY_EMPTY_DETAIL: _entry(
+        "Add a phrase to keep names and terms consistent.",
+        "Добавьте фразу, чтобы сохранять единообразие имён и терминов.",
+    ),
+    TranslationKey.DICTIONARY_LOADING_DETAIL: _entry(
+        "Loading your saved rules...", "Загружаем сохранённые правила..."
+    ),
+    TranslationKey.DICTIONARY_ERROR_DETAIL: _entry(
+        "Rules could not be loaded. Check local storage and try again.",
+        "Не удалось загрузить правила. Проверьте локальное хранилище и повторите попытку.",
     ),
     TranslationKey.DICTIONARY_PHRASE: _entry("Phrase", "Фраза"),
-    TranslationKey.DICTIONARY_REPLACEMENT: _entry("Replacement", "Замена"),
+    TranslationKey.DICTIONARY_REPLACEMENT: _entry("Replace with", "Заменять на"),
     TranslationKey.DICTIONARY_ENABLED: _entry("Rule enabled", "Правило включено"),
-    TranslationKey.DICTIONARY_NEW: _entry("New", "Новое"),
-    TranslationKey.DICTIONARY_SAVE: _entry("Save", "Сохранить"),
+    TranslationKey.DICTIONARY_NEW: _entry("Add rule", "Добавить правило"),
+    TranslationKey.DICTIONARY_EDIT: _entry("Edit", "Изменить"),
+    TranslationKey.DICTIONARY_SAVE: _entry("Save rule", "Сохранить правило"),
     TranslationKey.DICTIONARY_DELETE: _entry("Delete", "Удалить"),
+    TranslationKey.DICTIONARY_RETRY: _entry("Try again", "Повторить"),
+    TranslationKey.DICTIONARY_EDIT_ACCESSIBLE: _entry(
+        "Edit dictionary rule", "Изменить правило словаря"
+    ),
+    TranslationKey.DICTIONARY_DELETE_ACCESSIBLE: _entry(
+        "Delete dictionary rule", "Удалить правило словаря"
+    ),
+    TranslationKey.DICTIONARY_EDITOR_NEW: _entry("New rule", "Новое правило"),
+    TranslationKey.DICTIONARY_EDITOR_EDIT: _entry("Edit rule", "Изменение правила"),
     TranslationKey.DICTIONARY_PHRASE_REQUIRED: _entry("Enter a phrase.", "Введите фразу."),
     TranslationKey.DICTIONARY_SAVE_ERROR: _entry(
         "Could not save this rule. The phrase may already exist.",

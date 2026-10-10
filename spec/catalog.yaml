@@ -72,6 +72,14 @@ documents:
     kind: rfc
     status: proposed
     implementation_allowed: false
+  - path: rfcs/workstreams/dictionary-visual-redesign.md
+    kind: rfc
+    status: proposed
+  - path: rfcs/workstreams/audio-page-controls.md
+    kind: rfc
+    status: proposed
+    implementation_allowed: true
+    native_enablement_allowed: false
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed
