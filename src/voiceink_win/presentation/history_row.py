@@ -106,8 +106,9 @@ class HistoryRow(QFrame):
         self._full_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self._full_text)
 
-        actions = QHBoxLayout()
+        actions = QVBoxLayout()
         actions.setSpacing(6)
+        selector_row = QHBoxLayout()
         self._variant = QComboBox(self)
         self._variant.setObjectName("historyVariant")
         self._variant.addItem("Original", TranscriptVariant.ORIGINAL.value)
@@ -115,23 +116,30 @@ class HistoryRow(QFrame):
         self._variant.setCurrentIndex(
             1 if self.record.selected_variant is TranscriptVariant.ENHANCED else 0
         )
-        actions.addWidget(self._variant)
-        actions.addStretch(1)
+        selector_row.addWidget(self._variant)
+        selector_row.addStretch(1)
+        actions.addLayout(selector_row)
+
         self._copy = self._action_button()
         self._audio = self._action_button()
         self._folder = self._action_button()
         self._export_txt = self._action_button()
         self._export_markdown = self._action_button()
         self._delete = self._action_button()
-        for button in (
-            self._copy,
-            self._audio,
-            self._folder,
-            self._export_txt,
-            self._export_markdown,
-            self._delete,
-        ):
-            actions.addWidget(button)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        action_row.addStretch(1)
+        for button in (self._copy, self._audio, self._folder):
+            action_row.addWidget(button)
+        actions.addLayout(action_row)
+
+        export_row = QHBoxLayout()
+        export_row.setSpacing(6)
+        export_row.addStretch(1)
+        for button in (self._export_txt, self._export_markdown, self._delete):
+            export_row.addWidget(button)
+        actions.addLayout(export_row)
         layout.addLayout(actions)
 
     def _action_button(self) -> QPushButton:

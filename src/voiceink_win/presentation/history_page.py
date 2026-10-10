@@ -189,6 +189,19 @@ class HistoryPage(QWidget):
         self._export_txt = QPushButton(self)
         self._export_markdown = QPushButton(self)
         self._delete = QPushButton(self)
+        self._fallback_copy = self._copy
+        self._fallback_variant = self._variant
+        self._fallback_export_txt = self._export_txt
+        self._fallback_export_markdown = self._export_markdown
+        self._fallback_delete = self._delete
+        for control in (
+            self._copy,
+            self._variant,
+            self._export_txt,
+            self._export_markdown,
+            self._delete,
+        ):
+            control.setVisible(False)
         self.apply_locale()
 
     def refresh(self) -> None:
@@ -277,6 +290,7 @@ class HistoryPage(QWidget):
         self._rows.clear()
         self._selected = None
         self._text.clear()
+        self._bind_action_handles(None)
         self._variant.setEnabled(False)
         self._metadata.setText(
             self._t(TranslationKey.HISTORY_EMPTY)
@@ -375,6 +389,7 @@ class HistoryPage(QWidget):
                 self._resize_row(item, row)
         if self._selected is None:
             self._text.clear()
+            self._bind_action_handles(None)
             self._variant.setEnabled(False)
             self._metadata.setText(self._t(TranslationKey.HISTORY_SELECT))
             self._copy.setEnabled(False)
@@ -384,11 +399,7 @@ class HistoryPage(QWidget):
             return
         record = self._selected
         row = self._rows[record.id]
-        self._copy = row.copy_button
-        self._variant = row.variant_combo
-        self._export_txt = row.export_txt_button
-        self._export_markdown = row.export_markdown_button
-        self._delete = row.delete_button
+        self._bind_action_handles(row)
         self._variant.setEnabled(True)
         self._variant.blockSignals(True)
         self._variant.setCurrentIndex(self._variant.findData(record.selected_variant.value))
@@ -399,6 +410,20 @@ class HistoryPage(QWidget):
         self._export_txt.setEnabled(bool(self._text.toPlainText()))
         self._export_markdown.setEnabled(bool(self._text.toPlainText()))
         self._delete.setEnabled(True)
+
+    def _bind_action_handles(self, row: HistoryRow | None) -> None:
+        if row is None:
+            self._copy = self._fallback_copy
+            self._variant = self._fallback_variant
+            self._export_txt = self._fallback_export_txt
+            self._export_markdown = self._fallback_export_markdown
+            self._delete = self._fallback_delete
+            return
+        self._copy = row.copy_button
+        self._variant = row.variant_combo
+        self._export_txt = row.export_txt_button
+        self._export_markdown = row.export_markdown_button
+        self._delete = row.delete_button
 
     def _copy_record(self, record: HistoryRecord) -> None:
         self._select_record_if_needed(record.id)
