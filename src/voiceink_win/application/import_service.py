@@ -22,6 +22,7 @@ from voiceink_win.domain import (
     EndOfStream,
     ErrorCode,
     Failed,
+    HistoryAudioArtifactPort,
     HistoryPort,
     HistoryRecord,
     HistoryStatus,
@@ -133,6 +134,7 @@ class _Record:
     deadline_interrupt_started: float | None = None
     asr_handle: AsrRequestHandle | None = None
     asr_handle_released: bool = False
+    audio_artifact_path: str | None = None
 
 
 class _JobObservation:
@@ -199,6 +201,7 @@ class ImportedMediaTranscriptionService:
         max_completed_records: int = 256,
         retry_backoff: Callable[[int], float] | None = None,
         history_port: HistoryPort | None = None,
+        audio_artifact_port: HistoryAudioArtifactPort | None = None,
         history_persist_retries: int = 3,
         history_persist_timeout_seconds: float = 5.0,
     ) -> None:
@@ -218,6 +221,7 @@ class ImportedMediaTranscriptionService:
             lambda attempt: min(30.0, 0.1 * (2 ** (attempt - 1)))
         )
         self._history_port = history_port
+        self._audio_artifact_port = audio_artifact_port
         if history_persist_retries < 1:
             raise ValueError("history persistence retries must be positive")
         if history_persist_timeout_seconds <= 0:
@@ -666,7 +670,6 @@ class ImportedMediaTranscriptionService:
                 deadline=stage_deadline,
                 cancellation=record.cancellation.token,
             )
-            record.normalized = None
             record.asr_handle = self._asr.try_admit(request)
             record.asr_handle_released = False
             with self._workspace_processing_lock(record.workspace):
@@ -729,6 +732,7 @@ class ImportedMediaTranscriptionService:
     def _retry(self, record: _Record) -> None:
         job = record.job
         old_workspace = record.workspace
+        record.normalized = None
         record.retry_wakeup.clear()
         if not job.transition(job.attempt, Stage.TRANSCRIBING, Stage.RETRY_WAITING):
             self._cleanup_and_publish(record)
@@ -857,6 +861,7 @@ class ImportedMediaTranscriptionService:
                 self._recovery_workspaces.discard(workspace)
         job = record.job
         result = self._make_terminal_result(record)
+        self._persist_audio_artifact(record, result)
         self._persist_history_once(record, result)
         result = self._make_terminal_result(record)
         if job.complete(job.attempt, Stage.CLEANING_UP, result):
@@ -886,6 +891,28 @@ class ImportedMediaTranscriptionService:
                     )
         with self._lock:
             self._prune_completed_locked()
+
+    def _persist_audio_artifact(self, record: _Record, result: TerminalResult) -> None:
+        if (
+            not isinstance(result, Success)
+            or self._history_port is None
+            or self._audio_artifact_port is None
+            or record.normalized is None
+            or record.audio_artifact_path is not None
+        ):
+            return
+        try:
+            path = self._audio_artifact_port.save_normalized_audio(
+                record.normalized.audio, record.job.job_id.value
+            )
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("audio artifact store returned an invalid path")
+            record.audio_artifact_path = path
+        except BaseException:
+            logger.exception(
+                "history audio artifact was not saved",
+                extra={"job_id": record.job.job_id.value},
+            )
 
     def _recover_worker_failure(self, record: _Record, error: BaseException) -> None:
         if record.job.is_terminal():
@@ -1114,6 +1141,20 @@ class ImportedMediaTranscriptionService:
                     record.history_persisted = True
                     return
             record.history_persistence_warning = True
+            self._remove_unlinked_audio_artifact(record)
+
+    def _remove_unlinked_audio_artifact(self, record: _Record) -> None:
+        if self._audio_artifact_port is None or record.audio_artifact_path is None:
+            return
+        try:
+            self._audio_artifact_port.delete(record.audio_artifact_path)
+        except BaseException:
+            logger.exception(
+                "unlinked history audio artifact cleanup failed",
+                extra={"job_id": record.job.job_id.value},
+            )
+        else:
+            record.audio_artifact_path = None
 
     def _history_record(self, record: _Record, result: TerminalResult) -> HistoryRecord:
         if isinstance(result, Success):
@@ -1127,6 +1168,7 @@ class ImportedMediaTranscriptionService:
                 selected_variant=TranscriptVariant.ORIGINAL,
                 status=HistoryStatus.COMPLETED,
                 source_metadata=self._history_source_metadata(record),
+                audio_artifact_path=record.audio_artifact_path,
             )
         if isinstance(result, Failed):
             return HistoryRecord(
