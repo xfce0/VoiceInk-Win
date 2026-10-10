@@ -61,11 +61,11 @@ class HistoryMediaActionResult:
 class HistoryAudioPlaybackPort(Protocol):
     def is_available(self) -> bool: ...
 
-    def play(
-        self,
-        resolved_artifact: Path,
-        on_failure: Callable[[Exception], None] | None = None,
-    ) -> None: ...
+    def play(self, resolved_artifact: Path) -> None: ...
+
+
+class HistoryAudioPlaybackEventsPort(Protocol):
+    def set_failure_callback(self, callback: Callable[[Exception], None] | None) -> None: ...
 
 
 class HistoryArtifactRevealPort(Protocol):
@@ -145,7 +145,10 @@ class HistoryMediaActionService:
             return HistoryMediaActionResult(HistoryMediaCode.PLATFORM_UNAVAILABLE)
         try:
             if action == "audio":
-                port.play(artifact, on_failure=self._async_failure(record, action, on_result))
+                set_failure_callback = getattr(port, "set_failure_callback", None)
+                if callable(set_failure_callback):
+                    set_failure_callback(self._async_failure(record, action, on_result))
+                port.play(artifact)
             else:
                 port.reveal(artifact)
         except Exception as error:
@@ -186,12 +189,12 @@ class HistoryMediaActionService:
             self._log(
                 record,
                 "resolve",
-                HistoryMediaCode.OPERATION_FAILED,
+                HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID,
                 logging.WARNING,
                 failure_stage="resolve",
                 exception_type=type(error).__name__,
             )
-            return None, HistoryMediaCode.OPERATION_FAILED
+            return None, HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
 
     def _capability(
         self,
@@ -271,6 +274,7 @@ class HistoryMediaActionService:
 __all__ = [
     "HistoryArtifactRevealPort",
     "HistoryAudioPlaybackPort",
+    "HistoryAudioPlaybackEventsPort",
     "HistoryMediaActionResult",
     "HistoryMediaActionService",
     "HistoryMediaAvailability",

@@ -16,6 +16,7 @@ from .global_shortcut import (
 )
 from .history_media import (
     HistoryArtifactRevealPort,
+    HistoryAudioPlaybackEventsPort,
     HistoryAudioPlaybackPort,
     HistoryMediaActionResult,
     HistoryMediaActionService,
@@ -53,6 +54,7 @@ __all__ = [
     "ShortcutAvailability",
     "HistoryArtifactRevealPort",
     "HistoryAudioPlaybackPort",
+    "HistoryAudioPlaybackEventsPort",
     "HistoryMediaActionResult",
     "HistoryMediaActionService",
     "HistoryMediaAvailability",
