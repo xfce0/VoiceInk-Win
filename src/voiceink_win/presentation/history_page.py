@@ -68,6 +68,8 @@ class HistoryPage(QWidget):
         parent: QWidget | None = None,
         locale_config: LocaleConfig | None = None,
         artifact_cleanup: Callable[[str], None] | None = None,
+        artifact_reveal: Callable[[str], Path] | None = None,
+        artifact_folder: Path | None = None,
         history_deletion: HistoryDeletionService | None = None,
         text_files: TextFilePort | None = None,
         audio_port: HistoryAudioPort | None = None,
@@ -77,6 +79,8 @@ class HistoryPage(QWidget):
         self.setObjectName("historyPage")
         self._persistence = persistence
         self._artifact_cleanup = artifact_cleanup
+        self._artifact_reveal = artifact_reveal
+        self._artifact_folder = artifact_folder
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None

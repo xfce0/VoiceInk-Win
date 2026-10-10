@@ -249,6 +249,8 @@ class MainWindow(QMainWindow):
         locale_config: LocaleConfig | None = None,
         persistence: PersistenceService | None = None,
         artifact_cleanup=None,
+        artifact_reveal=None,
+        artifact_folder=None,
         history_deletion: HistoryDeletionService | None = None,
         audio_port: HistoryAudioPort | None = None,
         folder_port: HistoryFolderPort | None = None,
@@ -270,6 +272,8 @@ class MainWindow(QMainWindow):
         self._artifact_cleanup = artifact_cleanup
         self._audio_port = audio_port
         self._folder_port = folder_port
+        self._artifact_reveal = artifact_reveal
+        self._artifact_folder = artifact_folder
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None
@@ -321,6 +325,8 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             artifact_cleanup=self._artifact_cleanup,
+            artifact_reveal=self._artifact_reveal,
+            artifact_folder=self._artifact_folder,
             history_deletion=self._history_deletion,
             audio_port=self._audio_port,
             folder_port=self._folder_port,
