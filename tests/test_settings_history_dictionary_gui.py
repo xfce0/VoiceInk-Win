@@ -76,6 +76,35 @@ def test_navigation_reaches_all_persisted_pages(application: QApplication, persi
         store.close().result(timeout=2)
 
 
+def test_unavailable_persistence_uses_neutral_page_states(application: QApplication) -> None:
+    window = MainWindow(ShellController.unavailable())
+    window.show()
+    application.processEvents()
+    try:
+        settings = window._settings_page
+        history = window._history_page
+        dictionary = window._dictionary_page
+
+        assert not settings._availability.isHidden()
+        assert settings._availability.text() == "Local storage is unavailable."
+        assert settings._model_value.text() == "Unavailable in this build."
+        assert settings._audio_value.text() == "Unavailable in this build."
+        assert settings._error.text() == ""
+
+        assert not history._availability.isHidden()
+        assert history._availability.text() == "Local storage is unavailable."
+        assert history._error.text() == ""
+
+        assert not dictionary._availability.isHidden()
+        assert dictionary._availability.text() == "Local storage is unavailable."
+        assert dictionary._error.text() == ""
+        assert settings._error.objectName() == "inlineError"
+        assert history._error.objectName() == "inlineError"
+        assert dictionary._error.objectName() == "inlineError"
+    finally:
+        window.close()
+
+
 def test_settings_roundtrip_reloads_language_mode_and_hotkeys(
     application: QApplication, persistence
 ) -> None:
@@ -153,6 +182,7 @@ def test_dictionary_crud_is_async_and_validates_phrase(
         _wait(application, lambda: page._status.text() != "Loading...")
         page._save.click()
         assert page._error.text() == "Enter a phrase."
+        assert page._error.objectName() == "inlineError"
         page._phrase.setText("Voice Ink")
         page._replacement.setText("VoiceInk")
         page._save.click()

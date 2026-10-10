@@ -65,6 +65,10 @@ class SettingsPage(QWidget):
         self._subtitle.setObjectName("heroSubtext")
         self._subtitle.setWordWrap(True)
         root.addWidget(self._subtitle)
+        self._availability = QLabel(content)
+        self._availability.setObjectName("pageUnavailable")
+        self._availability.setWordWrap(True)
+        root.addWidget(self._availability)
 
         form = QFormLayout()
         self._language_label = self._form_label(form, TranslationKey.SETTINGS_LANGUAGE)
@@ -131,7 +135,7 @@ class SettingsPage(QWidget):
         self._status.setObjectName("metadata")
         root.addWidget(self._status)
         self._error = QLabel(content)
-        self._error.setObjectName("pageError")
+        self._error.setObjectName("inlineError")
         self._error.setWordWrap(True)
         root.addWidget(self._error)
         scroll.setWidget(content)
@@ -151,6 +155,9 @@ class SettingsPage(QWidget):
         self._generation += 1
         self._save_sequence += 1
         generation = self._generation
+        self._availability.clear()
+        self._availability.setVisible(False)
+        self._error.clear()
         if self._persistence is None:
             self._apply_settings(Settings(), unavailable=True)
             return
@@ -170,8 +177,7 @@ class SettingsPage(QWidget):
         self._loading = False
         if error is not None:
             self._set_controls_enabled(False)
-            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+            self._show_unavailable()
             return
         self._apply_settings(settings or Settings(), unavailable=False)
 
@@ -198,16 +204,16 @@ class SettingsPage(QWidget):
         self._set_controls_enabled(not unavailable)
         self._model_value.setText(self._preference_text(settings.model_preferences))
         self._audio_value.setText(self._preference_text(settings.audio_preferences))
-        self._status.setText(
-            self._t(
-                TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE
-                if unavailable
-                else TranslationKey.COMMON_READY
-            )
-        )
+        self._status.setText(self._t(TranslationKey.COMMON_READY) if not unavailable else "")
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+        self._availability.setVisible(unavailable)
         self._error.clear()
-        if unavailable:
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+
+    def _show_unavailable(self) -> None:
+        self._status.clear()
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+        self._availability.setVisible(True)
+        self._error.clear()
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         for control in (
@@ -253,7 +259,7 @@ class SettingsPage(QWidget):
             return
         if error is not None:
             self._status.setText(self._t(TranslationKey.COMMON_ERROR))
-            self._error.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
+            self._error.setText(self._t(TranslationKey.SETTINGS_SAVE_ERROR))
         else:
             if result is not None:
                 self._settings = result
@@ -268,6 +274,7 @@ class SettingsPage(QWidget):
         del _locale
         self._title.setText(self._t(TranslationKey.SETTINGS_TITLE))
         self._subtitle.setText(self._t(TranslationKey.SETTINGS_SUBTITLE))
+        self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
         self._language_label.setText(self._t(TranslationKey.SETTINGS_LANGUAGE))
         self._auto_copy_label.setText(self._t(TranslationKey.SETTINGS_AUTO_COPY))
         self._mode_label.setText(self._t(TranslationKey.SETTINGS_MODE))
