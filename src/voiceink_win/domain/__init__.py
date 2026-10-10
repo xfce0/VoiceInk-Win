@@ -1,5 +1,22 @@
 """Public platform-independent ASR foundation."""
 
+from .audio_capture import (
+    BoundedPcm16Capture,
+    CaptureBusyError,
+    CaptureCancelledError,
+    CaptureError,
+    CaptureErrorCode,
+    CaptureLimitError,
+    CaptureLimits,
+    CaptureTimeoutError,
+    InputDevice,
+    InvalidCaptureChunkError,
+    MicrophoneAvailability,
+    MicrophoneStatus,
+    MicrophoneUnavailableError,
+    RecordingResult,
+    RecordingState,
+)
 from .cancellation import CancellationToken
 from .errors import (
     AsrError,
@@ -101,7 +118,7 @@ from .persistence import (
     TranscriptionSource,
     canonical_dictionary_key,
 )
-from .ports import AsrRequestHandle, AsrRuntime
+from .ports import AsrRequestHandle, AsrRuntime, AudioCaptureSession, AudioInputPort
 from .shell import ShellSnapshot, ShellState
 from .transcribe import (
     SUPPORTED_MEDIA_EXTENSIONS,
@@ -132,6 +149,16 @@ __all__ = [
     "AsrRequest",
     "AsrRuntime",
     "AsrRequestHandle",
+    "AudioCaptureSession",
+    "AudioInputPort",
+    "BoundedPcm16Capture",
+    "CaptureCancelledError",
+    "CaptureBusyError",
+    "CaptureError",
+    "CaptureErrorCode",
+    "CaptureLimitError",
+    "CaptureLimits",
+    "CaptureTimeoutError",
     "DictionaryEntry",
     "DictionaryPort",
     "HistoryPage",
@@ -159,7 +186,12 @@ __all__ = [
     "ExecutionError",
     "HealthStatus",
     "InvalidInputError",
+    "InputDevice",
+    "InvalidCaptureChunkError",
     "MissingModelError",
+    "MicrophoneAvailability",
+    "MicrophoneStatus",
+    "MicrophoneUnavailableError",
     "ProcessCrashedError",
     "ProtocolError",
     "QueueFullError",
@@ -170,6 +202,8 @@ __all__ = [
     "TranscriptResult",
     "TranscriptSegment",
     "WordTimestamp",
+    "RecordingResult",
+    "RecordingState",
     "MAX_CANONICAL_AUDIO_BYTES",
     "Attempt",
     "Cancelled",
