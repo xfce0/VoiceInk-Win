@@ -235,8 +235,7 @@ class TranslationKey(StrEnum):
     DASHBOARD_DETAIL_EMPTY = "dashboard.detail.empty"
     DASHBOARD_DETAIL_ERROR = "dashboard.detail.error"
     DASHBOARD_OPEN_RECORDER = "dashboard.open_recorder"
-    DASHBOARD_RECORDER_UNAVAILABLE = "dashboard.recorder_unavailable"
-    DASHBOARD_INSIGHTS_LOCKED = "dashboard.insights_locked"
+    DASHBOARD_INSIGHTS_UNAVAILABLE = "dashboard.insights_unavailable"
     DASHBOARD_RECENT_TRANSCRIPTS = "dashboard.recent_transcripts"
     DASHBOARD_NO_SESSIONS = "dashboard.no_sessions"
     DASHBOARD_CAPABILITY_UNAVAILABLE = "dashboard.capability_unavailable"
@@ -364,14 +363,14 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.RECORDER_CLOSE_DESCRIPTION: _entry(
         "Close the floating recorder", "Закрыть плавающий рекордер"
     ),
-    TranslationKey.RECORDER_STATUS_UNAVAILABLE: _entry("Unavailable", "Недоступно"),
+    TranslationKey.RECORDER_STATUS_UNAVAILABLE: _entry("Not available", "Недоступно"),
     TranslationKey.RECORDER_STATUS_READY: _entry("Ready", "Готово"),
     TranslationKey.RECORDER_STATUS_LISTENING: _entry("Listening", "Слушаю"),
     TranslationKey.RECORDER_STATUS_TRANSCRIBING: _entry("Transcribing", "Расшифровываю"),
     TranslationKey.RECORDER_STATUS_TRANSCRIPT_READY: _entry("Transcript ready", "Текст готов"),
     TranslationKey.RECORDER_STATUS_NO_WORDS: _entry("No words captured", "Слова не распознаны"),
     TranslationKey.RECORDER_STATUS_ACTION_NEEDED: _entry("Action needed", "Требуется действие"),
-    TranslationKey.RECORDER_ACTION_UNAVAILABLE: _entry("Unavailable", "Недоступно"),
+    TranslationKey.RECORDER_ACTION_UNAVAILABLE: _entry("Not available", "Недоступно"),
     TranslationKey.RECORDER_ACTION_START: _entry("Start recording", "Начать запись"),
     TranslationKey.RECORDER_ACTION_STOP: _entry("Stop recording", "Остановить запись"),
     TranslationKey.RECORDER_ACTION_WORKING: _entry("Working...", "Обработка..."),
@@ -385,8 +384,7 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "Recording unavailable", "Запись недоступна"
     ),
     TranslationKey.RECORDER_UNAVAILABLE_DESCRIPTION: _entry(
-        "Microphone capture is not connected in this build.",
-        "В этой сборке захват с микрофона не подключён.",
+        "Microphone recording is not available.", "Запись с микрофона недоступна."
     ),
     TranslationKey.SIDEBAR_DASHBOARD: _entry("Dashboard", "Панель"),
     TranslationKey.SIDEBAR_MODES: _entry("Modes", "Режимы"),
@@ -487,9 +485,7 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.SETTINGS_MODEL: _entry("Model preference", "Настройка модели"),
     TranslationKey.SETTINGS_AUDIO: _entry("Audio preference", "Настройка аудио"),
-    TranslationKey.SETTINGS_BACKEND_UNAVAILABLE: _entry(
-        "Unavailable in this build.", "Недоступно в этой сборке."
-    ),
+    TranslationKey.SETTINGS_BACKEND_UNAVAILABLE: _entry("Not available.", "Недоступно."),
     TranslationKey.SETTINGS_SAVE_ERROR: _entry(
         "Could not save settings. Try again.",
         "Не удалось сохранить настройки. Попробуйте ещё раз.",
@@ -683,15 +679,15 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.GREETING_EVENING: _entry("Good evening.", "Добрый вечер."),
     TranslationKey.GREETING_DEFAULT: _entry("Hi.", "Здравствуйте."),
     TranslationKey.DASHBOARD_SUBTEXT_UNAVAILABLE: _entry(
-        "Recording cannot start because microphone capture and ASR are not included.",
-        "Запись не может начаться: захват с микрофона и ASR не включены.",
+        "Microphone recording is not available right now.",
+        "Запись с микрофона сейчас недоступна.",
     ),
     TranslationKey.DASHBOARD_SUBTEXT_READY: _entry(
         "Record a thought, then let VoiceInk turn it into clear text.",
         "Запишите мысль, а VoiceInk превратит её в понятный текст.",
     ),
     TranslationKey.DASHBOARD_STATE_UNAVAILABLE: _entry(
-        "Recording unavailable", "Запись недоступна"
+        "Recording not available", "Запись недоступна"
     ),
     TranslationKey.DASHBOARD_STATE_READY: _entry("Ready for your voice", "Готов к вашему голосу"),
     TranslationKey.DASHBOARD_STATE_RECORDING: _entry("Recording in progress", "Идёт запись"),
@@ -704,7 +700,7 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "Transcription needs attention", "Нужно проверить расшифровку"
     ),
     TranslationKey.DASHBOARD_HEADLINE_UNAVAILABLE: _entry(
-        "Recording is unavailable in this build.", "Запись недоступна в этой сборке."
+        "Microphone recording is not available.", "Запись с микрофона недоступна."
     ),
     TranslationKey.DASHBOARD_HEADLINE_READY: _entry(
         "Start recording to build VoiceInk progress.",
@@ -726,7 +722,8 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "VoiceInk could not finish that session.", "VoiceInk не удалось завершить эту сессию."
     ),
     TranslationKey.DASHBOARD_DETAIL_UNAVAILABLE: _entry(
-        "Microphone capture and ASR are not included.", "Захват с микрофона и ASR не включены."
+        "Microphone capture is not available, so new microphone transcripts cannot be created.",
+        "Захват с микрофона недоступен, поэтому новые расшифровки с микрофона создать нельзя.",
     ),
     TranslationKey.DASHBOARD_DETAIL_READY: _entry(
         "Your first milestone appears after one session.",
@@ -752,20 +749,19 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
         "Ошибка показана здесь, чтобы исправить её до следующей записи.",
     ),
     TranslationKey.DASHBOARD_OPEN_RECORDER: _entry("Open recorder", "Открыть рекордер"),
-    TranslationKey.DASHBOARD_RECORDER_UNAVAILABLE: _entry(
-        "Recorder unavailable", "Рекордер недоступен"
+    TranslationKey.DASHBOARD_INSIGHTS_UNAVAILABLE: _entry(
+        "Insights unavailable", "Аналитика недоступна"
     ),
-    TranslationKey.DASHBOARD_INSIGHTS_LOCKED: _entry("Insights locked", "Аналитика заблокирована"),
     TranslationKey.DASHBOARD_RECENT_TRANSCRIPTS: _entry(
         "Recent Transcripts", "Последние расшифровки"
     ),
     TranslationKey.DASHBOARD_NO_SESSIONS: _entry("No sessions yet", "Сессий пока нет"),
     TranslationKey.DASHBOARD_CAPABILITY_UNAVAILABLE: _entry(
-        "Capability unavailable", "Функция недоступна"
+        "Microphone recording unavailable", "Запись с микрофона недоступна"
     ),
     TranslationKey.DASHBOARD_TRANSCRIPTS_UNAVAILABLE: _entry(
-        "Transcripts are unavailable because recording and ASR are not included.",
-        "Расшифровки недоступны: запись и ASR не включены.",
+        "Microphone transcripts are not available.",
+        "Расшифровки с микрофона недоступны.",
     ),
     TranslationKey.DASHBOARD_TIMESTAMP_TODAY: _entry("Today, {time}", "Сегодня, {time}"),
     TranslationKey.DASHBOARD_EMPTY_TRANSCRIPT: _entry("Empty transcript", "Пустая расшифровка"),

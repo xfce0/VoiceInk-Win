@@ -85,6 +85,7 @@ class SettingsPage(QWidget):
         self._availability = QLabel(content)
         self._availability.setObjectName("pageUnavailable")
         self._availability.setWordWrap(True)
+        self._availability.setVisible(False)
         root.addWidget(self._availability)
 
         form = QFormLayout()
