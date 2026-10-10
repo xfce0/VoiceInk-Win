@@ -398,7 +398,6 @@ class LocalMediaSnapshotStore:
         self,
         root: Path,
         *,
-        import_roots: tuple[Path, ...] = (),
         windows_adapter: WindowsMediaSecurityAdapter | None = None,
         max_workspace_bytes: int = WORKSPACE_LIMIT,
         max_snapshot_bytes: int = SOURCE_LIMIT,
@@ -419,12 +418,6 @@ class LocalMediaSnapshotStore:
                 raise OSError("workspace root ownership cannot be established safely")
             marker.mkdir(mode=0o700)
             _validate_private_directory(marker, "workspace ownership marker")
-        resolved_import_roots = []
-        for item in import_roots:
-            import_root = Path(item).absolute()
-            self._reject_symlink_components(import_root)
-            resolved_import_roots.append(import_root.resolve(strict=True))
-        self.import_roots = tuple(resolved_import_roots)
         self.windows_adapter = windows_adapter
         self.max_workspace_bytes = max_workspace_bytes
         self.max_snapshot_bytes = max_snapshot_bytes
@@ -452,10 +445,6 @@ class LocalMediaSnapshotStore:
             self.windows_adapter.validate_source(candidate)
         if str(candidate).startswith("\\\\"):
             raise InvalidSourceError("network paths are not permitted")
-        if self.import_roots and not any(
-            self._contained(candidate, root) for root in self.import_roots
-        ):
-            raise InvalidSourceError("source is outside the configured import roots")
         try:
             fd = self._open_absolute(candidate, os.O_RDONLY)
             try:

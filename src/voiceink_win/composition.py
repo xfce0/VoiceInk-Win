@@ -87,19 +87,15 @@ class ImportedMediaConfiguration:
     ffmpeg_path: Path
     ffmpeg_artifact: FfmpegArtifactManifest
     workspace_root: Path
-    import_roots: tuple[Path, ...]
 
     def __post_init__(self) -> None:
         paths = (self.ffmpeg_path, self.workspace_root)
         if not all(Path(path).is_absolute() for path in paths):
             raise ConfigurationError("imported-media paths must be absolute")
-        if not self.import_roots or not all(Path(path).is_absolute() for path in self.import_roots):
-            raise ConfigurationError("imported-media import roots must be absolute and non-empty")
         if not isinstance(self.ffmpeg_artifact, FfmpegArtifactManifest):
             raise ConfigurationError("imported-media FFmpeg artifact metadata is not trusted")
         object.__setattr__(self, "ffmpeg_path", Path(self.ffmpeg_path))
         object.__setattr__(self, "workspace_root", Path(self.workspace_root))
-        object.__setattr__(self, "import_roots", tuple(Path(path) for path in self.import_roots))
         if Path(self.ffmpeg_artifact.allowed_path) != self.ffmpeg_path:
             raise ConfigurationError("FFmpeg artifact metadata path does not match executable")
 
@@ -111,7 +107,6 @@ class ImportedMediaConfiguration:
         import_names = (
             "VOICEINK_FFMPEG_PATH",
             "VOICEINK_IMPORT_WORKSPACE_ROOT",
-            "VOICEINK_IMPORT_ROOTS",
         )
         metadata_names = (
             "VOICEINK_FFMPEG_VERSION",
@@ -119,10 +114,7 @@ class ImportedMediaConfiguration:
             "VOICEINK_FFMPEG_SHA256",
             "VOICEINK_FFMPEG_LICENSE",
         )
-        if not any(
-            values.get(name, "").strip()
-            for name in ("VOICEINK_IMPORT_WORKSPACE_ROOT", "VOICEINK_IMPORT_ROOTS")
-        ):
+        if not values.get("VOICEINK_IMPORT_WORKSPACE_ROOT", "").strip():
             return None
         missing = [
             name for name in (*import_names, *metadata_names) if not values.get(name, "").strip()
@@ -143,12 +135,10 @@ class ImportedMediaConfiguration:
             raise ConfigurationError(
                 "imported-media FFmpeg metadata is invalid", cause=error
             ) from error
-        roots = tuple(Path(value) for value in values["VOICEINK_IMPORT_ROOTS"].split(os.pathsep))
         return cls(
             ffmpeg_path=Path(values["VOICEINK_FFMPEG_PATH"]),
             ffmpeg_artifact=artifact,
             workspace_root=Path(values["VOICEINK_IMPORT_WORKSPACE_ROOT"]),
-            import_roots=roots,
         )
 
 
@@ -434,7 +424,6 @@ def _build_imported_media_service(
         normalizer = SubprocessMediaNormalizer(executable=artifact)
         store = create_media_snapshot_store(
             configuration.workspace_root,
-            import_roots=configuration.import_roots,
         )
         if history_port is None:
             return ImportedMediaTranscriptionService(normalizer, asr, store)

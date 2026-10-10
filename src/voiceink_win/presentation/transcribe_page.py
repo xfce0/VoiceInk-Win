@@ -304,6 +304,7 @@ class TranscribePage(QWidget):
         actions.addStretch(1)
         if item.can_remove:
             remove = QPushButton(self._t(TranslationKey.TRANSCRIBE_REMOVE), frame)
+            remove.setObjectName("actionButton")
             remove.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.remove_pending(
                     item_id
@@ -312,28 +313,33 @@ class TranscribePage(QWidget):
             actions.addWidget(remove)
         if item.can_cancel:
             cancel = QPushButton(self._t(TranslationKey.TRANSCRIBE_CANCEL), frame)
+            cancel.setObjectName("actionButton")
             cancel.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.cancel_item(item_id)
             )
             actions.addWidget(cancel)
         if item.can_retry:
             retry = QPushButton(self._t(TranslationKey.TRANSCRIBE_RETRY), frame)
+            retry.setObjectName("actionButton")
             retry.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.retry_item(item_id)
             )
             actions.addWidget(retry)
         if item.result is not None:
             copy = QPushButton(self._t(TranslationKey.TRANSCRIBE_COPY), frame)
+            copy.setObjectName("actionButton")
             copy.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._controller.copy(item_id)
             )
             actions.addWidget(copy)
             save_txt = QPushButton(self._t(TranslationKey.TRANSCRIBE_TXT), frame)
+            save_txt.setObjectName("actionButton")
             save_txt.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._save(item_id, "txt")
             )
             actions.addWidget(save_txt)
             save_md = QPushButton(self._t(TranslationKey.TRANSCRIBE_MARKDOWN), frame)
+            save_md.setObjectName("actionButton")
             save_md.clicked.connect(
                 lambda _checked=False, item_id=item.item_id: self._save(item_id, "md")
             )

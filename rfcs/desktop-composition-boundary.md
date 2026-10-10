@@ -226,7 +226,7 @@ directory for optional relative artifact references. Imported-media terminal
 results use the same `HistoryPort` and are recorded once after the cleanup
 fence, including source metadata and failure status.
 
-If the runtime manifest, artifact lock, FFmpeg metadata, import roots, or
+If the runtime manifest, artifact lock, FFmpeg metadata, workspace root, or
 verified binaries are unavailable, persistence remains configured while the
 Transcribe page is explicitly unavailable. This is an unavailable
 no-resource fallback for imported media, not a fake transcript or fake

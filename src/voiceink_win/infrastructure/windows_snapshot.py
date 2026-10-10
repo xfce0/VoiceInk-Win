@@ -431,7 +431,6 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         self,
         root: Path,
         *,
-        import_roots: tuple[Path, ...] = (),
         max_workspace_bytes: int = WORKSPACE_LIMIT,
         max_snapshot_bytes: int = SOURCE_LIMIT,
         clock: object | None = None,
@@ -455,7 +454,6 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         self.root = requested_root
         self._assert_directory(self.root)
         self._root_canonical = self._canonical(self.root)
-        self.import_roots = tuple(self._canonical(Path(item).absolute()) for item in import_roots)
         self.max_workspace_bytes = max_workspace_bytes
         self.max_snapshot_bytes = max_snapshot_bytes
         self._clock: MonotonicClock = clock or SystemMonotonicClock()
@@ -497,11 +495,6 @@ class WindowsMediaSnapshotStore(LocalMediaSnapshotStore):
         handle = self._open(candidate, self._api.GENERIC_READ, self._api.OPEN_EXISTING)
         try:
             identity, size = self._identity(handle)
-            canonical = self._canonical_handle(handle)
-            if self.import_roots and not any(
-                self._contained(canonical, root) for root in self.import_roots
-            ):
-                raise InvalidSourceError("source is outside the configured import roots")
             digest, actual_size = self._hash(handle, max_bytes)
             if actual_size != size:
                 raise InvalidSourceError("source changed during admission")

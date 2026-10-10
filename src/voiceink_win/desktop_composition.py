@@ -235,7 +235,6 @@ def _imported_media_environment_present() -> bool:
         "VOICEINK_ARTIFACT_LOCK_SHA256",
         "VOICEINK_FFMPEG_PATH",
         "VOICEINK_IMPORT_WORKSPACE_ROOT",
-        "VOICEINK_IMPORT_ROOTS",
         "VOICEINK_FFMPEG_VERSION",
         "VOICEINK_FFMPEG_PROVENANCE_URL",
         "VOICEINK_FFMPEG_SHA256",

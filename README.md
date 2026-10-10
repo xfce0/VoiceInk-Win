@@ -158,13 +158,13 @@ VOICEINK_FFMPEG_PROVENANCE_URL=https://<approved-source>
 VOICEINK_FFMPEG_SHA256=<sha256-of-ffmpeg.exe>
 VOICEINK_FFMPEG_LICENSE=<license-name>
 VOICEINK_IMPORT_WORKSPACE_ROOT=C:\path\to\workspace
-VOICEINK_IMPORT_ROOTS=C:\path\to\allowed\media;D:\another\allowed\root
 ```
 
 The runtime manifest and artifact lock must describe the approved model and
 sidecar executable. FFmpeg must be an approved absolute path whose metadata and
-SHA-256 pass verification. `VOICEINK_IMPORT_ROOTS` is a semicolon-separated
-list on Windows. Global hotkeys, system tray, active-application text injection,
+SHA-256 pass verification. The legacy `VOICEINK_IMPORT_ROOTS` setting is
+optional and ignored for admission; regular local files may be selected from
+any directory. Global hotkeys, system tray, active-application text injection,
 and native audio behavior are not part of this imported-media slice.
 
 ## Windows Diagnostic Build
@@ -188,10 +188,12 @@ voiceink-diagnostic.exe C:\\path\\to\\audio-or-video-file
 
 The production imported-media composition contract is typed
 `ImportedMediaConfiguration`, not a mutable manifest path. It requires an
-absolute FFmpeg path, absolute non-empty import roots, an absolute workspace
-root, and a complete `FfmpegArtifactManifest` containing version, HTTPS
-provenance, license, and SHA-256. The environment adapter enables this feature
-only when the complete metadata set is present and rejects partial values.
+absolute FFmpeg path, an absolute workspace root, and a complete
+`FfmpegArtifactManifest` containing version, HTTPS provenance, license, and
+SHA-256. The environment adapter enables this feature only when the complete
+runtime metadata set is present and rejects partial values.
+`VOICEINK_IMPORT_ROOTS` is retained as an optional compatibility setting;
+selected regular local files may come from any directory.
 
 At runtime, `VerifiedFfmpegArtifact` reopens the executable, validates its
 identity and approved path, and recomputes its SHA-256 before launch. The

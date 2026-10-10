@@ -282,6 +282,37 @@ QLabel#heroSubtext, QLabel#muted, QLabel#metadata {{
 QLabel#heroDetail {{
     color: {theme.hero_subtext};
 }}
+QPushButton {{
+    background: {theme.secondary_fill};
+    border: 1px solid {theme.secondary_border};
+    border-radius: 10px;
+    color: {theme.secondary_text};
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 13px;
+    min-height: 16px;
+}}
+QPushButton:hover {{
+    background: {theme.nav_hover};
+    border-color: {theme.accent};
+}}
+QPushButton:pressed {{
+    background: {theme.accent};
+    border-color: {theme.accent};
+    color: {theme.accent_text};
+}}
+QPushButton:disabled {{
+    background: {theme.window};
+    border-color: {theme.border};
+    color: {theme.disabled};
+}}
+QPushButton:focus {{
+    border-color: {theme.nav_focus_border};
+}}
+QPushButton#actionButton {{
+    border-radius: 9px;
+    padding: 6px 11px;
+}}
 QPushButton#navButton {{
     background: transparent;
     border: 1px solid transparent;
@@ -350,6 +381,15 @@ QPushButton#primaryButton {{
 QPushButton#primaryButton:hover {{
     background: {theme.accent_hover};
 }}
+QPushButton#primaryButton:focus {{
+    border: 1px solid {theme.nav_focus_border};
+    padding: 10px 18px;
+}}
+QPushButton#primaryButton:disabled {{
+    background: {theme.window};
+    border: 1px solid {theme.border};
+    color: {theme.disabled};
+}}
 QPushButton#secondaryButton {{
     background: {theme.secondary_fill};
     border: 1px solid {theme.secondary_border};
@@ -360,8 +400,14 @@ QPushButton#secondaryButton {{
     padding: 10px 18px;
 }}
 QPushButton#secondaryButton:disabled {{
+    background: {theme.window};
     color: {theme.disabled};
     border-color: {theme.border};
+}}
+QPushButton#actionButton:disabled {{
+    background: {theme.window};
+    border-color: {theme.border};
+    color: {theme.disabled};
 }}
 QLabel#sectionTitle {{
     color: {theme.text};
