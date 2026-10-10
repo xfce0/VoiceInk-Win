@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 except ImportError:
     if os.environ.get("VOICEINK_GUI_TESTS") == "1":
         raise
@@ -31,6 +31,7 @@ from voiceink_win.domain import (
 from voiceink_win.infrastructure import SQLitePersistence
 from voiceink_win.presentation.dictionary_page import DictionaryPage
 from voiceink_win.presentation.history_page import HistoryPage as HistoryWidget
+from voiceink_win.presentation.localization import Locale, LocaleConfig
 from voiceink_win.presentation.main_window import MainWindow
 from voiceink_win.presentation.theme import DARK_THEME, LIGHT_THEME, ThemeMode
 
@@ -108,6 +109,8 @@ def test_unavailable_persistence_uses_neutral_page_states(application: QApplicat
         assert not history._availability.isHidden()
         assert history._availability.text() == "Local storage is unavailable."
         assert history._error.text() == ""
+        assert not history._delete.isVisibleTo(history)
+        assert not history.findChildren(QPushButton, "historyAction")
 
         assert not dictionary._state_panel.isHidden()
         assert dictionary._state_title.text() == "Could not complete the operation."
@@ -330,6 +333,11 @@ class _DeferredPersistence:
     def __init__(self) -> None:
         self.history_future: Future[HistoryPage] = Future()
 
+    def ready(self) -> Future[None]:
+        future: Future[None] = Future()
+        future.set_result(None)
+        return future
+
     def list_history(self, *, offset: int = 0, limit: int = 50) -> Future[HistoryPage]:
         del offset, limit
         return self.history_future
@@ -440,6 +448,44 @@ def test_history_audio_and_folder_actions_use_injected_ports(
         row.folder_button.click()
         assert audio.references == [record.audio_artifact_path]
         assert folder.references == ["folder-token"]
+    finally:
+        page.dispose()
+        store.close().result(timeout=2)
+
+
+def test_history_actions_stay_in_their_row_at_fixed_width_and_follow_locale(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    record = HistoryRecord(
+        id="history-action-layout",
+        created_at=datetime.now(UTC),
+        original_text="First line\nSecond line\nThird line",
+        source_metadata={"source_name": "meeting.wav"},
+    )
+    store.upsert_history(record).result(timeout=2)
+    page = HistoryWidget(service, locale_config=LocaleConfig(Locale.RUSSIAN))
+    page.resize(592, 520)
+    page.show()
+    try:
+        assert not page._delete.isVisibleTo(page)
+        _wait(application, lambda: page._list.count() == 1)
+        row = page._rows[record.id]
+        action_buttons = row.findChildren(QPushButton, "historyAction")
+
+        assert len(action_buttons) == 6
+        assert all(button.parentWidget() is row for button in action_buttons)
+        assert all(button.isVisibleTo(page) for button in action_buttons)
+
+        page._list.setCurrentRow(0)
+        application.processEvents()
+        assert page._delete is row.delete_button
+        assert page._delete.isVisibleTo(page)
+        assert row._full_text.isVisibleTo(page)
+        assert page._list.horizontalScrollBar().isVisible() is False
+        assert all(row.rect().contains(button.geometry()) for button in action_buttons)
+        assert row.delete_button.text() == "Удалить"
+        assert row.copy_button.text() == "Копировать"
     finally:
         page.dispose()
         store.close().result(timeout=2)
