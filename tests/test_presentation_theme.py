@@ -40,6 +40,16 @@ def test_stylesheet_contains_dark_surface_tokens_for_every_dashboard_layer() -> 
     assert "#ffffff" not in stylesheet.split("QFrame#card", 1)[1].split("QFrame#heroCard", 1)[0]
 
 
+def test_stylesheet_distinguishes_neutral_unavailability_from_inline_errors() -> None:
+    stylesheet = stylesheet_for(LIGHT_THEME)
+
+    assert "QLabel#pageUnavailable" in stylesheet
+    assert f"background: {LIGHT_THEME.state_bg};" in stylesheet
+    assert "QLabel#inlineError" in stylesheet
+    inline_error = stylesheet.split("QLabel#inlineError", 1)[1].split("}", 1)[0]
+    assert "background:" not in inline_error
+
+
 def test_unknown_system_scheme_is_safe_and_defaults_to_light() -> None:
     assert mode_from_system_name("Dark") is ThemeMode.DARK
     assert mode_from_system_name("light") is ThemeMode.LIGHT
