@@ -117,12 +117,23 @@ class HistoryMediaActionService:
         try:
             if not port.is_available():
                 return self._unavailable(record, action, HistoryMediaCode.PLATFORM_UNAVAILABLE)
+        except Exception as error:
+            self._log(
+                record,
+                action,
+                HistoryMediaCode.PLATFORM_UNAVAILABLE,
+                logging.INFO,
+                failure_stage="capability",
+                exception_type=type(error).__name__,
+            )
+            return HistoryMediaActionResult(HistoryMediaCode.PLATFORM_UNAVAILABLE)
+        try:
             if action == "audio":
                 port.play(artifact)
             else:
                 port.reveal(artifact)
-        except Exception:
-            return self._failed(record, action)
+        except Exception as error:
+            return self._failed(record, action, error)
         return HistoryMediaActionResult(HistoryMediaCode.STARTED)
 
     def _resolve(self, record: HistoryRecord) -> tuple[Path | None, HistoryMediaCode | None]:
@@ -132,12 +143,14 @@ class HistoryMediaActionService:
             return None, HistoryMediaCode.NO_ARTIFACT
         try:
             return self._artifacts.reveal_path(reference), None
-        except Exception:
+        except Exception as error:
             self._log(
                 record,
                 "resolve",
                 HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID,
                 logging.INFO,
+                failure_stage="resolve",
+                exception_type=type(error).__name__,
             )
             return None, HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID
 
@@ -154,10 +167,17 @@ class HistoryMediaActionService:
             )
         try:
             available = port.is_available()
-        except Exception:
-            self._log(record, action, HistoryMediaCode.OPERATION_FAILED, logging.WARNING)
+        except Exception as error:
+            self._log(
+                record,
+                action,
+                HistoryMediaCode.PLATFORM_UNAVAILABLE,
+                logging.INFO,
+                failure_stage="capability",
+                exception_type=type(error).__name__,
+            )
             return HistoryMediaCapability(
-                HistoryMediaState.ERROR, HistoryMediaCode.OPERATION_FAILED
+                HistoryMediaState.UNAVAILABLE, HistoryMediaCode.PLATFORM_UNAVAILABLE
             )
         return (
             HistoryMediaCapability(HistoryMediaState.AVAILABLE)
@@ -173,17 +193,39 @@ class HistoryMediaActionService:
         self._log(record, action, code, logging.INFO)
         return HistoryMediaActionResult(code)
 
-    def _failed(self, record: HistoryRecord, action: str) -> HistoryMediaActionResult:
+    def _failed(
+        self, record: HistoryRecord, action: str, error: Exception
+    ) -> HistoryMediaActionResult:
         code = HistoryMediaCode.OPERATION_FAILED
-        self._log(record, action, code, logging.WARNING)
+        self._log(
+            record,
+            action,
+            code,
+            logging.WARNING,
+            failure_stage="operation",
+            exception_type=type(error).__name__,
+        )
         return HistoryMediaActionResult(code)
 
     @staticmethod
-    def _log(record: HistoryRecord, action: str, code: HistoryMediaCode, level: int) -> None:
+    def _log(
+        record: HistoryRecord,
+        action: str,
+        code: HistoryMediaCode,
+        level: int,
+        *,
+        failure_stage: str | None = None,
+        exception_type: str | None = None,
+    ) -> None:
+        details = {"history_id": record.id, "action": action, "reason_code": code.value}
+        if failure_stage is not None:
+            details["failure_stage"] = failure_stage
+        if exception_type is not None:
+            details["exception_type"] = exception_type
         logger.log(
             level,
             "history media outcome",
-            extra={"history_id": record.id, "action": action, "reason_code": code.value},
+            extra=details,
         )
 
 

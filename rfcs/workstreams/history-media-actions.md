@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed. RFC only; no implementation is included in this workstream.
+Implemented. This workstream contains the application, infrastructure, and
+presentation implementation described below. Windows-native behavior remains
+unverified on non-Windows hosts.
 
 ## Decision Summary
 
@@ -378,6 +380,9 @@ media player, Explorer, Finder, or real user-profile artifact directory.
    application service; update localized neutral/error states.
 5. Update focused GUI tests, then run the repository quality and Windows-native
    checks appropriate to the environment.
+
+The implementation order above is complete. The Windows-native smoke/manual
+checks remain host-dependent and are not claimed by the local macOS test run.
 
 ## Open Questions
 
