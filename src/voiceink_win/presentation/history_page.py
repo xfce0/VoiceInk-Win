@@ -1,4 +1,4 @@
-"""Qt page for asynchronous paginated transcript history."""
+"""Qt presentation for asynchronous paginated transcript history."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from typing import Protocol
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -42,11 +43,24 @@ from voiceink_win.domain import (
 
 from .async_tools import FutureBridge
 from .clipboard import QtClipboardPort
+from .history_row import HistoryRow
 from .localization import LocaleConfig, TranslationKey, translate
 
 
+class HistoryAudioPort(Protocol):
+    """Play a validated opaque audio-artifact reference."""
+
+    def play(self, artifact_reference: str) -> None: ...
+
+
+class HistoryFolderPort(Protocol):
+    """Reveal a validated opaque source-folder reference."""
+
+    def reveal(self, folder_reference: str) -> None: ...
+
+
 class HistoryPage(QWidget):
-    """Load, inspect, copy, and delete records without waiting on the Qt thread."""
+    """Load, inspect, and act on records without waiting on the Qt thread."""
 
     def __init__(
         self,
@@ -58,6 +72,8 @@ class HistoryPage(QWidget):
         artifact_folder: Path | None = None,
         history_deletion: HistoryDeletionService | None = None,
         text_files: TextFilePort | None = None,
+        audio_port: HistoryAudioPort | None = None,
+        folder_port: HistoryFolderPort | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("historyPage")
@@ -76,9 +92,10 @@ class HistoryPage(QWidget):
         if self._owns_history_deletion:
             self._history_deletion.start()
         self._text_files = text_files or LocalTextFilePort()
+        self._audio_port = audio_port
+        self._folder_port = folder_port
         self._export_executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="history-export",
+            max_workers=1, thread_name_prefix="history-export"
         )
         self._locale_config = locale_config or LocaleConfig(parent=self)
         self._locale_callback = self.apply_locale
@@ -88,6 +105,7 @@ class HistoryPage(QWidget):
         self._bridge = FutureBridge(self)
         self._copy_port = QtClipboardPort(self)
         self._records: tuple[HistoryRecord, ...] = ()
+        self._rows: dict[str, HistoryRow] = {}
         self._offset = 0
         self._limit = 20
         self._has_more = False
@@ -118,59 +136,27 @@ class HistoryPage(QWidget):
         root.addWidget(self._availability)
         search_row = QHBoxLayout()
         self._search = QLineEdit(self)
-        self._search.setAccessibleName("Search transcript history")
-        self._search.setPlaceholderText("Search source or transcript")
+        self._search.setAccessibleName(self._t(TranslationKey.HISTORY_SEARCH_ACCESSIBLE))
         self._search.returnPressed.connect(self._search_submitted)
         search_row.addWidget(self._search, 1)
-        self._search_button = QPushButton("Search", self)
+        self._search_button = QPushButton(self)
         self._search_button.setObjectName("actionButton")
-        self._search_button.setAccessibleName("Search transcript history")
+        self._search_button.setAccessibleName(self._t(TranslationKey.HISTORY_SEARCH_ACCESSIBLE))
         self._search_button.clicked.connect(self._search_submitted)
         search_row.addWidget(self._search_button)
         root.addLayout(search_row)
-        body = QHBoxLayout()
-        body.setSpacing(14)
-        self._list = QListWidget(self)
-        self._list.setObjectName("historyList")
-        self._list.currentItemChanged.connect(self._select_item)
-        body.addWidget(self._list, 1)
-        detail = QVBoxLayout()
+
         self._metadata = QLabel(self)
         self._metadata.setObjectName("metadata")
         self._metadata.setWordWrap(True)
-        detail.addWidget(self._metadata)
-        self._text = QTextEdit(self)
-        self._text.setReadOnly(True)
-        detail.addWidget(self._text, 1)
-        actions = QHBoxLayout()
-        self._variant = QComboBox(self)
-        self._variant.setAccessibleName("Transcript variant")
-        self._variant.addItem("Original", "original")
-        self._variant.addItem("Enhanced", "enhanced")
-        self._variant.currentIndexChanged.connect(self._variant_changed)
-        actions.addWidget(self._variant)
-        self._copy = QPushButton(self)
-        self._copy.setObjectName("secondaryButton")
-        self._copy.clicked.connect(self._copy_selected)
-        actions.addWidget(self._copy)
-        self._export_txt = QPushButton("TXT", self)
-        self._export_txt.setObjectName("actionButton")
-        self._export_txt.setAccessibleName("Export selected transcript as TXT")
-        self._export_txt.clicked.connect(lambda: self._export_selected("txt"))
-        actions.addWidget(self._export_txt)
-        self._export_markdown = QPushButton("Markdown", self)
-        self._export_markdown.setObjectName("actionButton")
-        self._export_markdown.setAccessibleName("Export selected transcript as Markdown")
-        self._export_markdown.clicked.connect(lambda: self._export_selected("markdown"))
-        actions.addWidget(self._export_markdown)
-        self._delete = QPushButton(self)
-        self._delete.setObjectName("secondaryButton")
-        self._delete.clicked.connect(self._delete_selected)
-        actions.addWidget(self._delete)
-        actions.addStretch(1)
-        detail.addLayout(actions)
-        body.addLayout(detail, 2)
-        root.addLayout(body, 1)
+        root.addWidget(self._metadata)
+        self._list = QListWidget(self)
+        self._list.setObjectName("historyList")
+        self._list.setSpacing(8)
+        self._list.setFrameShape(QListWidget.Shape.NoFrame)
+        self._list.currentItemChanged.connect(self._select_item)
+        root.addWidget(self._list, 1)
+
         navigation = QHBoxLayout()
         self._previous = QPushButton(self)
         self._previous.setObjectName("actionButton")
@@ -185,10 +171,21 @@ class HistoryPage(QWidget):
         self._status.setObjectName("metadata")
         navigation.addWidget(self._status)
         root.addLayout(navigation)
+
         self._error = QLabel(self)
         self._error.setObjectName("inlineError")
         self._error.setWordWrap(True)
         root.addWidget(self._error)
+
+        # Keep these private handles for existing presentation tests and callers.
+        self._copy = QPushButton(self)
+        self._variant = QComboBox(self)
+        self._text = QTextEdit(self)
+        self._text.setReadOnly(True)
+        self._text.setVisible(False)
+        self._export_txt = QPushButton(self)
+        self._export_markdown = QPushButton(self)
+        self._delete = QPushButton(self)
         self.apply_locale()
 
     def refresh(self) -> None:
@@ -260,18 +257,18 @@ class HistoryPage(QWidget):
             self._availability.setVisible(False)
             self._error.clear()
             self._list.clear()
+            self._rows.clear()
+            self._selected = None
             self._text.clear()
-            self._metadata.clear()
             self._variant.setEnabled(False)
             self._copy.setEnabled(False)
             self._export_txt.setEnabled(False)
             self._export_markdown.setEnabled(False)
             self._delete.setEnabled(False)
-        else:
-            self._variant.setEnabled(self._selected is not None)
 
     def _render_records(self) -> None:
         self._list.clear()
+        self._rows.clear()
         self._selected = None
         self._text.clear()
         self._variant.setEnabled(False)
@@ -281,14 +278,61 @@ class HistoryPage(QWidget):
             else self._t(TranslationKey.HISTORY_SELECT)
         )
         for record in self._records:
-            item = QListWidgetItem(self._record_title(record), self._list)
+            item = QListWidgetItem(self._list)
             item.setData(Qt.ItemDataRole.UserRole, record.id)
+            row = self._build_row(record)
+            row.clicked.connect(lambda record_id=record.id: self._row_clicked(record_id))
+            self._rows[record.id] = row
+            self._list.setItemWidget(item, row)
+            item.setSizeHint(row.sizeHint())
         self._previous.setEnabled(bool(self._cursor_stack))
         self._next.setEnabled(self._has_more)
         self._status.setText(self._t(TranslationKey.COMMON_READY))
         self._availability.clear()
         self._availability.setVisible(False)
         self._error.clear()
+
+    def _build_row(self, record: HistoryRecord) -> HistoryRow:
+        row = HistoryRow(
+            record,
+            self._record_metadata(record),
+            self._locale_config,
+            audio_available=bool(record.audio_artifact_path and self._audio_port),
+            folder_available=bool(self._folder_reference(record) and self._folder_port),
+            parent=self._list,
+        )
+        row.copy_button.clicked.connect(lambda: self._copy_record(record))
+        row.audio_button.clicked.connect(lambda: self._play_audio(record))
+        row.folder_button.clicked.connect(lambda: self._reveal_folder(record))
+        row.export_txt_button.clicked.connect(lambda: self._export_record(record, "txt"))
+        row.export_markdown_button.clicked.connect(lambda: self._export_record(record, "markdown"))
+        row.delete_button.clicked.connect(lambda: self._delete_record(record))
+        row.variant_combo.currentIndexChanged.connect(
+            lambda index: self._variant_changed_for(record.id, index)
+        )
+        return row
+
+    def _row_clicked(self, record_id: str) -> None:
+        item = next(
+            (
+                self._list.item(index)
+                for index in range(self._list.count())
+                if self._list.item(index).data(Qt.ItemDataRole.UserRole) == record_id
+            ),
+            None,
+        )
+        if item is None:
+            return
+        if self._selected is not None and self._selected.id == record_id:
+            row = self._rows[record_id]
+            row.set_expanded(not row.expanded)
+            self._resize_row(item, row)
+            return
+        self._list.setCurrentItem(item)
+
+    def _resize_row(self, item: QListWidgetItem, row: HistoryRow) -> None:
+        item.setSizeHint(row.sizeHint())
+        self._list.doItemsLayout()
 
     def _show_unavailable(self) -> None:
         self._status.clear()
@@ -309,6 +353,12 @@ class HistoryPage(QWidget):
     def _select_item(self, item: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         record_id = item.data(Qt.ItemDataRole.UserRole) if item else None
         self._selected = next((record for record in self._records if record.id == record_id), None)
+        for row_id, row in self._rows.items():
+            selected = row_id == record_id
+            row.set_selected(selected)
+            row.set_expanded(selected)
+            if item is not None and selected:
+                self._resize_row(item, row)
         if self._selected is None:
             self._text.clear()
             self._variant.setEnabled(False)
@@ -319,20 +369,26 @@ class HistoryPage(QWidget):
             self._delete.setEnabled(False)
             return
         record = self._selected
+        row = self._rows[record.id]
+        self._copy = row.copy_button
+        self._variant = row.variant_combo
+        self._export_txt = row.export_txt_button
+        self._export_markdown = row.export_markdown_button
+        self._delete = row.delete_button
         self._variant.setEnabled(True)
         self._variant.blockSignals(True)
         self._variant.setCurrentIndex(self._variant.findData(record.selected_variant.value))
         self._variant.blockSignals(False)
         self._metadata.setText(self._record_metadata(record))
-        self._text.setPlainText(
-            record.enhanced_text
-            if record.selected_variant is TranscriptVariant.ENHANCED and record.enhanced_text
-            else record.original_text
-        )
+        self._text.setPlainText(self._text_for(record))
         self._copy.setEnabled(bool(self._text.toPlainText()))
         self._export_txt.setEnabled(bool(self._text.toPlainText()))
         self._export_markdown.setEnabled(bool(self._text.toPlainText()))
         self._delete.setEnabled(True)
+
+    def _copy_record(self, record: HistoryRecord) -> None:
+        self._select_record_if_needed(record.id)
+        self._copy_selected()
 
     def _copy_selected(self) -> None:
         if self._selected is None:
@@ -340,13 +396,42 @@ class HistoryPage(QWidget):
         self._status.setText(self._t(TranslationKey.HISTORY_COPYING))
         operation = self._next_operation()
         self._copy_port.copy(
-            self._text.toPlainText(),
+            self._text_for(self._selected),
             lambda error, request=operation: self._copy_finished(request, error),
         )
+
+    def _play_audio(self, record: HistoryRecord) -> None:
+        if self._audio_port is None or not record.audio_artifact_path:
+            return
+        self._select_record_if_needed(record.id)
+        try:
+            self._audio_port.play(record.audio_artifact_path)
+        except BaseException:
+            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
+            self._error.setText(self._t(TranslationKey.HISTORY_AUDIO_ERROR))
+        else:
+            self._status.setText(self._t(TranslationKey.HISTORY_AUDIO_STARTED))
+
+    def _reveal_folder(self, record: HistoryRecord) -> None:
+        reference = self._folder_reference(record)
+        if self._folder_port is None or reference is None:
+            return
+        self._select_record_if_needed(record.id)
+        try:
+            self._folder_port.reveal(reference)
+        except BaseException:
+            self._status.setText(self._t(TranslationKey.COMMON_ERROR))
+            self._error.setText(self._t(TranslationKey.HISTORY_FOLDER_ERROR))
+        else:
+            self._status.setText(self._t(TranslationKey.HISTORY_FOLDER_OPENED))
 
     def _search_submitted(self) -> None:
         self._cursor_stack.clear()
         self._load(None)
+
+    def _export_record(self, record: HistoryRecord, format_name: str) -> None:
+        self._select_record_if_needed(record.id)
+        self._export_selected(format_name)
 
     def _export_selected(self, format_name: str) -> None:
         record = self._selected
@@ -401,6 +486,10 @@ class HistoryPage(QWidget):
         if error:
             self._error.setText(self._t(TranslationKey.HISTORY_COPY_ERROR))
 
+    def _delete_record(self, record: HistoryRecord) -> None:
+        self._select_record_if_needed(record.id)
+        self._delete_selected()
+
     def _delete_selected(self) -> None:
         record = self._selected
         if record is None or self._persistence is None:
@@ -437,6 +526,11 @@ class HistoryPage(QWidget):
             return
         self._load(self._offset)
 
+    def _variant_changed_for(self, record_id: str, index: int) -> None:
+        if self._selected is None or self._selected.id != record_id or index < 0:
+            return
+        self._variant_changed(index)
+
     def _variant_changed(self, index: int) -> None:
         record = self._selected
         if self._disposed or record is None or index < 0:
@@ -450,14 +544,13 @@ class HistoryPage(QWidget):
         updated = replace(record, selected_variant=variant)
         self._selected = updated
         self._records = tuple(updated if item.id == record.id else item for item in self._records)
-        self._text.setPlainText(
-            updated.enhanced_text
-            if variant is TranscriptVariant.ENHANCED and updated.enhanced_text
-            else updated.original_text
-        )
+        self._text.setPlainText(self._text_for(updated))
         self._copy.setEnabled(bool(self._text.toPlainText()))
         self._export_txt.setEnabled(bool(self._text.toPlainText()))
         self._export_markdown.setEnabled(bool(self._text.toPlainText()))
+        row = self._rows.get(record.id)
+        if row is not None:
+            row.set_record(updated)
         if self._persistence is not None:
             operation = self._next_operation()
             self._bridge.watch(
@@ -471,6 +564,11 @@ class HistoryPage(QWidget):
         if error is not None:
             self._error.setText(self._t(TranslationKey.HISTORY_VARIANT_ERROR))
 
+    def _select_record_if_needed(self, record_id: str) -> None:
+        if self._selected is not None and self._selected.id == record_id:
+            return
+        self._row_clicked(record_id)
+
     def _next_operation(self) -> int:
         self._operation += 1
         return self._operation
@@ -483,9 +581,12 @@ class HistoryPage(QWidget):
         if self._has_more and self._next_cursor:
             self._load(self._next_cursor, push_cursor=True)
 
-    def _record_title(self, record: HistoryRecord) -> str:
-        text = record.original_text.replace("\n", " ").strip()
-        return text[:80] or self._t(TranslationKey.HISTORY_EMPTY_RECORD)
+    def _text_for(self, record: HistoryRecord) -> str:
+        return (
+            record.enhanced_text
+            if record.selected_variant is TranscriptVariant.ENHANCED and record.enhanced_text
+            else record.original_text
+        )
 
     def _record_metadata(self, record: HistoryRecord) -> str:
         status = self._t(
@@ -513,28 +614,39 @@ class HistoryPage(QWidget):
             }.get(source, TranslationKey.HISTORY_SOURCE_OTHER)
         )
 
+    @staticmethod
+    def _folder_reference(record: HistoryRecord) -> str | None:
+        value = record.source_metadata.get("folder_reference")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
     def apply_locale(self, _locale: str | None = None) -> None:
         del _locale
         self._title.setText(self._t(TranslationKey.HISTORY_TITLE))
         self._subtitle.setText(self._t(TranslationKey.HISTORY_SUBTITLE))
+        self._search.setPlaceholderText(self._t(TranslationKey.HISTORY_SEARCH_PLACEHOLDER))
+        self._search_button.setText(self._t(TranslationKey.HISTORY_SEARCH))
+        self._search.setAccessibleName(self._t(TranslationKey.HISTORY_SEARCH_ACCESSIBLE))
+        self._search_button.setAccessibleName(self._t(TranslationKey.HISTORY_SEARCH_ACCESSIBLE))
         self._availability.setText(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
         self._copy.setText(self._t(TranslationKey.HISTORY_COPY))
-        self._variant.setItemText(0, self._t(TranslationKey.HISTORY_ORIGINAL))
-        self._variant.setItemText(1, self._t(TranslationKey.HISTORY_ENHANCED))
         self._variant.setAccessibleName(self._t(TranslationKey.HISTORY_VARIANT))
         self._export_txt.setText(self._t(TranslationKey.HISTORY_EXPORT_TXT_SHORT))
         self._export_markdown.setText(self._t(TranslationKey.HISTORY_EXPORT_MARKDOWN_SHORT))
         self._delete.setText(self._t(TranslationKey.HISTORY_DELETE))
         self._previous.setText(self._t(TranslationKey.HISTORY_PREVIOUS))
         self._next.setText(self._t(TranslationKey.HISTORY_NEXT))
+        for record in self._records:
+            row = self._rows.get(record.id)
+            if row is None:
+                continue
+            row.set_metadata(self._record_metadata(record))
+            row.apply_locale()
         if self._selected is not None:
             self._metadata.setText(self._record_metadata(self._selected))
         elif not self._records:
             self._metadata.setText(self._t(TranslationKey.HISTORY_EMPTY))
         else:
             self._metadata.setText(self._t(TranslationKey.HISTORY_SELECT))
-        for index, record in enumerate(self._records):
-            self._list.item(index).setText(self._record_title(record))
 
     def _t(self, key: TranslationKey, **values: object) -> str:
         return translate(key, self._locale_config.locale, **values)

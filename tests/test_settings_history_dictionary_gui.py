@@ -261,3 +261,77 @@ def test_history_page_does_not_wait_for_persistence_future(application: QApplica
     deferred.history_future.set_result(HistoryPage((), 0, 20, False))
     _wait(application, lambda: page._status.text() == "Ready")
     page.dispose()
+
+
+def test_history_rows_preview_expand_copy_and_disable_unavailable_actions(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    record = HistoryRecord(
+        id="history-preview",
+        created_at=datetime.now(UTC),
+        original_text="First line\nSecond line\nThird line\nFourth line",
+        source_metadata={"source_name": "meeting.wav"},
+    )
+    store.upsert_history(record).result(timeout=2)
+    page = HistoryWidget(service)
+    try:
+        _wait(application, lambda: page._list.count() == 1)
+        row = page._rows[record.id]
+        assert row._preview.text() == "First line\nSecond line\n..."
+        assert not row.audio_button.isEnabled()
+        assert not row.folder_button.isEnabled()
+
+        page._list.setCurrentRow(0)
+        assert row.expanded
+        assert row._full_text.text() == record.original_text
+        page._copy.click()
+        _wait(application, lambda: page._status.text() in {"Copied", "Скопировано"})
+        assert QApplication.clipboard().text() == record.original_text
+    finally:
+        page.dispose()
+        store.close().result(timeout=2)
+
+
+def test_history_audio_and_folder_actions_use_injected_ports(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    record = HistoryRecord(
+        id="history-actions",
+        created_at=datetime.now(UTC),
+        original_text="Transcript",
+        source_metadata={"folder_reference": "folder-token"},
+        audio_artifact_path="history/history-actions.wav",
+    )
+    store.upsert_history(record).result(timeout=2)
+
+    class AudioPort:
+        def __init__(self) -> None:
+            self.references: list[str] = []
+
+        def play(self, artifact_reference: str) -> None:
+            self.references.append(artifact_reference)
+
+    class FolderPort:
+        def __init__(self) -> None:
+            self.references: list[str] = []
+
+        def reveal(self, folder_reference: str) -> None:
+            self.references.append(folder_reference)
+
+    audio = AudioPort()
+    folder = FolderPort()
+    page = HistoryWidget(service, audio_port=audio, folder_port=folder)
+    try:
+        _wait(application, lambda: page._list.count() == 1)
+        row = page._rows[record.id]
+        assert row.audio_button.isEnabled()
+        assert row.folder_button.isEnabled()
+        row.audio_button.click()
+        row.folder_button.click()
+        assert audio.references == [record.audio_artifact_path]
+        assert folder.references == ["folder-token"]
+    finally:
+        page.dispose()
+        store.close().result(timeout=2)
