@@ -14,7 +14,9 @@ from voiceink_win.desktop_composition import (
     build_package_smoke_desktop_composition,
 )
 from voiceink_win.domain import TranscribeAvailability
-from voiceink_win.infrastructure import create_global_shortcut_port
+from voiceink_win.infrastructure import create_global_shortcut_port, create_instance_lease
+
+from .tray_lifecycle import TrayLifecycleCoordinator
 
 PACKAGE_SMOKE_TIMEOUT_SECONDS = 300
 PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS = 240.0
@@ -70,6 +72,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         ) from error
 
     application = QApplication.instance() or QApplication(sys.argv)
+    application.setQuitOnLastWindowClosed(False)
     application.setApplicationName("VoiceInk")
     from .app_icon import application_icon
 
@@ -85,14 +88,28 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
 
     from .main_window import MainWindow
 
-    composition = (
-        build_package_smoke_desktop_composition(PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS)
-        if package_smoke
-        else build_desktop_composition()
-    )
-    global_shortcut = GlobalToggleShortcutService(
-        composition.controller, create_global_shortcut_port()
-    )
+    lease = create_instance_lease()
+    if not lease.acquire():
+        return 0
+    try:
+        composition = (
+            build_package_smoke_desktop_composition(PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS)
+            if package_smoke
+            else build_desktop_composition()
+        )
+    except BaseException:
+        lease.release()
+        raise
+    try:
+        global_shortcut = GlobalToggleShortcutService(
+            composition.controller, create_global_shortcut_port()
+        )
+    except BaseException:
+        try:
+            composition.close()
+        finally:
+            lease.release()
+        raise
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
@@ -133,13 +150,16 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         elif smoke:
             QTimer.singleShot(100, application.quit)
 
-    return _run_session(
+    coordinator = TrayLifecycleCoordinator(
+        application,
         composition,
         create_window,
-        application.exec,
-        after_show,
-        cleanup_window=lambda window: window.dispose(),
+        global_shortcut,
+        lease,
+        icon=application.windowIcon(),
+        after_show=after_show,
     )
+    return coordinator.run(application.exec)
 
 
 if __name__ == "__main__":
