@@ -103,7 +103,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         if color_scheme_changed is not None:
             window.connect_theme_signal(
                 color_scheme_changed,
-                lambda *_: window.apply_theme(theme_for(detect_system_theme(application))),
+                lambda *_: window.apply_system_theme(detect_system_theme(application)),
             )
         return window
 

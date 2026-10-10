@@ -31,7 +31,11 @@ from .sqlite_executor import SerializedSQLiteExecutor
 from .storage_paths import normalise_relative_audio_path
 
 _MIGRATION_NAME = re.compile(r"^(\d+)_([a-z0-9_]+)\.sql$")
-REQUIRED_MIGRATIONS = ("001_initial.sql", "002_persistence_hardening.sql")
+REQUIRED_MIGRATIONS = (
+    "001_initial.sql",
+    "002_persistence_hardening.sql",
+    "003_theme_preference.sql",
+)
 EXPECTED_TABLES = {"schema_migrations", "history", "dictionary_entries", "settings"}
 ReconciliationHook = Callable[[sqlite3.Connection], None]
 
@@ -289,7 +293,7 @@ class SQLitePersistence(PersistencePort):
         def read(connection: sqlite3.Connection) -> Settings | None:
             row = connection.execute(
                 """
-                SELECT language, selected_mode, hotkeys_json, auto_copy,
+                SELECT language, selected_mode, hotkeys_json, auto_copy, theme_mode,
                        model_preferences_json, audio_preferences_json
                 FROM settings WHERE singleton = 1
                 """
@@ -311,6 +315,7 @@ class SQLitePersistence(PersistencePort):
             allowed = {
                 "language",
                 "selected_mode",
+                "theme_mode",
                 "auto_copy",
                 "hotkeys.start_stop",
                 "hotkeys.cancel",
@@ -321,7 +326,7 @@ class SQLitePersistence(PersistencePort):
                     f"unsupported settings fields: {', '.join(sorted(unknown))}"
                 )
             row = connection.execute(
-                "SELECT language, selected_mode, hotkeys_json, auto_copy, "
+                "SELECT language, selected_mode, hotkeys_json, auto_copy, theme_mode, "
                 "model_preferences_json, audio_preferences_json FROM settings WHERE singleton = 1"
             ).fetchone()
             current = _settings_from_row(row) if row is not None else Settings()
@@ -330,6 +335,7 @@ class SQLitePersistence(PersistencePort):
             values: dict[str, object] = {
                 "language": current.language,
                 "selected_mode": current.selected_mode,
+                "theme_mode": current.theme_mode,
                 "hotkeys": hotkeys,
                 "auto_copy": current.auto_copy,
                 "model_preferences": current.model_preferences,
@@ -480,13 +486,14 @@ def _write_settings(connection: sqlite3.Connection, settings: Settings) -> None:
         """
         INSERT INTO settings (
             singleton, language, selected_mode, hotkeys_json, auto_copy,
-            model_preferences_json, audio_preferences_json
-        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+            theme_mode, model_preferences_json, audio_preferences_json
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(singleton) DO UPDATE SET
             language = excluded.language,
             selected_mode = excluded.selected_mode,
             hotkeys_json = excluded.hotkeys_json,
             auto_copy = excluded.auto_copy,
+            theme_mode = excluded.theme_mode,
             model_preferences_json = excluded.model_preferences_json,
             audio_preferences_json = excluded.audio_preferences_json
         """,
@@ -495,6 +502,7 @@ def _write_settings(connection: sqlite3.Connection, settings: Settings) -> None:
             settings.selected_mode,
             json.dumps(settings.hotkeys, sort_keys=True, separators=(",", ":")),
             int(settings.auto_copy),
+            settings.theme_mode.value,
             json.dumps(settings.model_preferences, sort_keys=True, separators=(",", ":")),
             json.dumps(settings.audio_preferences, sort_keys=True, separators=(",", ":")),
         ),
@@ -507,8 +515,9 @@ def _settings_from_row(row: sqlite3.Row | tuple[Any, ...]) -> Settings:
         selected_mode=row[1],
         hotkeys=_decode_mapping(row[2], "hotkeys"),
         auto_copy=bool(row[3]),
-        model_preferences=_decode_mapping(row[4], "model preferences"),
-        audio_preferences=_decode_mapping(row[5], "audio preferences"),
+        theme_mode=row[4],
+        model_preferences=_decode_mapping(row[5], "model preferences"),
+        audio_preferences=_decode_mapping(row[6], "audio preferences"),
     )
 
 

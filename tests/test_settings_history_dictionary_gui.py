@@ -23,11 +23,13 @@ from voiceink_win.domain import (
     HistoryRecord,
     HistoryStatus,
     Settings,
+    ThemePreference,
     TranscriptionSource,
 )
 from voiceink_win.infrastructure import SQLitePersistence
 from voiceink_win.presentation.history_page import HistoryPage as HistoryWidget
 from voiceink_win.presentation.main_window import MainWindow
+from voiceink_win.presentation.theme import DARK_THEME, LIGHT_THEME, ThemeMode
 
 
 @pytest.fixture(scope="module")
@@ -126,6 +128,37 @@ def test_settings_roundtrip_reloads_language_mode_and_hotkeys(
             hotkeys={"start_stop": "Ctrl+Space", "cancel": ""},
             auto_copy=True,
         )
+    finally:
+        window.close()
+        store.close().result(timeout=2)
+
+
+def test_settings_theme_selector_persists_and_refreshes_runtime_theme(
+    application: QApplication, persistence
+) -> None:
+    service, store = persistence
+    window = _window(application, service)
+    try:
+        window._select_page("Settings")
+        page = window._settings_page
+        _wait(application, lambda: not page._loading)
+
+        page._theme_combo.setCurrentIndex(page._theme_combo.findData("dark"))
+        _wait(application, lambda: page._status.text() in {"Saved", "Сохранено"})
+        assert window.theme_preference is ThemeMode.DARK
+        assert window._theme is DARK_THEME
+        assert store.get_settings().result(timeout=2).theme_mode is ThemePreference.DARK
+
+        window.apply_system_theme(ThemeMode.LIGHT)
+        assert window._theme is DARK_THEME
+
+        page._theme_combo.setCurrentIndex(page._theme_combo.findData("system"))
+        _wait(application, lambda: page._status.text() in {"Saved", "Сохранено"})
+        window.apply_system_theme(ThemeMode.DARK)
+        assert window.theme_preference is ThemeMode.SYSTEM
+        assert window._theme is DARK_THEME
+        window.apply_system_theme(ThemeMode.LIGHT)
+        assert window._theme is LIGHT_THEME
     finally:
         window.close()
         store.close().result(timeout=2)
