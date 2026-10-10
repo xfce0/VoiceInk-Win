@@ -115,6 +115,7 @@ from .persistence import (
     PersistencePort,
     Settings,
     SettingsPort,
+    ThemePreference,
     TranscriptionSource,
     canonical_dictionary_key,
 )
@@ -172,6 +173,7 @@ __all__ = [
     "PersistencePort",
     "Settings",
     "SettingsPort",
+    "ThemePreference",
     "TranscriptionSource",
     "canonical_dictionary_key",
     "ShellSnapshot",
