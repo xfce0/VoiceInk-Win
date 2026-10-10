@@ -28,6 +28,7 @@ from voiceink_win.application import (
 from voiceink_win.application.transcribe_output import LocalTextFilePort
 from voiceink_win.domain import ShellSnapshot, ShellState
 
+from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
 from .history_page import HistoryPage
@@ -321,6 +322,10 @@ class MainWindow(QMainWindow):
             self._persistence, self._pages, locale_config=self._locale_config
         )
         self._pages.addWidget(self._dictionary_page)
+        self._audio_page = AudioPage(
+            self._persistence, self._pages, locale_config=self._locale_config
+        )
+        self._pages.addWidget(self._audio_page)
         self._settings_page = SettingsPage(
             self._persistence, self._pages, locale_config=self._locale_config
         )
@@ -391,8 +396,11 @@ class MainWindow(QMainWindow):
         elif label == "Dictionary":
             self._pages.setCurrentIndex(4)
             self._dictionary_page.refresh()
-        elif label == "Settings":
+        elif label == "Audio":
             self._pages.setCurrentIndex(5)
+            self._audio_page.refresh()
+        elif label == "Settings":
+            self._pages.setCurrentIndex(6)
             self._settings_page.refresh()
         else:
             return
@@ -660,6 +668,7 @@ class MainWindow(QMainWindow):
         self._modes_page.dispose()
         self._history_page.dispose()
         self._dictionary_page.dispose()
+        self._audio_page.dispose()
         self._settings_page.dispose()
         if self._owns_history_deletion and self._history_deletion is not None:
             self._history_deletion.close()

@@ -66,7 +66,13 @@ def test_navigation_reaches_all_persisted_pages(application: QApplication, persi
     service, store = persistence
     window = _window(application, service)
     try:
-        for label, index in (("Modes", 2), ("History", 3), ("Dictionary", 4), ("Settings", 5)):
+        for label, index in (
+            ("Modes", 2),
+            ("History", 3),
+            ("Dictionary", 4),
+            ("Audio", 5),
+            ("Settings", 6),
+        ):
             window._nav_buttons[label].click()
             assert window._pages.currentIndex() == index
             assert window._nav_buttons[label].isChecked()
