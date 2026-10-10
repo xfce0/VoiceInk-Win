@@ -107,7 +107,6 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     def close_before_quit() -> None:
         close_composition()
 
-    application.aboutToQuit.connect(close_before_quit)
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
@@ -147,6 +146,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         elif smoke:
             QTimer.singleShot(100, application.quit)
 
+    application.aboutToQuit.connect(close_before_quit)
     try:
         return _run_session(
             composition,
