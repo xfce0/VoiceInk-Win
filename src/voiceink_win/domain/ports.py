@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from .audio_capture import InputDevice, MicrophoneStatus
+from .audio_capture import InputDevice, InputLevel, MicrophoneStatus
 from .models import AsrCapabilities, AsrRequest, RuntimeHealth, TranscriptResult
 from .shortcuts import GlobalShortcut
 
@@ -58,6 +58,8 @@ class AudioCaptureSession(Protocol):
     def cancel(self) -> None: ...
 
     def close(self) -> None: ...
+
+    def subscribe_level(self, listener: Callable[[InputLevel], None]) -> Callable[[], None]: ...
 
 
 class AudioInputPort(Protocol):
