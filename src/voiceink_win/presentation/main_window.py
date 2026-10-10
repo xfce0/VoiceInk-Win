@@ -575,7 +575,9 @@ class MainWindow(QMainWindow):
         self._open_recorder_button.setObjectName("primaryButton")
         self._open_recorder_button.clicked.connect(lambda: self._recorder.show_near(self))
         actions.addWidget(self._open_recorder_button, 0)
-        self._insights_button = QPushButton(self._t(TranslationKey.DASHBOARD_INSIGHTS_LOCKED), hero)
+        self._insights_button = QPushButton(
+            self._t(TranslationKey.DASHBOARD_INSIGHTS_UNAVAILABLE), hero
+        )
         self._insights_button.setObjectName("secondaryButton")
         self._insights_button.setEnabled(False)
         actions.addWidget(self._insights_button, 0)
@@ -614,6 +616,8 @@ class MainWindow(QMainWindow):
         return section
 
     def _render(self, snapshot: ShellSnapshot) -> None:
+        self._insights_button.setText(self._t(TranslationKey.DASHBOARD_INSIGHTS_UNAVAILABLE))
+        self._insights_button.setEnabled(False)
         state_titles = {
             ShellState.UNAVAILABLE: TranslationKey.DASHBOARD_STATE_UNAVAILABLE,
             ShellState.IDLE: TranslationKey.DASHBOARD_STATE_READY,
@@ -629,10 +633,8 @@ class MainWindow(QMainWindow):
         self._state_pill.style().polish(self._state_pill)
 
         if snapshot.state is ShellState.UNAVAILABLE:
-            self._open_recorder_button.setEnabled(False)
-            self._open_recorder_button.setText(
-                self._t(TranslationKey.DASHBOARD_RECORDER_UNAVAILABLE)
-            )
+            self._open_recorder_button.setEnabled(True)
+            self._open_recorder_button.setText(self._t(TranslationKey.DASHBOARD_OPEN_RECORDER))
             self._page_subtext.setText(self._t(TranslationKey.DASHBOARD_SUBTEXT_UNAVAILABLE))
             self._hero_headline.setText(self._t(TranslationKey.DASHBOARD_HEADLINE_UNAVAILABLE))
             self._hero_detail.setText(self._t(TranslationKey.DASHBOARD_DETAIL_UNAVAILABLE))
