@@ -199,6 +199,7 @@ def test_history_load_select_copy_delete_and_cleanup(
         page = window._history_page
         _wait(application, lambda: page._list.count() == 1)
         page._list.setCurrentRow(0)
+        assert page._rows[record.id].width() == page._list.viewport().width()
         assert page._text.toPlainText() == "A stored transcript"
         page._copy.click()
         _wait(application, lambda: page._status.text() in {"Copied", "Скопировано"})
@@ -284,6 +285,7 @@ def test_dictionary_crud_is_async_and_validates_phrase(
         entry = store.list_dictionary().result(timeout=2)[0]
         assert entry.replacement == "VoiceInk"
         row = page._row_widgets[entry.id]
+        assert row.width() == page._list.viewport().width()
         assert row._edit.text() == "Edit"
         assert row._delete.text() == "Delete"
         row._edit.click()

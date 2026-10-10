@@ -17,7 +17,7 @@ from voiceink_win.presentation.transcribe_page import TranscribePage
 try:
     from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
     from PySide6.QtGui import QDropEvent
-    from PySide6.QtWidgets import QApplication, QLabel
+    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 except ImportError:  # pragma: no cover - exercised by the dependency-free test lane
     pytestmark = pytest.mark.skip(reason="PySide6 is not installed")
 
@@ -54,6 +54,10 @@ def test_transcribe_destination_is_enabled_and_renders_real_page(qt_app) -> None
         page = window._transcribe_page
         assert isinstance(page, TranscribePage)
         assert page._add_button.isEnabled()
+        queue_scroll = page.findChild(QScrollArea, "transcribeQueueScroll")
+        assert queue_scroll is not None
+        assert queue_scroll.horizontalScrollBarPolicy() is Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert queue_scroll.widget().width() == queue_scroll.viewport().width()
         assert any(
             label.text().startswith("Supports WAV, MP3, M4A") for label in page.findChildren(QLabel)
         )

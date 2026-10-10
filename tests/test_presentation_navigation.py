@@ -20,6 +20,8 @@ from voiceink_win.application import ShellController
 from voiceink_win.domain import TranscriptResult
 from voiceink_win.presentation.icon_registry import SIDEBAR_ITEMS
 from voiceink_win.presentation.main_window import (
+    MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH,
     SIDEBAR_ICON_SIZE,
     SIDEBAR_ITEM_HEIGHT,
     SIDEBAR_WIDTH,
@@ -50,7 +52,8 @@ def test_sidebar_is_expanded_with_visible_labels_at_minimum_window(
     buttons = window.findChildren(QPushButton, "navButton")
 
     assert sidebar is not None
-    assert window.size() == window.minimumSize()
+    assert window.size() == QSize(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
+    assert window.minimumSize() == window.maximumSize() == window.size()
     assert sidebar.width() == SIDEBAR_WIDTH
     assert [button.text() for button in buttons] == [item.label for item in SIDEBAR_ITEMS]
     assert all(button.height() >= SIDEBAR_ITEM_HEIGHT for button in buttons)
@@ -65,6 +68,30 @@ def test_sidebar_is_expanded_with_visible_labels_at_minimum_window(
     assert window.minimumWidth() >= SIDEBAR_WIDTH + 600
 
     window.close()
+
+
+def test_sidebar_checks_destination_before_history_refresh(application: QApplication) -> None:
+    window = MainWindow(ShellController.unavailable())
+    window.show()
+    application.processEvents()
+    window._select_page("Dictionary")
+    observed: list[tuple[bool, bool]] = []
+
+    def refresh_history() -> None:
+        observed.append(
+            (
+                window._nav_buttons["History"].isChecked(),
+                window._nav_buttons["Dictionary"].isChecked(),
+            )
+        )
+
+    window._history_page.refresh = refresh_history
+    try:
+        window._select_page("History")
+        assert observed == [(True, False)]
+        assert sum(button.isChecked() for button in window._nav_buttons.values()) == 1
+    finally:
+        window.close()
 
 
 def test_sidebar_icons_are_repository_svg_rendered_and_high_dpi(application: QApplication) -> None:
