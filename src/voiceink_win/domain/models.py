@@ -193,6 +193,19 @@ class RuntimeHealth:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelMetadata:
+    """Safe model metadata exposed to the presentation layer."""
+
+    name: str
+    model_id: str
+    version: str
+    backend: str
+    trusted: bool
+    available: bool
+    safe_path: str
+
+
+@dataclass(frozen=True, slots=True)
 class AsrCapabilities:
     model_id: str
     backends: tuple[str, ...]

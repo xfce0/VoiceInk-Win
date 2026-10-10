@@ -36,6 +36,7 @@ from .media_snapshot import (
     WindowsAdapterRequiredError,
     WindowsMediaSecurityAdapter,
 )
+from .model_metadata import discover_model_metadata, unavailable_model_metadata
 from .packaged_runtime import (
     PACKAGE_DESCRIPTOR,
     PACKAGE_SCHEMA,
@@ -175,6 +176,8 @@ __all__ = [
     "WindowsKernel32",
     "WindowsMediaSnapshotStore",
     "create_media_snapshot_store",
+    "discover_model_metadata",
     "make_wav",
     "validate_wav",
+    "unavailable_model_metadata",
 ]

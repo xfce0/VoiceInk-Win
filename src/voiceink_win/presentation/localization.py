@@ -75,6 +75,20 @@ class TranslationKey(StrEnum):
     MODE_FOCUS_DETAIL = "modes.focus_detail"
     MODE_UNAVAILABLE = "modes.unavailable"
 
+    AI_MODELS_TITLE = "ai_models.title"
+    AI_MODELS_SUBTITLE = "ai_models.subtitle"
+    AI_MODEL_NAME = "ai_models.name"
+    AI_MODEL_VERSION = "ai_models.version"
+    AI_MODEL_ID = "ai_models.id"
+    AI_MODEL_BACKEND = "ai_models.backend"
+    AI_MODEL_TRUSTED = "ai_models.trusted"
+    AI_MODEL_PATH = "ai_models.path"
+    AI_MODEL_STATE_TRUSTED = "ai_models.state.trusted"
+    AI_MODEL_STATE_UNTRUSTED = "ai_models.state.untrusted"
+    AI_MODEL_STATE_AVAILABLE = "ai_models.state.available"
+    AI_MODEL_STATE_UNAVAILABLE = "ai_models.state.unavailable"
+    AI_MODEL_UNAVAILABLE = "ai_models.unavailable"
+
     SETTINGS_TITLE = "settings.title"
     SETTINGS_SUBTITLE = "settings.subtitle"
     SETTINGS_LANGUAGE = "settings.language"
@@ -368,6 +382,31 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.MODE_UNAVAILABLE: _entry(
         "Transcription runtime features are unavailable in this build.",
         "Функции среды расшифровки недоступны в этой сборке.",
+    ),
+    TranslationKey.AI_MODELS_TITLE: _entry("AI Models", "Модели ИИ"),
+    TranslationKey.AI_MODELS_SUBTITLE: _entry(
+        "Installed model metadata comes from the trusted runtime package or manifest. "
+        "This page does not download models.",
+        "Метаданные установленной модели берутся из доверенного пакета или manifest. "
+        "Эта страница не загружает модели.",
+    ),
+    TranslationKey.AI_MODEL_NAME: _entry("Name", "Название"),
+    TranslationKey.AI_MODEL_VERSION: _entry("Version / revision", "Версия / ревизия"),
+    TranslationKey.AI_MODEL_ID: _entry("Model ID", "ID модели"),
+    TranslationKey.AI_MODEL_BACKEND: _entry("Backend", "Backend"),
+    TranslationKey.AI_MODEL_TRUSTED: _entry("Trust", "Доверие"),
+    TranslationKey.AI_MODEL_PATH: _entry("Model path", "Путь к модели"),
+    TranslationKey.AI_MODEL_STATE_TRUSTED: _entry("Trusted metadata", "Доверенные метаданные"),
+    TranslationKey.AI_MODEL_STATE_UNTRUSTED: _entry(
+        "Metadata not verified", "Метаданные не проверены"
+    ),
+    TranslationKey.AI_MODEL_STATE_AVAILABLE: _entry("Available", "Доступна"),
+    TranslationKey.AI_MODEL_STATE_UNAVAILABLE: _entry("Unavailable", "Недоступна"),
+    TranslationKey.AI_MODEL_UNAVAILABLE: _entry(
+        "The package or runtime is not available. Install the approved runtime package "
+        "to use this model.",
+        "Пакет или среда выполнения недоступны. Установите утверждённый пакет среды, "
+        "чтобы использовать эту модель.",
     ),
     TranslationKey.SETTINGS_TITLE: _entry("Settings", "Настройки"),
     TranslationKey.SETTINGS_SUBTITLE: _entry(
