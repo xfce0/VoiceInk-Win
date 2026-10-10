@@ -208,6 +208,20 @@ def test_frontend_entrypoint_delegates_to_presentation_app() -> None:
     assert "raise SystemExit(main(smoke=smoke, package_smoke=package_smoke))" in entrypoint
 
 
+def test_packaged_launch_contract_keeps_gui_executable_canonical() -> None:
+    build_source = (ROOT / "scripts" / "portable_package.py").read_text(encoding="utf-8")
+    readme = (ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"executable": CANONICAL_LAUNCH_TARGET' in build_source
+    assert '"subsystem": CANONICAL_LAUNCH_SUBSYSTEM' in build_source
+    assert "voiceink-shell.exe" in readme
+    assert "developer/CLI helper" in readme
+    assert ".\\voiceink-shell-smoke.exe --smoke" in readme
+    assert ".\\voiceink-shell.cmd" not in readme
+
+
 def test_frontend_package_smoke_validates_x64_gui_pe(tmp_path: Path) -> None:
     executable = tmp_path / "voiceink-shell.exe"
     data = bytearray(0x40 + 24 + 240)
