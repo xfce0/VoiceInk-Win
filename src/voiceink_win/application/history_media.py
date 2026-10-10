@@ -152,6 +152,9 @@ class HistoryMediaActionService:
             else:
                 port.reveal(artifact)
         except Exception as error:
+            clear_failure_callback = getattr(port, "set_failure_callback", None)
+            if callable(clear_failure_callback):
+                clear_failure_callback(None)
             return self._failed(record, action, error)
         return HistoryMediaActionResult(HistoryMediaCode.STARTED)
 
