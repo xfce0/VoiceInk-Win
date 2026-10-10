@@ -47,7 +47,7 @@ class WindowsHistoryArtifactRevealAdapter:
     def reveal(self, resolved_artifact: Path) -> None:
         if not self.is_available() or self._explorer_path is None:
             raise RuntimeError("history artifact reveal is unavailable")
-        self._launcher([self._explorer_path, f'/select,"{resolved_artifact}"'])
+        self._launcher([self._explorer_path, "/select,", str(resolved_artifact)])
 
     @staticmethod
     def _system_explorer_path() -> str:

@@ -328,7 +328,8 @@ def test_windows_reveal_adapter_selects_the_exact_artifact() -> None:
     assert commands == [
         [
             r"C:\Windows\explorer.exe",
-            r'/select,"C:\Users\Test User\VoiceInk\аудио\history\item.wav"',
+            "/select,",
+            r"C:\Users\Test User\VoiceInk\аудио\history\item.wav",
         ]
     ]
 
