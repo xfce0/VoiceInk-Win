@@ -10,15 +10,23 @@ from voiceink_win.application import AsrApplicationService, MicrophoneRecordingS
 from voiceink_win.domain import (
     BoundedPcm16Capture,
     CancellationError,
+    CaptureError,
     CaptureErrorCode,
     CaptureLimitError,
     CaptureLimits,
     MicrophoneAvailability,
+    MicrophoneCapability,
+    MicrophoneStatus,
     MicrophoneUnavailableError,
     QueueFullError,
     RecordingState,
 )
-from voiceink_win.infrastructure import FakeAsrRuntime, WindowsAudioInputAdapter
+from voiceink_win.infrastructure import (
+    FakeAsrRuntime,
+    WindowsAudioInputAdapter,
+    WindowsCaptureError,
+    WindowsCaptureFailureCode,
+)
 
 
 class FakeCaptureSession:
@@ -29,6 +37,7 @@ class FakeCaptureSession:
         self._cancel = Event()
         self.started = False
         self.closed = False
+        self.close_calls = 0
 
     def start(self) -> None:
         self.started = True
@@ -52,6 +61,7 @@ class FakeCaptureSession:
         self._stop.set()
 
     def close(self) -> None:
+        self.close_calls += 1
         self.closed = True
 
 
@@ -91,10 +101,133 @@ def test_windows_adapter_reports_unavailable_without_native_fallback() -> None:
     adapter = WindowsAudioInputAdapter()
 
     assert adapter.status().availability is MicrophoneAvailability.UNAVAILABLE
+    assert adapter.status().capability is MicrophoneCapability.UNSUPPORTED
     with pytest.raises(MicrophoneUnavailableError):
         adapter.enumerate_devices()
     with pytest.raises(MicrophoneUnavailableError):
         adapter.open()
+
+
+class Provider:
+    def __init__(self, session: FakeCaptureSession) -> None:
+        self.session = session
+        self.status_calls = 0
+
+    def status(self) -> MicrophoneStatus:
+        self.status_calls += 1
+        return MicrophoneStatus(
+            MicrophoneAvailability.AVAILABLE,
+            "provider is ready",
+            MicrophoneCapability.SUPPORTED,
+        )
+
+    def enumerate_devices(self, deadline=None):
+        del deadline
+        return ()
+
+    def open(self, selection_token=None, deadline=None):
+        del selection_token, deadline
+        return self.session
+
+
+def test_windows_adapter_delegates_supported_provider_without_exposing_native_details() -> None:
+    session = FakeCaptureSession([b"\x00\x00"])
+    provider = Provider(session)
+    adapter = WindowsAudioInputAdapter(provider, platform_name="nt", architecture="AMD64")
+
+    assert adapter.status().capability is MicrophoneCapability.SUPPORTED
+    assert adapter.enumerate_devices() == ()
+    delegated = adapter.open("opaque-token")
+    delegated.start()
+    assert delegated.read_chunk() == b"\x00\x00"
+    delegated.close()
+    delegated.close()
+
+    assert provider.status_calls == 1
+    assert session.close_calls == 1
+
+
+def test_windows_adapter_rejects_native_arm64_without_claiming_support() -> None:
+    provider = Provider(FakeCaptureSession([]))
+    adapter = WindowsAudioInputAdapter(provider, platform_name="nt", architecture="ARM64")
+
+    assert adapter.status() == MicrophoneStatus(
+        MicrophoneAvailability.UNAVAILABLE,
+        "Native Windows microphone capture is unsupported on this architecture",
+        MicrophoneCapability.UNSUPPORTED,
+    )
+    with pytest.raises(MicrophoneUnavailableError):
+        adapter.open()
+    assert provider.status_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("provider_code", "domain_code"),
+    [
+        (WindowsCaptureFailureCode.PERMISSION_DENIED, CaptureErrorCode.PERMISSION_DENIED),
+        (WindowsCaptureFailureCode.DEVICE_UNAVAILABLE, CaptureErrorCode.DEVICE_UNAVAILABLE),
+        (WindowsCaptureFailureCode.BUSY, CaptureErrorCode.BUSY),
+        (WindowsCaptureFailureCode.UNSUPPORTED_FORMAT, CaptureErrorCode.UNSUPPORTED_FORMAT),
+        (WindowsCaptureFailureCode.DEVICE_DISCONNECTED, CaptureErrorCode.DEVICE_DISCONNECTED),
+        (WindowsCaptureFailureCode.CAPTURE_OVERFLOW, CaptureErrorCode.CAPTURE_OVERFLOW),
+        (WindowsCaptureFailureCode.TIMEOUT, CaptureErrorCode.TIMEOUT),
+        (WindowsCaptureFailureCode.CANCELLED, CaptureErrorCode.CANCELLED),
+        (WindowsCaptureFailureCode.CLEANUP_FAILED, CaptureErrorCode.CLEANUP_FAILED),
+        (WindowsCaptureFailureCode.FAILED, CaptureErrorCode.FAILED),
+    ],
+)
+def test_windows_adapter_maps_provider_failures_to_safe_domain_codes(
+    provider_code, domain_code
+) -> None:
+    class FailingProvider(Provider):
+        def enumerate_devices(self, deadline=None):
+            del deadline
+            raise WindowsCaptureError(provider_code, "native HRESULT must not escape")
+
+    adapter = WindowsAudioInputAdapter(
+        FailingProvider(FakeCaptureSession([])), platform_name="nt", architecture="AMD64"
+    )
+
+    with pytest.raises(CaptureError) as error:
+        adapter.enumerate_devices()
+
+    assert error.value.code is domain_code
+    assert "HRESULT" not in error.value.message
+    assert error.value.__cause__ is None
+
+
+def test_windows_adapter_session_rejects_double_start_and_retries_failed_cleanup() -> None:
+    class CleanupFailingSession(FakeCaptureSession):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.fail_cleanup = True
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.fail_cleanup:
+                raise WindowsCaptureError(
+                    WindowsCaptureFailureCode.CLEANUP_FAILED, "native cleanup detail"
+                )
+            self.closed = True
+
+    session = CleanupFailingSession()
+    adapter = WindowsAudioInputAdapter(Provider(session), platform_name="nt", architecture="AMD64")
+    delegated = adapter.open()
+    delegated.start()
+
+    with pytest.raises(CaptureError) as start_error:
+        delegated.start()
+    assert start_error.value.code is CaptureErrorCode.FAILED
+
+    with pytest.raises(CaptureError) as cleanup_error:
+        delegated.close()
+    assert cleanup_error.value.code is CaptureErrorCode.CLEANUP_FAILED
+
+    session.fail_cleanup = False
+    delegated.close()
+    delegated.close()
+    assert session.close_calls == 2
+    assert session.closed
 
 
 def test_recording_stop_builds_pcm_and_uses_shared_asr_admission() -> None:
@@ -126,6 +259,24 @@ def test_recording_cancellation_during_capture_does_not_call_asr() -> None:
 
     assert result.state is RecordingState.CANCELLED
     assert result.audio is None
+    assert asr.admitted_count == 0
+    asr.close()
+
+
+def test_recording_cleanup_failure_is_failed_and_does_not_call_asr() -> None:
+    class CleanupFailureSession(FakeCaptureSession):
+        def close(self) -> None:
+            raise CaptureError(CaptureErrorCode.CLEANUP_FAILED, "cleanup failed")
+
+    session = CleanupFailureSession([b"\x00\x00"])
+    asr = AsrApplicationService(FakeAsrRuntime())
+    recording = MicrophoneRecordingService(FakeAudioInput(session), asr).start()
+
+    result = recording.wait(2.0)
+
+    assert result.state is RecordingState.FAILED
+    assert isinstance(result.error, CaptureError)
+    assert result.error.code is CaptureErrorCode.CLEANUP_FAILED
     assert asr.admitted_count == 0
     asr.close()
 
