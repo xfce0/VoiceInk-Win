@@ -649,6 +649,7 @@ class HistoryPage(QWidget):
             self._variant.blockSignals(False)
             return
         updated = replace(record, selected_variant=variant)
+        self._media_operation += 1
         self._selected = updated
         self._records = tuple(updated if item.id == record.id else item for item in self._records)
         self._text.setPlainText(self._text_for(updated))

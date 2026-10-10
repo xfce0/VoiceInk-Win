@@ -328,8 +328,7 @@ def test_windows_reveal_adapter_selects_the_exact_artifact() -> None:
     assert commands == [
         [
             r"C:\Windows\explorer.exe",
-            "/select,",
-            r"C:\Users\Test User\VoiceInk\аудио\history\item.wav",
+            r'/select,"C:\Users\Test User\VoiceInk\аудио\history\item.wav"',
         ]
     ]
 
@@ -446,6 +445,50 @@ def test_windows_audio_adapter_reports_asynchronous_error() -> None:
     player.errorOccurred.emit()
 
     assert [str(error) for error in failures] == ["history audio playback failed"]
+
+
+def test_windows_audio_adapter_cleanup_survives_signal_disconnect_failure() -> None:
+    class Signal:
+        def connect(self, _callback) -> None:
+            pass
+
+        def disconnect(self, _callback) -> None:
+            raise RuntimeError("signal is already closed")
+
+    class Player:
+        def __init__(self) -> None:
+            self.errorOccurred = Signal()
+            self.mediaStatusChanged = Signal()
+            self.stop_calls = 0
+
+        def setAudioOutput(self, _output) -> None:
+            pass
+
+        def setSource(self, _source) -> None:
+            pass
+
+        def play(self) -> None:
+            pass
+
+        def playbackState(self):
+            return "PlayingState"
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+
+    player = Player()
+    adapter = WindowsHistoryAudioPlaybackAdapter(
+        platform_name="nt",
+        player_factory=lambda: player,
+        audio_output_factory=object,
+        url_factory=lambda value: value,
+        empty_url_factory=lambda: None,
+    )
+
+    adapter.play(Path(r"C:\Windows\Temp\item.wav"))
+    adapter.close()
+
+    assert player.stop_calls == 1
 
 
 def test_windows_audio_adapter_initialization_failure_is_unavailable() -> None:

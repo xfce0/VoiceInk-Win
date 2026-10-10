@@ -47,7 +47,7 @@ class WindowsHistoryArtifactRevealAdapter:
     def reveal(self, resolved_artifact: Path) -> None:
         if not self.is_available() or self._explorer_path is None:
             raise RuntimeError("history artifact reveal is unavailable")
-        self._launcher([self._explorer_path, "/select,", str(resolved_artifact)])
+        self._launcher([self._explorer_path, f'/select,"{resolved_artifact}"'])
 
     @staticmethod
     def _system_explorer_path() -> str:
@@ -109,9 +109,14 @@ class WindowsHistoryAudioPlaybackAdapter:
             self._status_signal = getattr(self._player, "mediaStatusChanged", None)
             is_available = getattr(self._player, "isAvailable", None)
             if callable(is_available) and not is_available():
+                player = self._player
+                audio_output = self._audio_output
                 self._player = None
                 self._audio_output = None
+                self._release_objects(player, audio_output)
         except Exception as error:
+            player = self._player
+            audio_output = self._audio_output
             logger.warning(
                 "history audio adapter unavailable",
                 extra={
@@ -122,6 +127,7 @@ class WindowsHistoryAudioPlaybackAdapter:
             )
             self._player = None
             self._audio_output = None
+            self._release_objects(player, audio_output)
 
     def is_available(self) -> bool:
         return self._platform_name == "nt" and self._player is not None
@@ -135,47 +141,50 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._playback_error = None
         self._playback_request += 1
         request = self._playback_request
-        if self._error_signal is not None:
-            self._disconnect_signal(self._error_signal, self._error_slot)
-            self._error_slot = lambda *_args: self._on_playback_error(request)
-            self._error_signal.connect(self._error_slot)
-        if self._status_signal is not None:
-            self._disconnect_signal(self._status_signal, self._status_slot)
-            self._status_slot = lambda status: self._on_media_status(request, status)
-            self._status_signal.connect(self._status_slot)
         self._play_in_progress = True
         try:
+            if self._error_signal is not None:
+                self._disconnect_signal(self._error_signal, self._error_slot)
+                self._error_slot = lambda *_args: self._on_playback_error(request)
+                self._error_signal.connect(self._error_slot)
+            if self._status_signal is not None:
+                self._disconnect_signal(self._status_signal, self._status_slot)
+                self._status_slot = lambda status: self._on_media_status(request, status)
+                self._status_signal.connect(self._status_slot)
             self._player.setSource(self._url_factory(str(resolved_artifact)))
             self._player.play()
         except Exception:
             self._invalidate_playback()
+            self._cleanup_current_playback()
             raise
         finally:
             self._play_in_progress = False
         if self._playback_error is not None:
             error = self._playback_error
             self._invalidate_playback()
+            self._cleanup_current_playback()
             raise error
 
     def _on_playback_error(self, request: int) -> None:
         if request != self._playback_request:
             return
         self._playback_error = RuntimeError("history audio playback failed")
-        if self._play_in_progress or self._failure_callback is None:
+        if self._play_in_progress:
             return
         callback = self._failure_callback
-        self._failure_callback = None
-        self._disconnect_playback_signals()
-        callback(self._playback_error)
+        error = self._playback_error
+        self._invalidate_playback()
+        self._cleanup_current_playback()
+        if callback is not None:
+            callback(error)
 
     def _on_media_status(self, request: int, status: Any) -> None:
         if request != self._playback_request:
             return
         status_name = getattr(status, "name", str(status))
         if status_name == "EndOfMedia":
-            self._playback_request += 1
-            self._failure_callback = None
-            self._disconnect_playback_signals()
+            self._invalidate_playback()
+            self._cleanup_current_playback()
 
     @staticmethod
     def _disconnect_signal(signal: Any | None, slot: Callable[..., None] | None) -> None:
@@ -183,7 +192,13 @@ class WindowsHistoryAudioPlaybackAdapter:
             return
         disconnect = getattr(signal, "disconnect", None)
         if callable(disconnect):
-            disconnect(slot)
+            try:
+                disconnect(slot)
+            except Exception as error:
+                logger.warning(
+                    "failed to disconnect history audio signal",
+                    extra={"exception_type": type(error).__name__},
+                )
 
     def _disconnect_playback_signals(self) -> None:
         self._disconnect_signal(self._error_signal, self._error_slot)
@@ -196,35 +211,46 @@ class WindowsHistoryAudioPlaybackAdapter:
         self._playback_request += 1
         self._disconnect_playback_signals()
 
-    def close(self) -> None:
-        player = self._player
-        audio_output = self._audio_output
-        self._player = None
-        self._audio_output = None
-        self._invalidate_playback()
+    def _cleanup_current_playback(self) -> None:
+        self._reset_and_stop(self._player)
+
+    def _reset_and_stop(self, player: Any | None) -> None:
+        if player is None:
+            return
+        try:
+            if self._empty_url_factory is not None:
+                player.setSource(self._empty_url_factory())
+        except Exception:
+            logger.warning("failed to reset history audio source")
+        try:
+            player.stop()
+        except Exception:
+            logger.warning("failed to stop history audio")
+
+    def _release_objects(self, player: Any | None, audio_output: Any | None) -> None:
+        self._reset_and_stop(player)
         if player is not None:
-            try:
-                if self._empty_url_factory is not None:
-                    player.setSource(self._empty_url_factory())
-            except Exception:
-                logger.warning("failed to reset history audio source during close")
-            try:
-                player.stop()
-            except Exception:
-                logger.warning("failed to stop history audio during close")
             try:
                 delete_later = getattr(player, "deleteLater", None)
                 if delete_later is not None:
                     delete_later()
             except Exception:
-                logger.warning("failed to release history audio player during close")
+                logger.warning("failed to release history audio player")
         if audio_output is not None:
             try:
                 delete_later = getattr(audio_output, "deleteLater", None)
                 if delete_later is not None:
                     delete_later()
             except Exception:
-                logger.warning("failed to release history audio output during close")
+                logger.warning("failed to release history audio output")
+
+    def close(self) -> None:
+        player = self._player
+        audio_output = self._audio_output
+        self._player = None
+        self._audio_output = None
+        self._invalidate_playback()
+        self._release_objects(player, audio_output)
         self._error_signal = None
         self._error_slot = None
         self._status_signal = None
