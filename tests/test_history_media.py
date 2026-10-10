@@ -41,7 +41,7 @@ class _FakePlayback:
             raise self.availability_error
         return self.available
 
-    def play(self, path: Path) -> None:
+    def play(self, path: Path, on_failure=None) -> None:
         self.paths.append(path)
         if self.error is not None:
             raise self.error
@@ -275,7 +275,11 @@ def test_reveal_revalidates_after_inspection(tmp_path: Path) -> None:
 
 def test_windows_reveal_adapter_selects_the_exact_artifact() -> None:
     commands: list[list[str]] = []
-    adapter = WindowsHistoryArtifactRevealAdapter(platform_name="nt", launcher=commands.append)
+    adapter = WindowsHistoryArtifactRevealAdapter(
+        platform_name="nt",
+        launcher=commands.append,
+        explorer_path=r"C:\Windows\explorer.exe",
+    )
     artifact = Path(r"C:\Users\Test User\VoiceInk\аудио\history\item.wav")
 
     assert adapter.is_available()
@@ -283,18 +287,23 @@ def test_windows_reveal_adapter_selects_the_exact_artifact() -> None:
 
     assert commands == [
         [
-            "explorer.exe",
+            r"C:\Windows\explorer.exe",
             r'/select,"C:\Users\Test User\VoiceInk\аудио\history\item.wav"',
         ]
     ]
 
 
 def test_windows_audio_adapter_uses_the_exact_artifact() -> None:
+    class Signal:
+        def connect(self, _callback) -> None:
+            pass
+
     class Player:
         def __init__(self) -> None:
             self.output = None
             self.source = None
             self.play_calls = 0
+            self.errorOccurred = Signal()
 
         def setAudioOutput(self, output) -> None:
             self.output = output
@@ -304,6 +313,9 @@ def test_windows_audio_adapter_uses_the_exact_artifact() -> None:
 
         def play(self) -> None:
             self.play_calls += 1
+
+        def playbackState(self):
+            return "PlayingState"
 
         def stop(self) -> None:
             pass
@@ -325,6 +337,66 @@ def test_windows_audio_adapter_uses_the_exact_artifact() -> None:
     assert player.source == str(artifact)
     assert player.play_calls == 1
     adapter.close()
+
+
+def test_windows_audio_adapter_reports_asynchronous_error() -> None:
+    class Signal:
+        def __init__(self) -> None:
+            self.callback = None
+
+        def connect(self, callback) -> None:
+            self.callback = callback
+
+        def emit(self) -> None:
+            assert self.callback is not None
+            self.callback(None, "backend failure")
+
+    class Player:
+        def __init__(self) -> None:
+            self.errorOccurred = Signal()
+
+        def setAudioOutput(self, _output) -> None:
+            pass
+
+        def setSource(self, _source) -> None:
+            pass
+
+        def play(self) -> None:
+            pass
+
+        def playbackState(self):
+            return "PlayingState"
+
+        def stop(self) -> None:
+            pass
+
+    player = Player()
+    adapter = WindowsHistoryAudioPlaybackAdapter(
+        platform_name="nt",
+        player_factory=lambda: player,
+        audio_output_factory=object,
+        url_factory=lambda value: value,
+    )
+
+    failures: list[Exception] = []
+    adapter.play(Path(r"C:\Windows\Temp\item.wav"), on_failure=failures.append)
+    player.errorOccurred.emit()
+
+    assert [str(error) for error in failures] == ["history audio playback failed"]
+
+
+def test_windows_audio_adapter_initialization_failure_is_unavailable() -> None:
+    def fail_factory():
+        raise ValueError("unexpected Qt factory failure")
+
+    adapter = WindowsHistoryAudioPlaybackAdapter(
+        platform_name="nt",
+        player_factory=fail_factory,
+        audio_output_factory=object,
+        url_factory=lambda value: value,
+    )
+
+    assert not adapter.is_available()
 
 
 def test_windows_adapters_are_unavailable_off_windows() -> None:

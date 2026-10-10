@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -59,7 +60,11 @@ class HistoryMediaActionResult:
 class HistoryAudioPlaybackPort(Protocol):
     def is_available(self) -> bool: ...
 
-    def play(self, resolved_artifact: Path) -> None: ...
+    def play(
+        self,
+        resolved_artifact: Path,
+        on_failure: Callable[[Exception], None] | None = None,
+    ) -> None: ...
 
 
 class HistoryArtifactRevealPort(Protocol):
@@ -91,8 +96,12 @@ class HistoryMediaActionService:
             reveal=self._capability(record, self._reveal, artifact, "reveal"),
         )
 
-    def play(self, record: HistoryRecord) -> HistoryMediaActionResult:
-        return self._run(record, self._audio, "audio")
+    def play(
+        self,
+        record: HistoryRecord,
+        on_result: Callable[[HistoryMediaActionResult], None] | None = None,
+    ) -> HistoryMediaActionResult:
+        return self._run(record, self._audio, "audio", on_result)
 
     def reveal(self, record: HistoryRecord) -> HistoryMediaActionResult:
         return self._run(record, self._reveal, "reveal")
@@ -108,6 +117,7 @@ class HistoryMediaActionService:
         record: HistoryRecord,
         port: HistoryAudioPlaybackPort | HistoryArtifactRevealPort | None,
         action: str,
+        on_result: Callable[[HistoryMediaActionResult], None] | None = None,
     ) -> HistoryMediaActionResult:
         artifact, missing = self._resolve(record)
         if missing is not None:
@@ -129,12 +139,25 @@ class HistoryMediaActionService:
             return HistoryMediaActionResult(HistoryMediaCode.PLATFORM_UNAVAILABLE)
         try:
             if action == "audio":
-                port.play(artifact)
+                port.play(artifact, on_failure=self._async_failure(record, action, on_result))
             else:
                 port.reveal(artifact)
         except Exception as error:
             return self._failed(record, action, error)
         return HistoryMediaActionResult(HistoryMediaCode.STARTED)
+
+    def _async_failure(
+        self,
+        record: HistoryRecord,
+        action: str,
+        on_result: Callable[[HistoryMediaActionResult], None] | None,
+    ) -> Callable[[Exception], None]:
+        def report(error: Exception) -> None:
+            result = self._failed(record, action, error)
+            if on_result is not None:
+                on_result(result)
+
+        return report
 
     def _resolve(self, record: HistoryRecord) -> tuple[Path | None, HistoryMediaCode | None]:
         reference = record.audio_artifact_path
