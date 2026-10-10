@@ -25,6 +25,7 @@ ICON_BUILD_DIR = ROOT / "build" / "dist"
 ICON_SOURCE = ROOT / "packaging" / "voiceink-shell-windows-x64" / "voiceink-shell.svg"
 ICON_BUILDER = ROOT / "scripts" / "build_icon.py"
 ICON_OUTPUT = ICON_BUILD_DIR / "voiceink-shell.ico"
+RUNTIME_ICON_DESTINATION = "."
 PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
 VALIDATOR = ROOT / "scripts" / "frontend_package_smoke.py"
 ENTRYPOINT = ROOT / "scripts" / "frontend_entrypoint.py"
@@ -123,6 +124,10 @@ def _build_executable(name: str, mode: str, python: str) -> None:
         "shiboken6",
         "--add-data",
         f"{MIGRATION_SOURCE};{MIGRATION_DESTINATION}",
+        "--add-data",
+        f"{ICON_OUTPUT};{RUNTIME_ICON_DESTINATION}",
+        "--add-data",
+        f"{ICON_SOURCE};{RUNTIME_ICON_DESTINATION}",
         "--distpath",
         str(DIST),
         "--workpath",
