@@ -7,6 +7,12 @@ from .asr_service import (
     QuiescenceFence,
 )
 from .cancellation import CancellationTokenSource, EventCancellationToken
+from .global_shortcut import (
+    GlobalShortcutStatus,
+    GlobalToggleShortcutService,
+    RecordingTogglePort,
+    ShortcutAvailability,
+)
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
 from .persistence import HistoryDeletionService, PersistenceService
@@ -27,6 +33,10 @@ __all__ = [
     "ReservationState",
     "ReservationToken",
     "SystemClock",
+    "GlobalShortcutStatus",
+    "GlobalToggleShortcutService",
+    "RecordingTogglePort",
+    "ShortcutAvailability",
     "PersistenceService",
     "HistoryDeletionService",
     "ShellController",

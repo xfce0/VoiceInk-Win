@@ -7,12 +7,14 @@ from collections.abc import Callable
 from time import monotonic
 from typing import Protocol
 
+from voiceink_win.application import GlobalToggleShortcutService
 from voiceink_win.desktop_composition import (
     DesktopComposition,
     build_desktop_composition,
     build_package_smoke_desktop_composition,
 )
 from voiceink_win.domain import TranscribeAvailability
+from voiceink_win.infrastructure import create_global_shortcut_port
 
 PACKAGE_SMOKE_TIMEOUT_SECONDS = 300
 PACKAGE_SMOKE_READINESS_TIMEOUT_SECONDS = 240.0
@@ -85,6 +87,9 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         if package_smoke
         else build_desktop_composition()
     )
+    global_shortcut = GlobalToggleShortcutService(
+        composition.controller, create_global_shortcut_port()
+    )
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
@@ -95,6 +100,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             persistence=getattr(composition, "persistence", None),
             artifact_cleanup=getattr(composition, "artifact_cleanup", None),
             history_deletion=getattr(composition, "history_deletion", None),
+            global_shortcut=global_shortcut,
         )
         if color_scheme_changed is not None:
             window.connect_theme_signal(

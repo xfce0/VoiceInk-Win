@@ -75,3 +75,6 @@ documents:
   - path: rfcs/native-windows-runtime-startup.md
     kind: rfc
     status: proposed
+  - path: rfcs/workstreams/global-toggle-shortcut.md
+    kind: rfc
+    status: implemented
