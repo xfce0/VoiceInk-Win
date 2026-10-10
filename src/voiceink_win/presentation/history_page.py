@@ -705,6 +705,7 @@ class HistoryPage(QWidget):
             self._metadata.setText(self._t(TranslationKey.HISTORY_EMPTY))
         else:
             self._metadata.setText(self._t(TranslationKey.HISTORY_SELECT))
+        self._resize_rows()
 
     def _t(self, key: TranslationKey, **values: object) -> str:
         return translate(key, self._locale_config.locale, **values)
