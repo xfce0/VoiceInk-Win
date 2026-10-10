@@ -10,6 +10,7 @@ pytest.importorskip("PySide6", reason="PySide6 is not installed")
 
 from tests.support.fake_shell import FakeShellBackend
 from voiceink_win.application import ShellController, TranscribePageController
+from voiceink_win.domain import QueueState
 from voiceink_win.presentation.clipboard import QtClipboardPort
 from voiceink_win.presentation.main_window import MainWindow
 from voiceink_win.presentation.transcribe_page import TranscribePage
@@ -17,7 +18,7 @@ from voiceink_win.presentation.transcribe_page import TranscribePage
 try:
     from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
     from PySide6.QtGui import QDropEvent
-    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+    from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea
 except ImportError:  # pragma: no cover - exercised by the dependency-free test lane
     pytestmark = pytest.mark.skip(reason="PySide6 is not installed")
 
@@ -85,6 +86,60 @@ def test_unavailable_transcribe_page_disables_file_inputs_and_detaches_without_s
     finally:
         controller.close()
         page.close()
+        qt_app.processEvents()
+
+
+def test_fixed_window_transcribe_queue_wraps_long_failure_without_horizontal_clipping(
+    qt_app, tmp_path: Path
+) -> None:
+    from tests.test_transcribe_application import FakeImportedMedia
+
+    controller = TranscribePageController(FakeImportedMedia())
+    long_name = (
+        "очень-длинное-русское-имя-файла-with-a-long-English-name-for-fixed-window-width.wav"
+    )
+    window = MainWindow(ShellController(FakeShellBackend()), transcribe_controller=controller)
+    window.show()
+    try:
+        window._select_page("Transcribe")
+        missing_path = tmp_path / long_name
+        controller.add_paths([missing_path])
+        assert controller.start_queue()
+        wait_for(qt_app, lambda: controller.snapshot.items[0].state is QueueState.REJECTED)
+
+        page = window._transcribe_page
+        queue_scroll = page.findChild(QScrollArea, "transcribeQueueScroll")
+        assert queue_scroll is not None
+        wait_for(
+            qt_app,
+            lambda: any(
+                label.objectName() == "pageError"
+                for item in queue_scroll.widget().findChildren(QFrame, "transcribeItem")
+                for label in item.findChildren(QLabel)
+            ),
+        )
+        assert queue_scroll.widget().width() == queue_scroll.viewport().width()
+        assert queue_scroll.horizontalScrollBar().isVisible() is False
+        items = [
+            item
+            for item in queue_scroll.widget().findChildren(QFrame, "transcribeItem")
+            if any(label.objectName() == "pageError" for label in item.findChildren(QLabel))
+        ]
+        assert items
+        item = items[-1]
+        assert item.width() <= queue_scroll.viewport().width()
+        assert queue_scroll.widget().rect().contains(item.geometry())
+        source_label = next(
+            label for label in item.findChildren(QLabel) if label.text() == long_name
+        )
+        failure_label = next(
+            label for label in item.findChildren(QLabel) if label.objectName() == "pageError"
+        )
+        assert source_label.wordWrap()
+        assert failure_label.wordWrap()
+    finally:
+        window.close()
+        controller.close()
         qt_app.processEvents()
 
 
