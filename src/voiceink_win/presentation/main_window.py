@@ -27,8 +27,10 @@ from voiceink_win.application import (
     TranscribePageController,
 )
 from voiceink_win.application.transcribe_output import LocalTextFilePort
-from voiceink_win.domain import ShellSnapshot, ShellState
+from voiceink_win.domain import ModelMetadata, ShellSnapshot, ShellState
+from voiceink_win.infrastructure import discover_model_metadata
 
+from .ai_models_page import AIModelsPage
 from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
@@ -259,6 +261,7 @@ class MainWindow(QMainWindow):
         artifact_reveal=None,
         artifact_folder=None,
         history_deletion: HistoryDeletionService | None = None,
+        model_metadata: ModelMetadata | None = None,
         global_shortcut: GlobalToggleShortcutService | None = None,
         audio_port: HistoryAudioPort | None = None,
         folder_port: HistoryFolderPort | None = None,
@@ -277,6 +280,7 @@ class MainWindow(QMainWindow):
         self._bridge.changed.connect(self._render)
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
         self._persistence = persistence
+        self._model_metadata = model_metadata or discover_model_metadata()
         self._artifact_cleanup = artifact_cleanup
         self._audio_port = audio_port
         self._folder_port = folder_port
@@ -352,6 +356,10 @@ class MainWindow(QMainWindow):
             self._persistence, self._pages, locale_config=self._locale_config
         )
         self._pages.addWidget(self._dictionary_page)
+        self._ai_models_page = AIModelsPage(
+            self._model_metadata, self._pages, locale_config=self._locale_config
+        )
+        self._pages.addWidget(self._ai_models_page)
         self._audio_page = AudioPage(
             self._persistence, self._pages, locale_config=self._locale_config
         )
@@ -430,11 +438,13 @@ class MainWindow(QMainWindow):
         elif label == "Dictionary":
             self._pages.setCurrentIndex(4)
             self._dictionary_page.refresh()
-        elif label == "Audio":
+        elif label == "AI Models":
             self._pages.setCurrentIndex(5)
+        elif label == "Audio":
+            self._pages.setCurrentIndex(6)
             self._audio_page.refresh()
         elif label == "Settings":
-            self._pages.setCurrentIndex(6)
+            self._pages.setCurrentIndex(7)
             self._settings_page.refresh()
         else:
             return
@@ -729,6 +739,7 @@ class MainWindow(QMainWindow):
         self._modes_page.dispose()
         self._history_page.dispose()
         self._dictionary_page.dispose()
+        self._ai_models_page.dispose()
         self._audio_page.dispose()
         self._settings_page.dispose()
         if self._owns_history_deletion and self._history_deletion is not None:

@@ -75,8 +75,9 @@ def test_navigation_reaches_all_persisted_pages(application: QApplication, persi
             ("Modes", 2),
             ("History", 3),
             ("Dictionary", 4),
-            ("Audio", 5),
-            ("Settings", 6),
+            ("AI Models", 5),
+            ("Audio", 6),
+            ("Settings", 7),
         ):
             window._nav_buttons[label].click()
             assert window._pages.currentIndex() == index

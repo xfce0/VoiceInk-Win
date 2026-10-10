@@ -99,5 +99,6 @@ def test_sidebar_registry_matches_reference_order_and_has_unique_icons() -> None
     assert SIDEBAR_ITEMS[0].enabled
     assert SIDEBAR_ITEMS[2].enabled
     assert all(item.enabled for item in (*SIDEBAR_ITEMS[1:2], *SIDEBAR_ITEMS[3:5]))
+    assert SIDEBAR_ITEMS[5].enabled
     assert SIDEBAR_ITEMS[6].enabled
-    assert not any(item.enabled for item in (SIDEBAR_ITEMS[5], SIDEBAR_ITEMS[8]))
+    assert not SIDEBAR_ITEMS[8].enabled
