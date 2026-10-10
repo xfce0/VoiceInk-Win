@@ -4,12 +4,14 @@ import inspect
 import os
 import subprocess
 import sys
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
 
 import voiceink_win.desktop_composition as desktop_composition
 from voiceink_win.application import ShellController
+from voiceink_win.desktop_composition import _DesktopComposition
 from voiceink_win.domain import ShellState
 from voiceink_win.presentation.app import _run_session
 
@@ -162,3 +164,47 @@ assert not any(name.endswith("fake_shell") for name in sys.modules)
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_composition_close_continues_after_media_adapter_failure() -> None:
+    events: list[str] = []
+
+    class Transcribe:
+        def close(self, *, timeout: float) -> None:
+            del timeout
+            events.append("transcribe.close")
+
+    class Persistence:
+        def close(self) -> Future[None]:
+            events.append("persistence.close")
+            future: Future[None] = Future()
+            future.set_result(None)
+            return future
+
+    class Deletion:
+        def close(self) -> None:
+            events.append("deletion.close")
+
+    class Media:
+        def close(self) -> None:
+            events.append("media.close")
+            raise RuntimeError("media cleanup failed")
+
+    composition = _DesktopComposition(
+        controller=ShellController.unavailable(),
+        transcribe_controller=Transcribe(),  # type: ignore[arg-type]
+        persistence=Persistence(),  # type: ignore[arg-type]
+        artifact_cleanup=lambda _path: None,
+        audio_artifact_port=object(),
+        media_actions=Media(),  # type: ignore[arg-type]
+        history_deletion=Deletion(),  # type: ignore[arg-type]
+    )
+
+    composition.close()
+
+    assert events == [
+        "transcribe.close",
+        "media.close",
+        "deletion.close",
+        "persistence.close",
+    ]
