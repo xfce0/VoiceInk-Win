@@ -15,10 +15,12 @@ class FutureBridge(QObject):
     """Turn a concurrent Future completion into a queued Qt callback."""
 
     _completed = Signal(object, object)
+    _queued = Signal(object)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._completed.connect(self._deliver, Qt.ConnectionType.QueuedConnection)
+        self._queued.connect(self._deliver_queued, Qt.ConnectionType.QueuedConnection)
 
     def watch(
         self,
@@ -35,3 +37,10 @@ class FutureBridge(QObject):
             callback(None, error)
         else:
             callback(result, None)
+
+    def post(self, callback: Callable[[], None]) -> None:
+        self._queued.emit(callback)
+
+    @Slot(object)
+    def _deliver_queued(self, callback: Callable[[], None]) -> None:
+        callback()
