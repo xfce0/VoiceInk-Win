@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import select
 import socket
 import time
@@ -16,8 +17,7 @@ _MAX_REQUEST_BYTES = 66 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _BACKLOG = 16
 _CONNECT_TIMEOUT_SECONDS = 2.0
-_IDLE_TIMEOUT_SECONDS = 30.0
-_TOTAL_TIMEOUT_SECONDS = 120.0
+_DEFAULT_RELAY_TIMEOUT_SECONDS = 45 * 60.0
 _SELECT_TIMEOUT_SECONDS = 0.25
 _ALLOWED_REQUESTS = {
     ("GET", "/ready"),
@@ -47,12 +47,28 @@ def _parse_endpoint(endpoint: str, *, allow_zero: bool = False) -> tuple[str, in
 class LoopbackProxy:
     """Own one listener and relay bytes to the private sidecar endpoint."""
 
-    def __init__(self, target_endpoint: str, listen_endpoint: str | None = None) -> None:
+    def __init__(
+        self,
+        target_endpoint: str,
+        listen_endpoint: str | None = None,
+        *,
+        idle_timeout_seconds: float = _DEFAULT_RELAY_TIMEOUT_SECONDS,
+        total_timeout_seconds: float = _DEFAULT_RELAY_TIMEOUT_SECONDS,
+    ) -> None:
+        if (
+            not math.isfinite(idle_timeout_seconds)
+            or not math.isfinite(total_timeout_seconds)
+            or idle_timeout_seconds <= 0
+            or total_timeout_seconds < idle_timeout_seconds
+        ):
+            raise ConfigurationError("loopback proxy timeouts are invalid")
         target_host, target_port = _parse_endpoint(target_endpoint)
         listen_host, listen_port = _parse_endpoint(
             listen_endpoint or "http://127.0.0.1:0", allow_zero=True
         )
         self._target = (target_host, target_port)
+        self._idle_timeout_seconds = idle_timeout_seconds
+        self._total_timeout_seconds = total_timeout_seconds
         family = socket.AF_INET6 if listen_host == "::1" else socket.AF_INET
         self._listener = socket.socket(family, socket.SOCK_STREAM)
         exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
@@ -166,7 +182,7 @@ class LoopbackProxy:
             self._connection_slots.release()
 
     def _relay(self, client: socket.socket, target: socket.socket) -> None:
-        deadline = time.monotonic() + _TOTAL_TIMEOUT_SECONDS
+        deadline = time.monotonic() + self._total_timeout_seconds
         request = self._read_request(client, deadline)
         self._send_all(target, request, deadline)
         request_bytes = len(request)
@@ -174,7 +190,7 @@ class LoopbackProxy:
         last_activity = time.monotonic()
         sockets = (client, target)
         while not self._stop.is_set() and time.monotonic() < deadline:
-            if time.monotonic() - last_activity > _IDLE_TIMEOUT_SECONDS:
+            if time.monotonic() - last_activity > self._idle_timeout_seconds:
                 return
             readable, _, exceptional = select.select(sockets, (), sockets, _SELECT_TIMEOUT_SECONDS)
             if exceptional:

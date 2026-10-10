@@ -89,6 +89,23 @@ def test_dictionary_page_translates_header_editor_and_state_actions(
         page.dispose()
 
 
+def test_russian_locale_translates_neutral_availability_states(
+    application: QApplication,
+) -> None:
+    del application
+    window = MainWindow(ShellController.unavailable(), locale_config=LocaleConfig(Locale.RUSSIAN))
+    try:
+        assert window._settings_page._availability.text() == "Локальное хранилище недоступно."
+        assert window._settings_page._model_value.text() == "Недоступно в этой сборке."
+        assert window._history_page._availability.text() == "Локальное хранилище недоступно."
+        assert window._dictionary_page._state_detail.text() == "Локальное хранилище недоступно."
+        assert translate(TranslationKey.SETTINGS_SAVE_ERROR, Locale.RUSSIAN) == (
+            "Не удалось сохранить настройки. Попробуйте ещё раз."
+        )
+    finally:
+        window.close()
+
+
 def test_unsupported_locale_values_fall_back_to_english(
     application: QApplication,
 ) -> None:

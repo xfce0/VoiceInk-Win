@@ -148,7 +148,6 @@ class DictionaryPage(QWidget):
         self._state_action.clicked.connect(self.refresh)
         state_layout.addWidget(self._state_action, 0, Qt.AlignmentFlag.AlignLeft)
         root.addWidget(self._state_panel)
-
         self._list = QListWidget(self)
         self._list.setObjectName("dictionaryList")
         self._list.setSpacing(6)
@@ -218,6 +217,7 @@ class DictionaryPage(QWidget):
         self._generation += 1
         self._operation += 1
         generation = self._generation
+        self._error.clear()
         if self._persistence is None:
             self._render_entries((), unavailable=True)
             return
@@ -308,6 +308,15 @@ class DictionaryPage(QWidget):
                 if self._list.item(index).data(Qt.ItemDataRole.UserRole) == selected_id:
                     self._list.setCurrentRow(index)
                     break
+
+    def _show_unavailable(self) -> None:
+        self._status.clear()
+        self._show_state(
+            self._t(TranslationKey.COMMON_ERROR),
+            self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE),
+            action=False,
+        )
+        self._show_error(self._t(TranslationKey.COMMON_PERSISTENCE_UNAVAILABLE))
 
     def _select_item(self, item: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         entry_id = item.data(Qt.ItemDataRole.UserRole) if item else None
