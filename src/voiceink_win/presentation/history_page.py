@@ -437,7 +437,14 @@ class HistoryPage(QWidget):
         if self._media_actions is None:
             return
         self._select_record_if_needed(record.id)
-        self._render_media_result(record, self._media_actions.play(record), "audio")
+        self._render_media_result(
+            record,
+            self._media_actions.play(
+                record,
+                on_result=lambda result: self._render_media_result(record, result, "audio"),
+            ),
+            "audio",
+        )
 
     def _reveal_folder(self, record: HistoryRecord) -> None:
         if self._media_actions is None:
@@ -460,6 +467,10 @@ class HistoryPage(QWidget):
             self._error.clear()
             return
         if result.code is not HistoryMediaCode.OPERATION_FAILED:
+            artifact_unavailable = result.code in {
+                HistoryMediaCode.NO_ARTIFACT,
+                HistoryMediaCode.ARTIFACT_MISSING_OR_INVALID,
+            }
             self._status.setText(
                 self._t(
                     TranslationKey.HISTORY_AUDIO_UNAVAILABLE
@@ -470,10 +481,10 @@ class HistoryPage(QWidget):
             self._error.clear()
             if row is not None:
                 row.set_media_available(
-                    audio=False if action == "audio" else None,
-                    folder=False if action == "folder" else None,
-                    audio_error=False if action == "audio" else None,
-                    folder_error=False if action == "folder" else None,
+                    audio=False if artifact_unavailable or action == "audio" else None,
+                    folder=False if artifact_unavailable or action == "folder" else None,
+                    audio_error=False if artifact_unavailable or action == "audio" else None,
+                    folder_error=False if artifact_unavailable or action == "folder" else None,
                 )
             return
         self._status.setText(self._t(TranslationKey.COMMON_ERROR))

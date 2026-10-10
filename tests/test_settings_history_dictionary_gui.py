@@ -438,7 +438,7 @@ def test_history_audio_and_folder_actions_use_the_application_service(
             available = HistoryMediaCapability(HistoryMediaState.AVAILABLE)
             return HistoryMediaAvailability(available, available)
 
-        def play(self, record: HistoryRecord) -> HistoryMediaActionResult:
+        def play(self, record: HistoryRecord, on_result=None) -> HistoryMediaActionResult:
             self.records.append(("play", record))
             return HistoryMediaActionResult(HistoryMediaCode.STARTED)
 
@@ -483,7 +483,7 @@ def test_history_media_result_states_are_localized(application: QApplication, pe
             available = HistoryMediaCapability(HistoryMediaState.AVAILABLE)
             return HistoryMediaAvailability(available, available)
 
-        def play(self, _record: HistoryRecord) -> HistoryMediaActionResult:
+        def play(self, _record: HistoryRecord, on_result=None) -> HistoryMediaActionResult:
             return HistoryMediaActionResult(HistoryMediaCode.NO_ARTIFACT)
 
         def reveal(self, _record: HistoryRecord) -> HistoryMediaActionResult:
