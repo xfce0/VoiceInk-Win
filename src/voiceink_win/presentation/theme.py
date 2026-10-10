@@ -355,6 +355,78 @@ QScrollBar::handle:vertical {{
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
 }}
+QListWidget#dictionaryList {{
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 2px;
+}}
+QListWidget#dictionaryList:focus {{
+    border: 1px solid {theme.nav_focus_border};
+    border-radius: 10px;
+}}
+QListWidget#dictionaryList::item {{
+    background: transparent;
+    border: none;
+    padding: 0px;
+}}
+QFrame#dictionaryState, QFrame#dictionaryEditor {{
+    background: {theme.card};
+    border: 1px solid {theme.card_border};
+    border-radius: 12px;
+}}
+QFrame#dictionaryState {{
+    border-style: dashed;
+}}
+QFrame#dictionaryRow {{
+    background: {theme.card};
+    border: 1px solid {theme.card_border};
+    border-radius: 11px;
+}}
+QFrame#dictionaryRow:hover, QFrame#dictionaryRow[selected="true"] {{
+    background: {theme.secondary_fill};
+    border-color: {theme.accent};
+}}
+QFrame#dictionaryRow[ruleEnabled="false"] {{
+    border-style: dashed;
+}}
+QLabel#dictionaryPhrase {{
+    color: {theme.text};
+    font-size: 13px;
+    font-weight: 700;
+}}
+QLabel#dictionaryReplacement {{
+    color: {theme.muted};
+    font-size: 12px;
+}}
+QPushButton#dictionaryAction {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: {theme.secondary_text};
+    font-size: 11px;
+    padding: 5px 8px;
+    min-height: 14px;
+}}
+QPushButton#dictionaryAction:hover {{
+    background: {theme.nav_hover};
+    border-color: {theme.secondary_border};
+}}
+QPushButton#dictionaryAction:focus {{
+    border-color: {theme.nav_focus_border};
+}}
+QFrame#dictionaryEditor QLineEdit {{
+    background: {theme.empty_card};
+    border: 1px solid {theme.card_border};
+    border-radius: 8px;
+    color: {theme.text};
+    padding: 7px 9px;
+    selection-background-color: {theme.accent};
+    selection-color: {theme.accent_text};
+}}
+QFrame#dictionaryEditor QLineEdit:focus, QFrame#dictionaryEditor QCheckBox:focus {{
+    border-color: {theme.nav_focus_border};
+}}
 QLabel#pageGreeting {{
     color: {theme.text};
 }}

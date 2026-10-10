@@ -19,6 +19,7 @@ except ImportError:
 
 from voiceink_win.application import PersistenceService, ShellController
 from voiceink_win.domain import (
+    DictionaryEntry,
     HistoryPage,
     HistoryRecord,
     HistoryStatus,
@@ -27,6 +28,7 @@ from voiceink_win.domain import (
     TranscriptionSource,
 )
 from voiceink_win.infrastructure import SQLitePersistence
+from voiceink_win.presentation.dictionary_page import DictionaryPage
 from voiceink_win.presentation.history_page import HistoryPage as HistoryWidget
 from voiceink_win.presentation.main_window import MainWindow
 from voiceink_win.presentation.theme import DARK_THEME, LIGHT_THEME, ThemeMode
@@ -219,6 +221,7 @@ def test_dictionary_crud_is_async_and_validates_phrase(
         window._select_page("Dictionary")
         page = window._dictionary_page
         _wait(application, lambda: page._status.text() != "Loading...")
+        assert page._state_title.text() == "No replacement rules yet."
         page._save.click()
         assert page._error.text() == "Enter a phrase."
         assert page._error.objectName() == "inlineError"
@@ -226,7 +229,13 @@ def test_dictionary_crud_is_async_and_validates_phrase(
         page._replacement.setText("VoiceInk")
         page._save.click()
         _wait(application, lambda: page._list.count() == 1)
-        assert store.list_dictionary().result(timeout=2)[0].replacement == "VoiceInk"
+        entry = store.list_dictionary().result(timeout=2)[0]
+        assert entry.replacement == "VoiceInk"
+        row = page._row_widgets[entry.id]
+        assert row._edit.text() == "Edit"
+        assert row._delete.text() == "Delete"
+        row._edit.click()
+        assert page._phrase.hasFocus()
         page._list.setCurrentRow(0)
         page._replacement.setText("VoiceInk Win")
         page._save.click()
@@ -235,7 +244,7 @@ def test_dictionary_crud_is_async_and_validates_phrase(
         monkeypatch.setattr(
             QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.Yes
         )
-        page._delete.click()
+        page._row_widgets[entry.id]._delete.click()
         _wait(application, lambda: page._list.count() == 0)
     finally:
         window.close()
@@ -249,6 +258,30 @@ class _DeferredPersistence:
     def list_history(self, *, offset: int = 0, limit: int = 50) -> Future[HistoryPage]:
         del offset, limit
         return self.history_future
+
+
+class _DeferredDictionaryPersistence:
+    def __init__(self) -> None:
+        self.dictionary_future: Future[tuple[DictionaryEntry, ...]] = Future()
+
+    def list_dictionary(self) -> Future[tuple[DictionaryEntry, ...]]:
+        return self.dictionary_future
+
+
+def test_dictionary_page_renders_loading_and_error_states(application: QApplication) -> None:
+    deferred = _DeferredDictionaryPersistence()
+    page = DictionaryPage(PersistenceService(deferred))  # type: ignore[arg-type]
+    try:
+        application.processEvents()
+        assert page._status.text() == "Loading..."
+        assert not page._state_panel.isHidden()
+        assert page._list.isHidden()
+        deferred.dictionary_future.set_exception(RuntimeError("storage unavailable"))
+        _wait(application, lambda: page._state_title.text() == "Could not complete the operation.")
+        assert not page._state_action.isHidden()
+        assert page._error.text() == "Local storage is unavailable."
+    finally:
+        page.dispose()
 
 
 def test_history_page_does_not_wait_for_persistence_future(application: QApplication) -> None:

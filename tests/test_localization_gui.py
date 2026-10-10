@@ -17,6 +17,7 @@ except ImportError:
 
 from tests.support.fake_shell import FakeShellBackend
 from voiceink_win.application import ShellController
+from voiceink_win.presentation.dictionary_page import DictionaryPage
 from voiceink_win.presentation.localization import (
     CATALOG,
     Locale,
@@ -66,6 +67,28 @@ def test_russian_locale_translates_shell_and_transcribe_page(
         window.close()
 
 
+def test_dictionary_page_translates_header_editor_and_state_actions(
+    application: QApplication,
+) -> None:
+    config = LocaleConfig()
+    page = DictionaryPage(None, locale_config=config)
+    try:
+        assert page._title.text() == "Dictionary"
+        assert page._new.text() == "Add rule"
+        assert page._save.text() == "Save rule"
+        page._show_state("Error", "Storage error", action=True)
+        assert page._state_action.text() == "Try again"
+
+        assert config.set_locale(Locale.RUSSIAN)
+        application.processEvents()
+        assert page._title.text() == "Словарь"
+        assert page._new.text() == "Добавить правило"
+        assert page._save.text() == "Сохранить правило"
+        assert page._state_action.text() == "Повторить"
+    finally:
+        page.dispose()
+
+
 def test_russian_locale_translates_neutral_availability_states(
     application: QApplication,
 ) -> None:
@@ -75,7 +98,7 @@ def test_russian_locale_translates_neutral_availability_states(
         assert window._settings_page._availability.text() == "Локальное хранилище недоступно."
         assert window._settings_page._model_value.text() == "Недоступно в этой сборке."
         assert window._history_page._availability.text() == "Локальное хранилище недоступно."
-        assert window._dictionary_page._availability.text() == "Локальное хранилище недоступно."
+        assert window._dictionary_page._state_detail.text() == "Локальное хранилище недоступно."
         assert translate(TranslationKey.SETTINGS_SAVE_ERROR, Locale.RUSSIAN) == (
             "Не удалось сохранить настройки. Попробуйте ещё раз."
         )

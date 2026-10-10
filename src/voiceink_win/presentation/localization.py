@@ -171,12 +171,22 @@ class TranslationKey(StrEnum):
 
     DICTIONARY_TITLE = "dictionary.title"
     DICTIONARY_SUBTITLE = "dictionary.subtitle"
+    DICTIONARY_EMPTY = "dictionary.empty"
+    DICTIONARY_EMPTY_DETAIL = "dictionary.empty_detail"
+    DICTIONARY_LOADING_DETAIL = "dictionary.loading_detail"
+    DICTIONARY_ERROR_DETAIL = "dictionary.error_detail"
     DICTIONARY_PHRASE = "dictionary.phrase"
     DICTIONARY_REPLACEMENT = "dictionary.replacement"
     DICTIONARY_ENABLED = "dictionary.enabled"
     DICTIONARY_NEW = "dictionary.new"
+    DICTIONARY_EDIT = "dictionary.edit"
     DICTIONARY_SAVE = "dictionary.save"
     DICTIONARY_DELETE = "dictionary.delete"
+    DICTIONARY_RETRY = "dictionary.retry"
+    DICTIONARY_EDIT_ACCESSIBLE = "dictionary.edit_accessible"
+    DICTIONARY_DELETE_ACCESSIBLE = "dictionary.delete_accessible"
+    DICTIONARY_EDITOR_NEW = "dictionary.editor_new"
+    DICTIONARY_EDITOR_EDIT = "dictionary.editor_edit"
     DICTIONARY_PHRASE_REQUIRED = "dictionary.phrase_required"
     DICTIONARY_SAVE_ERROR = "dictionary.save_error"
     DICTIONARY_DELETE_TITLE = "dictionary.delete_title"
@@ -584,15 +594,37 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.DICTIONARY_TITLE: _entry("Dictionary", "Словарь"),
     TranslationKey.DICTIONARY_SUBTITLE: _entry(
-        "Store replacement rules now. Applying them to transcription is not enabled in this build.",
-        "Сохраняйте правила замен. Применение к расшифровке в этой сборке не включено.",
+        "Keep names and terms consistent in every transcription.",
+        "Сохраняйте единообразие имён и терминов в каждой расшифровке.",
+    ),
+    TranslationKey.DICTIONARY_EMPTY: _entry("No replacement rules yet.", "Правил замен пока нет."),
+    TranslationKey.DICTIONARY_EMPTY_DETAIL: _entry(
+        "Add a phrase to keep names and terms consistent.",
+        "Добавьте фразу, чтобы сохранять единообразие имён и терминов.",
+    ),
+    TranslationKey.DICTIONARY_LOADING_DETAIL: _entry(
+        "Loading your saved rules...", "Загружаем сохранённые правила..."
+    ),
+    TranslationKey.DICTIONARY_ERROR_DETAIL: _entry(
+        "Rules could not be loaded. Check local storage and try again.",
+        "Не удалось загрузить правила. Проверьте локальное хранилище и повторите попытку.",
     ),
     TranslationKey.DICTIONARY_PHRASE: _entry("Phrase", "Фраза"),
-    TranslationKey.DICTIONARY_REPLACEMENT: _entry("Replacement", "Замена"),
+    TranslationKey.DICTIONARY_REPLACEMENT: _entry("Replace with", "Заменять на"),
     TranslationKey.DICTIONARY_ENABLED: _entry("Rule enabled", "Правило включено"),
-    TranslationKey.DICTIONARY_NEW: _entry("New", "Новое"),
-    TranslationKey.DICTIONARY_SAVE: _entry("Save", "Сохранить"),
+    TranslationKey.DICTIONARY_NEW: _entry("Add rule", "Добавить правило"),
+    TranslationKey.DICTIONARY_EDIT: _entry("Edit", "Изменить"),
+    TranslationKey.DICTIONARY_SAVE: _entry("Save rule", "Сохранить правило"),
     TranslationKey.DICTIONARY_DELETE: _entry("Delete", "Удалить"),
+    TranslationKey.DICTIONARY_RETRY: _entry("Try again", "Повторить"),
+    TranslationKey.DICTIONARY_EDIT_ACCESSIBLE: _entry(
+        "Edit dictionary rule", "Изменить правило словаря"
+    ),
+    TranslationKey.DICTIONARY_DELETE_ACCESSIBLE: _entry(
+        "Delete dictionary rule", "Удалить правило словаря"
+    ),
+    TranslationKey.DICTIONARY_EDITOR_NEW: _entry("New rule", "Новое правило"),
+    TranslationKey.DICTIONARY_EDITOR_EDIT: _entry("Edit rule", "Изменение правила"),
     TranslationKey.DICTIONARY_PHRASE_REQUIRED: _entry("Enter a phrase.", "Введите фразу."),
     TranslationKey.DICTIONARY_SAVE_ERROR: _entry(
         "Could not save this rule. The phrase may already exist.",
