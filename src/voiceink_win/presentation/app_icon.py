@@ -8,8 +8,8 @@ from pathlib import Path
 
 from PySide6.QtGui import QIcon
 
-ICON_FILENAMES = ("voiceink-shell.ico", "voiceink-shell.svg")
-TRANSCRIPTION_ICON_FILENAME = "voiceink-transcribe.png"
+APPLICATION_ICON_FILENAMES = ("voiceink-transcribe.png", "voiceink-transcribe.ico")
+SIDEBAR_ICON_FILENAME = "voiceink-shell.svg"
 
 
 def application_icon_paths(
@@ -20,14 +20,14 @@ def application_icon_paths(
 ) -> tuple[Path, ...]:
     """Return bundled, executable-adjacent, and source-checkout icon candidates."""
     return branding_asset_paths(
-        ICON_FILENAMES,
+        APPLICATION_ICON_FILENAMES,
         frozen_root=frozen_root,
         executable=executable,
         source_file=source_file,
     )
 
 
-def transcription_icon_paths(
+def sidebar_icon_paths(
     *,
     frozen_root: Path | None = None,
     executable: Path | None = None,
@@ -35,7 +35,7 @@ def transcription_icon_paths(
 ) -> tuple[Path, ...]:
     """Return runtime candidates for the branded Transcribe navigation asset."""
     return branding_asset_paths(
-        (TRANSCRIPTION_ICON_FILENAME,),
+        (SIDEBAR_ICON_FILENAME,),
         frozen_root=frozen_root,
         executable=executable,
         source_file=source_file,

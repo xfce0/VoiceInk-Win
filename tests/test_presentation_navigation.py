@@ -57,6 +57,8 @@ def test_sidebar_is_expanded_with_visible_labels_at_minimum_window(
     assert sidebar.width() == SIDEBAR_WIDTH
     assert [button.text() for button in buttons] == [item.label for item in SIDEBAR_ITEMS]
     assert [button.accessibleName() for button in buttons] == [item.label for item in SIDEBAR_ITEMS]
+    assert buttons[2].toolTip() == "Transcribe"
+    assert buttons[2].accessibleDescription() == "Transcribe navigation destination"
     assert all(button.height() >= SIDEBAR_ITEM_HEIGHT for button in buttons)
     assert all(
         button.iconSize() == QSize(SIDEBAR_ICON_SIZE, SIDEBAR_ICON_SIZE) for button in buttons
@@ -125,9 +127,18 @@ def test_sidebar_icons_are_repository_svg_rendered_and_high_dpi(application: QAp
 
     branded_item = SIDEBAR_ITEMS[2]
     branded_icon = sidebar_icon(branded_item, SIDEBAR_ICON_SIZE)
-    assert branded_item.asset_filename == "voiceink-transcribe.png"
+    assert branded_item.asset_filename == "voiceink-shell.svg"
     assert not branded_icon.isNull()
     assert not branded_icon.pixmap(QSize(SIDEBAR_ICON_SIZE, SIDEBAR_ICON_SIZE)).isNull()
+    for scale in ICON_SCALE_FACTORS:
+        high_dpi = _render(branded_item, SIDEBAR_ICON_SIZE, scale)
+        assert high_dpi.devicePixelRatio() == scale
+        assert not high_dpi.isNull()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected, QIcon.Mode.Disabled):
+        for state in (QIcon.State.Off, QIcon.State.On):
+            assert not branded_icon.pixmap(
+                QSize(SIDEBAR_ICON_SIZE, SIDEBAR_ICON_SIZE), mode, state
+            ).isNull()
 
 
 def test_disabled_sidebar_icon_uses_muted_tile_and_foreground(application: QApplication) -> None:

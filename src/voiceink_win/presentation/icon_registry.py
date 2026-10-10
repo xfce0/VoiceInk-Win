@@ -62,7 +62,7 @@ SIDEBAR_ITEMS = (
         "#db594b",
         "#ffffff",
         True,
-        "voiceink-transcribe.png",
+        "voiceink-shell.svg",
     ),
     SidebarItem("History", "history", "#df4f82", "#2a101d", True),
     SidebarItem("Dictionary", "dictionary", "#3478d4", "#ffffff", True),
