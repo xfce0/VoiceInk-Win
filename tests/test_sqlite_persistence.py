@@ -104,7 +104,7 @@ def test_startup_applies_migrations_and_enables_wal(tmp_path: Path) -> None:
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         assert {"schema_migrations", "history", "dictionary_entries", "settings"} <= tables
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 3
         assert all(
             len(row[0]) == 64
             for row in connection.execute("SELECT checksum FROM schema_migrations")
@@ -118,6 +118,7 @@ def test_settings_roundtrip(store: SQLitePersistence) -> None:
         selected_mode="meeting",
         hotkeys={"toggle": "Ctrl+Space", "cancel": "Escape"},
         auto_copy=True,
+        theme_mode="dark",
         model_preferences={"model": "parakeet", "device": "cuda"},
         audio_preferences={"sample_rate": 16_000, "channels": 1},
     )
@@ -134,6 +135,14 @@ def test_field_level_settings_update_preserves_complete_hotkey_shape(
     updated = store.update_settings({"hotkeys.start_stop": "Ctrl+Space"}).result(timeout=2)
 
     assert updated.hotkeys == {"start_stop": "Ctrl+Space", "cancel": ""}
+    assert store.get_settings().result(timeout=2) == updated
+
+
+def test_theme_preference_update_preserves_other_settings(store: SQLitePersistence) -> None:
+    updated = store.update_settings({"theme_mode": "light"}).result(timeout=2)
+
+    assert updated.theme_mode.value == "light"
+    assert updated.language == "en"
     assert store.get_settings().result(timeout=2) == updated
 
 

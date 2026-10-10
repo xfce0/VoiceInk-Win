@@ -53,9 +53,14 @@ make push
 After a clean clone, `make build` is the reproducible Windows packaging command.
 It creates or updates only the frontend outputs in `dist/`, installs the exact
 `.[gui,build]` extras into `.venv`, validates both x64 PE subsystems, and runs
-the console executable with Qt's offscreen platform. It requires 64-bit Windows,
-GNU Make, and Python 3.12, 3.13, or 3.14. macOS and Linux are intentionally
-rejected for this target; use `make check` there.
+the console executable with Qt's offscreen platform. It requires Windows 10/11,
+GNU Make, and x64 Python 3.12, 3.13, or 3.14. On an ARM64 host, the x64 Python
+and build tools are accepted through Windows x64 emulation; native ARM64
+packaging is rejected because the repository has no native ARM64 artifact matrix.
+macOS and Linux are intentionally rejected for this target; use `make check` there.
+
+Run `make platform-check` first for the detected Windows version, host/process
+architectures, selected execution mode, and x64 package settings.
 
 Build prerequisites are GNU Make (`make --version` must work) and Git for
 Windows with `sh.exe` available on `PATH`; the Makefile uses `/bin/sh`. Git
@@ -203,7 +208,7 @@ the checksum by itself.
 
 The repository workflow `Windows Diagnostic Build` produces a Windows x64
 portable bundle with a verified FFmpeg binary. Windows ARM64 can normally run
-this x64 diagnostic through Windows x64 emulation. Native ARM64 packaging is a
-separate build target.
+this x64 diagnostic through Windows x64 emulation. Native ARM64 packaging is not
+provided by the current artifact matrix.
 
 Direct pushes to `main` are forbidden by local hooks, `make push`, and the repository branch protection policy. `AGENTS.md` contains local agent instructions and is intentionally not published; `PROJECT_CONTEXT.md` is the public project passport for new clones.
