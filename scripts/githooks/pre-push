@@ -8,9 +8,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     fi
 done
 
-branch="$(git branch --show-current)"
+branch_ref="${local_ref#refs/heads/}"
+branch="${branch_ref:-$(git branch --show-current)}"
 case "$branch" in
-    feature/*|fix/*|refactor/*|docs/*|test/*|chore/*) ;;
+    feature/*|feat/*|fix/*|refactor/*|docs/*|test/*|chore/*) ;;
     *)
         printf '%s\n' "Push rejected: branch '$branch' is not a PR branch." >&2
         exit 1
