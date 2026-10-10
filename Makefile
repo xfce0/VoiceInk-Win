@@ -128,7 +128,7 @@ verify-branch:
 	@branch="$$(git branch --show-current)"; \
 	test -n "$$branch" || (printf '%s\n' 'Push rejected: detached HEAD is not publishable.' >&2; exit 1); \
 	case "$$branch" in \
-		feature/*|fix/*|refactor/*|docs/*|test/*|chore/*) ;; \
+		feature/*|feat/*|fix/*|refactor/*|docs/*|test/*|chore/*) ;; \
 		*) printf '%s\n' "Push rejected: branch '$$branch' must use a feature, fix, refactor, docs, test, or chore prefix." >&2; exit 1 ;; \
 	esac
 	@test "$$(git branch --show-current)" != "main" || (printf '%s\n' 'Push rejected: main is protected; use a feature branch and a pull request.' >&2; exit 1)
