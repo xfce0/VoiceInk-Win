@@ -93,22 +93,28 @@ class _WindowsShortcutRegistration:
             error_code = ctypes.get_last_error()
             if error_code == ERROR_HOTKEY_ALREADY_REGISTERED:
                 raise ShortcutConflictError("The selected global shortcut is already in use.")
-            raise ShortcutUnavailableError("Windows rejected the global shortcut.")
-        event_filter = _NativeHotkeyFilter(QAbstractNativeEventFilter, hotkey_id, callback)
-        application.installNativeEventFilter(event_filter)
+                raise ShortcutUnavailableError("Windows rejected the global shortcut.")
+        try:
+            event_filter = _NativeHotkeyFilter(QAbstractNativeEventFilter, hotkey_id, callback)
+            application.installNativeEventFilter(event_filter)
+        except BaseException as error:
+            user32.UnregisterHotKey(None, hotkey_id)
+            raise ShortcutUnavailableError(
+                "The Windows global shortcut event bridge is unavailable."
+            ) from error
         return cls(application, user32, event_filter, hotkey_id)
 
     def unregister(self) -> None:
         if self.on_unregistered is None:
             return
-        self.application.removeNativeEventFilter(self.event_filter)
+        callback = self.on_unregistered
         try:
+            self.application.removeNativeEventFilter(self.event_filter)
+        finally:
             if not self.user32.UnregisterHotKey(None, self.hotkey_id):
                 raise ShortcutUnavailableError("Windows could not unregister the global shortcut.")
-        finally:
-            callback = self.on_unregistered
-            self.on_unregistered = None
-            callback()
+        self.on_unregistered = None
+        callback()
 
 
 def _NativeHotkeyFilter(base_class, hotkey_id: int, callback: Callable[[], None]):
