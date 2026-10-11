@@ -336,8 +336,11 @@ class MicrophoneRecorderController:
         with self._lock:
             if generation != self._generation:
                 return
+            was_stopping = self._snapshot.state is RecorderState.STOPPING
             self._handle = None
             self._clear_level_subscription_locked()
+        if was_stopping and result.state is not RecordingState.CANCELLED:
+            self._publish(RecorderSnapshot(RecorderState.PROCESSING, generation=generation))
         if result.state is RecordingState.CANCELLED:
             snapshot = RecorderSnapshot(RecorderState.CANCELLED, generation=generation)
         elif result.state is RecordingState.EMPTY:
