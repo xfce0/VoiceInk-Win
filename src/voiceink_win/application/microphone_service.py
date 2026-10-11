@@ -292,6 +292,7 @@ class MicrophoneRecordingService:
         self._asr_deadline_seconds = asr_deadline_seconds
         self._lock = Lock()
         self._active: MicrophoneRecordingHandle | None = None
+        self._closed = False
 
     @property
     def status(self) -> MicrophoneStatus:
@@ -313,6 +314,8 @@ class MicrophoneRecordingService:
         deadline: float | None = None,
     ) -> MicrophoneRecordingHandle:
         with self._lock:
+            if self._closed:
+                raise CaptureError(CaptureErrorCode.CANCELLED, "microphone service is closed")
             if self._active is not None and (
                 not self._active.is_done or self._active.recovery_pending
             ):
@@ -336,7 +339,9 @@ class MicrophoneRecordingService:
         return handle
 
     def close(self, timeout: float = 5.0) -> None:
-        active = self.active
+        with self._lock:
+            self._closed = True
+            active = self._active
         if active is None or (active.is_done and not active.recovery_pending):
             return
         Thread(target=_cancel_recording, args=(active,), daemon=True).start()

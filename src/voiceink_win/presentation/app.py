@@ -116,6 +116,10 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
                 self._cancelled = True
                 return True
 
+        def abandon(self) -> None:
+            with self._lock:
+                self._cancelled = True
+
     class _QtOperationBridge(QObject):
         requested = Signal(object)
 
@@ -131,9 +135,11 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             try:
                 return request.result.result(timeout=5.0)
             except TimeoutError:
-                if request.cancel():
-                    raise
-                return request.result.result()
+                request.cancel()
+                request.abandon()
+                raise
+
+        __call__ = dispatch
 
         def _execute(self, payload) -> None:
             if not payload.claim():
@@ -142,6 +148,9 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
                 payload.result.set_result(payload.operation())
             except BaseException as error:
                 payload.result.set_exception(error)
+
+        def invalidate(self) -> None:
+            self.requested.disconnect(self._execute)
 
     lease = create_instance_lease()
     if not lease.acquire():
@@ -157,7 +166,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         raise
     global_shortcut = composition.global_shortcut
     operation_bridge = _QtOperationBridge()
-    composition.global_hotkey_settings.set_dispatcher(operation_bridge.dispatch)
+    composition.global_hotkey_settings.set_dispatcher(operation_bridge)
     recorder_bridge = _RecorderAvailabilityBridge()
     recorder_bridge.ready.connect(
         global_shortcut.register,
