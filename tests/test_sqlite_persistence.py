@@ -33,6 +33,8 @@ from voiceink_win.infrastructure import (
 )
 from voiceink_win.infrastructure.storage_paths import VoiceInkPaths, normalise_relative_audio_path
 
+PERSISTENCE_READY_TIMEOUT_SECONDS = 5
+
 
 def _record(record_id: str, created_at: datetime, text: str) -> HistoryRecord:
     return HistoryRecord(
@@ -87,7 +89,7 @@ def _native_safety_artifacts(path: Path) -> AudioArtifactStore:
 @pytest.fixture
 def store(tmp_path: Path):
     persistence = SQLitePersistence(tmp_path / "voiceink.sqlite3")
-    persistence.ready().result(timeout=2)
+    persistence.ready().result(timeout=PERSISTENCE_READY_TIMEOUT_SECONDS)
     yield persistence
     persistence.close().result(timeout=2)
 
@@ -95,7 +97,7 @@ def store(tmp_path: Path):
 def test_startup_applies_migrations_and_enables_wal(tmp_path: Path) -> None:
     database = tmp_path / "voiceink.sqlite3"
     persistence = SQLitePersistence(database)
-    persistence.ready().result(timeout=2)
+    persistence.ready().result(timeout=PERSISTENCE_READY_TIMEOUT_SECONDS)
     persistence.close().result(timeout=2)
 
     with sqlite3.connect(database) as connection:

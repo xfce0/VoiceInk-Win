@@ -98,7 +98,7 @@ def test_sidebar_branding_asset_is_repository_owned_and_runtime_relocatable(
 
 def test_application_png_provenance_and_generated_ico_sizes(tmp_path: Path) -> None:
     assert hashlib.sha256(ICON_SOURCE.read_bytes()).hexdigest() == (
-        "de11e5550a84a03094f4cc60c6aff71045b67ccd020d142d6e379795c32ce0b"
+        "de11e5550a84a03094f4cc60c6aff71045b67ccd020d142d6e379795c32ce0b0"
     )
     source = QImage(str(ICON_SOURCE))
     assert source.size() == QSize(750, 750)
