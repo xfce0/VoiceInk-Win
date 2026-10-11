@@ -105,6 +105,8 @@ def test_production_entrypoint_runs_real_composition_session(
             self._composition = real_builder()
             self.controller = self._composition.controller
             self.transcribe_controller = self._composition.transcribe_controller
+            self.global_shortcut = self._composition.global_shortcut
+            self.global_hotkey_settings = self._composition.global_hotkey_settings
 
         def close(self) -> None:
             events.append("close")
@@ -159,6 +161,8 @@ def test_production_entrypoint_closes_composition_on_event_loop_failure(
             self._composition = real_builder()
             self.controller = self._composition.controller
             self.transcribe_controller = self._composition.transcribe_controller
+            self.global_shortcut = self._composition.global_shortcut
+            self.global_hotkey_settings = self._composition.global_hotkey_settings
 
         def close(self) -> None:
             events.append("close")

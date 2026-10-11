@@ -157,14 +157,12 @@ def test_settings_roundtrip_reloads_language_mode_and_hotkeys(
         _wait(application, lambda: not page._loading)
         page._auto_copy.setChecked(True)
         page._mode_combo.setCurrentIndex(page._mode_combo.findData("meeting"))
-        page._start_hotkey.setText("Ctrl+Space")
-        page._start_hotkey.editingFinished.emit()
         page._language_combo.setCurrentIndex(page._language_combo.findData("ru"))
         _wait(application, lambda: page._status.text() in {"Saved", "Сохранено"})
         assert store.get_settings().result(timeout=2) == Settings(
             language="ru",
             selected_mode="meeting",
-            hotkeys={"start_stop": "Ctrl+Space", "cancel": ""},
+            hotkeys={"start_stop": "", "cancel": ""},
             auto_copy=True,
         )
     finally:
