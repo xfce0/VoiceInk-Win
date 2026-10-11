@@ -31,6 +31,8 @@ class HistoryRow(QFrame):
         *,
         audio_available: bool,
         folder_available: bool,
+        audio_error: bool = False,
+        folder_error: bool = False,
         parent: QFrame | None = None,
     ) -> None:
         super().__init__(parent)
@@ -38,6 +40,8 @@ class HistoryRow(QFrame):
         self._locale_config = locale_config
         self._audio_available = audio_available
         self._folder_available = folder_available
+        self._audio_error = audio_error
+        self._folder_error = folder_error
         self._expanded = False
         self.setObjectName("historyRow")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -176,6 +180,24 @@ class HistoryRow(QFrame):
     def set_metadata(self, metadata: str) -> None:
         self._metadata.setText(metadata)
 
+    def set_media_available(
+        self,
+        *,
+        audio: bool | None = None,
+        folder: bool | None = None,
+        audio_error: bool | None = None,
+        folder_error: bool | None = None,
+    ) -> None:
+        if audio is not None:
+            self._audio_available = audio
+        if folder is not None:
+            self._folder_available = folder
+        if audio_error is not None:
+            self._audio_error = audio_error
+        if folder_error is not None:
+            self._folder_error = folder_error
+        self.apply_locale()
+
     def apply_locale(self, _locale: str | None = None) -> None:
         del _locale
         locale = self._locale_config.locale
@@ -195,7 +217,9 @@ class HistoryRow(QFrame):
         self._delete.setText(translate(TranslationKey.HISTORY_DELETE, locale))
         self._audio.setToolTip(
             translate(
-                TranslationKey.HISTORY_AUDIO
+                TranslationKey.HISTORY_AUDIO_ERROR
+                if self._audio_error
+                else TranslationKey.HISTORY_AUDIO
                 if self._audio_available
                 else TranslationKey.HISTORY_AUDIO_UNAVAILABLE,
                 locale,
@@ -203,7 +227,9 @@ class HistoryRow(QFrame):
         )
         self._folder.setToolTip(
             translate(
-                TranslationKey.HISTORY_FOLDER
+                TranslationKey.HISTORY_FOLDER_ERROR
+                if self._folder_error
+                else TranslationKey.HISTORY_FOLDER
                 if self._folder_available
                 else TranslationKey.HISTORY_FOLDER_UNAVAILABLE,
                 locale,

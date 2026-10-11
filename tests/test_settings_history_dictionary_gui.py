@@ -18,7 +18,15 @@ except ImportError:
         raise
     pytest.skip("PySide6 is required for presentation tests", allow_module_level=True)
 
-from voiceink_win.application import PersistenceService, ShellController
+from voiceink_win.application import (
+    HistoryMediaActionResult,
+    HistoryMediaAvailability,
+    HistoryMediaCapability,
+    HistoryMediaCode,
+    HistoryMediaState,
+    PersistenceService,
+    ShellController,
+)
 from voiceink_win.domain import (
     DictionaryEntry,
     HistoryPage,
@@ -409,7 +417,7 @@ def test_history_rows_preview_expand_copy_and_disable_unavailable_actions(
         store.close().result(timeout=2)
 
 
-def test_history_audio_and_folder_actions_use_injected_ports(
+def test_history_audio_and_folder_actions_use_the_application_service(
     application: QApplication, persistence
 ) -> None:
     service, store = persistence
@@ -422,23 +430,24 @@ def test_history_audio_and_folder_actions_use_injected_ports(
     )
     store.upsert_history(record).result(timeout=2)
 
-    class AudioPort:
+    class MediaActions:
         def __init__(self) -> None:
-            self.references: list[str] = []
+            self.records: list[tuple[str, HistoryRecord]] = []
 
-        def play(self, artifact_reference: str) -> None:
-            self.references.append(artifact_reference)
+        def inspect(self, _record: HistoryRecord) -> HistoryMediaAvailability:
+            available = HistoryMediaCapability(HistoryMediaState.AVAILABLE)
+            return HistoryMediaAvailability(available, available)
 
-    class FolderPort:
-        def __init__(self) -> None:
-            self.references: list[str] = []
+        def play(self, record: HistoryRecord, on_result=None) -> HistoryMediaActionResult:
+            self.records.append(("play", record))
+            return HistoryMediaActionResult(HistoryMediaCode.STARTED)
 
-        def reveal(self, folder_reference: str) -> None:
-            self.references.append(folder_reference)
+        def reveal(self, record: HistoryRecord) -> HistoryMediaActionResult:
+            self.records.append(("reveal", record))
+            return HistoryMediaActionResult(HistoryMediaCode.STARTED)
 
-    audio = AudioPort()
-    folder = FolderPort()
-    page = HistoryWidget(service, audio_port=audio, folder_port=folder)
+    media_actions = MediaActions()
+    page = HistoryWidget(service, media_actions=media_actions)
     try:
         _wait(application, lambda: page._list.count() == 1)
         row = page._rows[record.id]
@@ -446,8 +455,55 @@ def test_history_audio_and_folder_actions_use_injected_ports(
         assert row.folder_button.isEnabled()
         row.audio_button.click()
         row.folder_button.click()
-        assert audio.references == [record.audio_artifact_path]
-        assert folder.references == ["folder-token"]
+        assert [(action, item.id) for action, item in media_actions.records] == [
+            ("play", record.id),
+            ("reveal", record.id),
+        ]
+        assert all(
+            item.source_metadata.get("folder_reference") == "folder-token"
+            for _, item in media_actions.records
+        )
+    finally:
+        page.dispose()
+        store.close().result(timeout=2)
+
+
+def test_history_media_result_states_are_localized(application: QApplication, persistence) -> None:
+    service, store = persistence
+    record = HistoryRecord(
+        id="history-media-states",
+        created_at=datetime.now(UTC),
+        original_text="Transcript",
+        audio_artifact_path="history/history-media-states.wav",
+    )
+    store.upsert_history(record).result(timeout=2)
+
+    class MediaActions:
+        def inspect(self, _record: HistoryRecord) -> HistoryMediaAvailability:
+            available = HistoryMediaCapability(HistoryMediaState.AVAILABLE)
+            return HistoryMediaAvailability(available, available)
+
+        def play(self, _record: HistoryRecord, on_result=None) -> HistoryMediaActionResult:
+            return HistoryMediaActionResult(HistoryMediaCode.NO_ARTIFACT)
+
+        def reveal(self, _record: HistoryRecord) -> HistoryMediaActionResult:
+            return HistoryMediaActionResult(HistoryMediaCode.OPERATION_FAILED)
+
+    page = HistoryWidget(
+        service,
+        media_actions=MediaActions(),
+        locale_config=LocaleConfig(Locale.RUSSIAN),
+    )
+    try:
+        _wait(application, lambda: page._list.count() == 1)
+        row = page._rows[record.id]
+        row.audio_button.click()
+        assert page._status.text() == "Аудио недоступно"
+        assert page._error.text() == ""
+        assert not row.audio_button.isEnabled()
+        row.folder_button.click()
+        assert page._status.text() == "Ошибка"
+        assert page._error.text() == "Не удалось показать аудиоартефакт."
     finally:
         page.dispose()
         store.close().result(timeout=2)

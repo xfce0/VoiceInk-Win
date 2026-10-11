@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from voiceink_win.application import (
     GlobalToggleShortcutService,
     HistoryDeletionService,
+    HistoryMediaActionService,
     PersistenceService,
     ShellController,
     TranscribePageController,
@@ -34,7 +35,7 @@ from .ai_models_page import AIModelsPage
 from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
-from .history_page import HistoryAudioPort, HistoryFolderPort, HistoryPage
+from .history_page import HistoryPage
 from .icon_registry import SIDEBAR_ITEMS
 from .localization import (
     LocaleConfig,
@@ -260,13 +261,10 @@ class MainWindow(QMainWindow):
         locale_config: LocaleConfig | None = None,
         persistence: PersistenceService | None = None,
         artifact_cleanup=None,
-        artifact_reveal=None,
-        artifact_folder=None,
         history_deletion: HistoryDeletionService | None = None,
         model_metadata: ModelMetadata | None = None,
         global_shortcut: GlobalToggleShortcutService | None = None,
-        audio_port: HistoryAudioPort | None = None,
-        folder_port: HistoryFolderPort | None = None,
+        media_actions: HistoryMediaActionService | None = None,
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
@@ -284,10 +282,7 @@ class MainWindow(QMainWindow):
         self._persistence = persistence
         self._model_metadata = model_metadata or discover_model_metadata()
         self._artifact_cleanup = artifact_cleanup
-        self._audio_port = audio_port
-        self._folder_port = folder_port
-        self._artifact_reveal = artifact_reveal
-        self._artifact_folder = artifact_folder
+        self._media_actions = media_actions
         self._history_deletion = history_deletion or (
             HistoryDeletionService(persistence, artifact_cleanup)
             if persistence is not None
@@ -346,11 +341,8 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             artifact_cleanup=self._artifact_cleanup,
-            artifact_reveal=self._artifact_reveal,
-            artifact_folder=self._artifact_folder,
             history_deletion=self._history_deletion,
-            audio_port=self._audio_port,
-            folder_port=self._folder_port,
+            media_actions=self._media_actions,
         )
         self._pages.addWidget(self._history_page)
         self._dictionary_page = DictionaryPage(

@@ -30,7 +30,9 @@ def _run_session(
     event_loop: Callable[[], int],
     after_show: Callable[[_Window], None] | None = None,
     cleanup_window: Callable[[_Window], None] | None = None,
+    close_composition: Callable[[], None] | None = None,
 ) -> int:
+    close = composition.close if close_composition is None else close_composition
     window: _Window | None = None
     try:
         window = create_window()
@@ -46,7 +48,7 @@ def _run_session(
         except BaseException:
             pass
         try:
-            composition.close()
+            close()
         except BaseException:
             pass
         raise
@@ -55,7 +57,7 @@ def _run_session(
             if window is not None and cleanup_window is not None:
                 cleanup_window(window)
         finally:
-            composition.close()
+            close()
         return result
 
 
@@ -93,6 +95,18 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     global_shortcut = GlobalToggleShortcutService(
         composition.controller, create_global_shortcut_port()
     )
+    composition_closed = False
+
+    def close_composition() -> None:
+        nonlocal composition_closed
+        if composition_closed:
+            return
+        composition_closed = True
+        composition.close()
+
+    def close_before_quit() -> None:
+        close_composition()
+
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
@@ -102,9 +116,8 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             transcribe_controller=composition.transcribe_controller,
             persistence=getattr(composition, "persistence", None),
             artifact_cleanup=getattr(composition, "artifact_cleanup", None),
-            artifact_reveal=getattr(composition, "artifact_reveal", None),
-            artifact_folder=getattr(composition, "artifact_folder", None),
             history_deletion=getattr(composition, "history_deletion", None),
+            media_actions=getattr(composition, "media_actions", None),
             global_shortcut=global_shortcut,
         )
         window.setWindowIcon(application.windowIcon())
@@ -133,13 +146,21 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         elif smoke:
             QTimer.singleShot(100, application.quit)
 
-    return _run_session(
-        composition,
-        create_window,
-        application.exec,
-        after_show,
-        cleanup_window=lambda window: window.dispose(),
-    )
+    application.aboutToQuit.connect(close_before_quit)
+    try:
+        return _run_session(
+            composition,
+            create_window,
+            application.exec,
+            after_show,
+            cleanup_window=lambda window: window.dispose(),
+            close_composition=close_composition,
+        )
+    finally:
+        try:
+            application.aboutToQuit.disconnect(close_before_quit)
+        except (RuntimeError, TypeError):
+            pass
 
 
 if __name__ == "__main__":
