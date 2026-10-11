@@ -12,6 +12,8 @@ from threading import Lock, Thread, current_thread
 from typing import Protocol
 
 from voiceink_win.application import (
+    GlobalHotkeySettingsService,
+    GlobalToggleShortcutService,
     HistoryDeletionService,
     PersistenceService,
     ShellController,
@@ -22,6 +24,7 @@ from voiceink_win.infrastructure import (
     AudioArtifactStore,
     SQLitePersistence,
     VoiceInkPaths,
+    create_global_shortcut_port,
     packaged_runtime_available,
 )
 
@@ -50,6 +53,12 @@ class DesktopComposition(Protocol):
     @property
     def history_deletion(self) -> HistoryDeletionService: ...
 
+    @property
+    def global_shortcut(self) -> GlobalToggleShortcutService: ...
+
+    @property
+    def global_hotkey_settings(self) -> GlobalHotkeySettingsService: ...
+
     def close(self) -> None: ...
 
 
@@ -63,6 +72,8 @@ class _DesktopComposition:
     artifact_folder: Path
     audio_artifact_port: object
     history_deletion: HistoryDeletionService
+    global_shortcut: GlobalToggleShortcutService
+    global_hotkey_settings: GlobalHotkeySettingsService
     readiness_timeout: float | None = field(default=None, repr=False)
     _backend: object | None = field(default=None, init=False, repr=False)
     _bootstrap_thread: Thread | None = field(default=None, init=False, repr=False)
@@ -91,6 +102,10 @@ class _DesktopComposition:
             if bootstrap.is_alive():
                 logger.error("desktop backend bootstrap did not stop before close deadline")
 
+        try:
+            self.global_hotkey_settings.close()
+        except Exception:
+            logger.exception("failed to unregister global shortcut")
         self.transcribe_controller.close(timeout=3.0)
         with self._lock:
             backend = self._backend
@@ -221,8 +236,10 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
         availability=TranscribeAvailability.LOADING,
         unavailable_message="Loading imported-media transcription runtime...",
     )
+    controller = ShellController.unavailable()
+    global_shortcut = GlobalToggleShortcutService(controller, create_global_shortcut_port())
     composition = _DesktopComposition(
-        controller=ShellController.unavailable(),
+        controller=controller,
         transcribe_controller=transcribe_controller,
         persistence=persistence,
         artifact_cleanup=artifacts.delete,
@@ -230,6 +247,8 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
         artifact_folder=artifacts.folder_path,
         audio_artifact_port=artifacts,
         history_deletion=history_deletion,
+        global_shortcut=global_shortcut,
+        global_hotkey_settings=GlobalHotkeySettingsService(global_shortcut, persistence),
         readiness_timeout=readiness_timeout,
     )
     if not _imported_media_environment_present():

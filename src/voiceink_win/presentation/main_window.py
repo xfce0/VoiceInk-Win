@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from voiceink_win.application import (
+    GlobalHotkeySettingsService,
     GlobalToggleShortcutService,
     HistoryDeletionService,
     PersistenceService,
@@ -265,6 +266,7 @@ class MainWindow(QMainWindow):
         history_deletion: HistoryDeletionService | None = None,
         model_metadata: ModelMetadata | None = None,
         global_shortcut: GlobalToggleShortcutService | None = None,
+        global_hotkey_settings: GlobalHotkeySettingsService | None = None,
         audio_port: HistoryAudioPort | None = None,
         folder_port: HistoryFolderPort | None = None,
     ) -> None:
@@ -294,6 +296,7 @@ class MainWindow(QMainWindow):
             else None
         )
         self._global_shortcut = global_shortcut
+        self._global_hotkey_settings = global_hotkey_settings
         self._owns_history_deletion = history_deletion is None and (
             self._history_deletion is not None
         )
@@ -316,13 +319,22 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._render(controller.snapshot)
         self.apply_locale()
-        if self._global_shortcut is not None:
-            self._global_shortcut.register()
 
     def _update_global_shortcut(self, shortcut: str) -> object | None:
+        if self._global_hotkey_settings is not None:
+            return self._global_hotkey_settings.update(shortcut)
         if self._global_shortcut is None:
             return None
         return self._global_shortcut.update_shortcut(shortcut)
+
+    def _load_global_shortcut(self, settings) -> object | None:
+        if self._global_hotkey_settings is not None:
+            return self._global_hotkey_settings.load(settings)
+        if self._global_shortcut is not None:
+            value = str(settings.hotkeys.get("start_stop", "")).strip()
+            self._global_shortcut.configure_shortcut(value)
+            return self._global_shortcut.register()
+        return None
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -370,6 +382,7 @@ class MainWindow(QMainWindow):
             self._pages,
             locale_config=self._locale_config,
             on_start_stop_hotkey_changed=self._update_global_shortcut,
+            on_start_stop_hotkey_loaded=self._load_global_shortcut,
         )
         self._settings_page.theme_changed.connect(self.apply_theme_preference)
         self._pages.addWidget(self._settings_page)
@@ -736,8 +749,6 @@ class MainWindow(QMainWindow):
                 pass
             self._locale_connected = False
         self._disconnect_theme_signal()
-        if self._global_shortcut is not None:
-            self._global_shortcut.unregister()
         self._recorder.dispose()
         self._transcribe_page.dispose()
         self._modes_page.dispose()

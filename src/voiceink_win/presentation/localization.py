@@ -103,6 +103,14 @@ class TranslationKey(StrEnum):
     SETTINGS_START_STOP_HOTKEY = "settings.start_stop_hotkey"
     SETTINGS_CANCEL_HOTKEY = "settings.cancel_hotkey"
     SETTINGS_HOTKEY_PLACEHOLDER = "settings.hotkey_placeholder"
+    SETTINGS_HOTKEY_HINT = "settings.hotkey_hint"
+    SETTINGS_HOTKEY_WINDOWS_ONLY = "settings.hotkey_windows_only"
+    SETTINGS_HOTKEY_REGISTERED = "settings.hotkey_registered"
+    SETTINGS_HOTKEY_CONFLICT = "settings.hotkey_conflict"
+    SETTINGS_HOTKEY_INVALID = "settings.hotkey_invalid"
+    SETTINGS_HOTKEY_INVALID_STORED = "settings.hotkey_invalid_stored"
+    SETTINGS_HOTKEY_UNAVAILABLE = "settings.hotkey_unavailable"
+    SETTINGS_HOTKEY_SAVE_ERROR = "settings.hotkey_save_error"
     SETTINGS_MODEL = "settings.model"
     SETTINGS_AUDIO = "settings.audio"
     SETTINGS_BACKEND_UNAVAILABLE = "settings.backend_unavailable"
@@ -482,6 +490,39 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.SETTINGS_CANCEL_HOTKEY: _entry("Cancel hotkey", "Горячая клавиша отмены"),
     TranslationKey.SETTINGS_HOTKEY_PLACEHOLDER: _entry(
         "Configuration placeholder", "Поле настройки"
+    ),
+    TranslationKey.SETTINGS_HOTKEY_HINT: _entry(
+        "Press a modifier and a key, for example Ctrl+Space.",
+        "Нажмите модификатор и клавишу, например Ctrl+Space.",
+    ),
+    TranslationKey.SETTINGS_HOTKEY_WINDOWS_ONLY: _entry(
+        "Global hotkeys are available on Windows only.",
+        "Глобальные горячие клавиши доступны только в Windows.",
+    ),
+    TranslationKey.SETTINGS_HOTKEY_REGISTERED: _entry(
+        "Global hotkey active: {shortcut}.",
+        "Глобальная горячая клавиша активна: {shortcut}.",
+    ),
+    TranslationKey.SETTINGS_HOTKEY_CONFLICT: _entry(
+        "This hotkey is already used by another application.",
+        "Эта горячая клавиша уже используется другим приложением.",
+    ),
+    TranslationKey.SETTINGS_HOTKEY_INVALID: _entry(
+        "Use one modifier and one supported key.",
+        "Используйте один модификатор и одну поддерживаемую клавишу.",
+    ),
+    TranslationKey.SETTINGS_HOTKEY_INVALID_STORED: _entry(
+        "The stored hotkey was invalid; the default is active until you save a new one.",
+        "Сохранённая горячая клавиша недействительна; используется значение по умолчанию, "
+        "пока вы не сохраните новое.",
+    ),
+    TranslationKey.SETTINGS_HOTKEY_UNAVAILABLE: _entry(
+        "Global hotkey registration is unavailable in this session.",
+        "Регистрация глобальной горячей клавиши недоступна в этой сессии.",
+    ),
+    TranslationKey.SETTINGS_HOTKEY_SAVE_ERROR: _entry(
+        "Could not save the hotkey; the previous value was restored.",
+        "Не удалось сохранить горячую клавишу; восстановлено прежнее значение.",
     ),
     TranslationKey.SETTINGS_MODEL: _entry("Model preference", "Настройка модели"),
     TranslationKey.SETTINGS_AUDIO: _entry("Audio preference", "Настройка аудио"),

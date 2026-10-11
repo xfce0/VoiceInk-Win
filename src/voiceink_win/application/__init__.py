@@ -8,6 +8,7 @@ from .asr_service import (
 )
 from .cancellation import CancellationTokenSource, EventCancellationToken
 from .global_shortcut import (
+    GlobalHotkeySettingsService,
     GlobalShortcutStatus,
     GlobalToggleShortcutService,
     RecordingTogglePort,
@@ -35,6 +36,7 @@ __all__ = [
     "ReservationToken",
     "SystemClock",
     "GlobalShortcutStatus",
+    "GlobalHotkeySettingsService",
     "GlobalToggleShortcutService",
     "RecordingTogglePort",
     "ShortcutAvailability",

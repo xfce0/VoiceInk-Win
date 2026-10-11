@@ -138,6 +138,9 @@ from .shortcuts import (
     ShortcutConflictError,
     ShortcutRegistrationError,
     ShortcutUnavailableError,
+    ShortcutValidationError,
+    ShortcutValidationReason,
+    canonicalize_global_shortcut,
 )
 from .transcribe import (
     SUPPORTED_MEDIA_EXTENSIONS,
@@ -175,6 +178,9 @@ __all__ = [
     "ShortcutConflictError",
     "ShortcutRegistrationError",
     "ShortcutUnavailableError",
+    "ShortcutValidationError",
+    "ShortcutValidationReason",
+    "canonicalize_global_shortcut",
     "AudioCaptureSession",
     "AudioInputPort",
     "BoundedPcm16Capture",
