@@ -88,7 +88,6 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         if package_smoke
         else build_desktop_composition()
     )
-    application.aboutToQuit.connect(composition.close)
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
