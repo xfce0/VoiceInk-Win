@@ -6,11 +6,10 @@ Implemented.
 
 ## Summary
 
-Replace the Transcribe navigation glyph with the actual VoiceInk macOS
-microphone branding asset, keep that asset available in source and packaged
-runtimes, and correct the Light theme's recorder surfaces. Application text
-weights are made consistently slightly heavier without changing sizes or
-layout geometry.
+Establish the VoiceInk branding asset provenance and keep the source and
+packaged assets available. The icon role assignment in this historical
+workstream is superseded by `icon-assets-swap.md`; the theme and typography
+decisions remain in force.
 
 ## Asset Decision
 
@@ -24,22 +23,22 @@ packaging/voiceink-shell-windows-x64/voiceink-transcribe.png
 ```
 
 The copied asset SHA-256 is
-`634396427fc3ff823cd24fe57e88f49e55de4f3d`. No source asset blocker remains.
+`de11e5550a84a03094f4cc60c6aff71045b67ccd020d142d6e379795c32ce0b`. No source
+asset blocker remains.
 
-The Windows repository's existing `voiceink-shell.svg` remains the executable
-branding source. No macOS AppIcon is substituted for the Windows executable;
-the standalone menu-bar microphone is the correct source for the Transcribe
-navigation action.
+The Windows repository's existing `voiceink-shell.svg` is the Transcribe
+sidebar source. The standalone menu-bar microphone remains the application
+icon source and no macOS AppIcon is substituted for the Windows executable.
 
 ## Decisions
 
-- `Transcribe` uses the repository-owned copied VoiceInk PNG while other
-  navigation items continue to use their inline SVG paths.
+- `Transcribe` uses the repository-owned Windows SVG while other navigation
+  items continue to use their inline SVG paths.
 - Runtime lookup tries frozen-bundle, executable-adjacent, and source-checkout
   locations for the Transcribe PNG, matching the existing application icon
   lookup order.
-- The frontend builder adds the PNG to both PyInstaller executables alongside
-  the ICO and SVG assets.
+- The frontend builder adds the PNG-derived ICO, PNG, and sidebar SVG to both
+  PyInstaller executables.
 - Light recorder surfaces use light semantic tokens; recording/error colors
   remain state-specific and accessible.
 - Typography weights are represented by shared tokens and raised modestly;

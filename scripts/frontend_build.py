@@ -22,12 +22,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 WORK = ROOT / "build" / "frontend"
 ICON_BUILD_DIR = ROOT / "build" / "dist"
-ICON_SOURCE = ROOT / "packaging" / "voiceink-shell-windows-x64" / "voiceink-shell.svg"
-ICON_TRANSCRIBE_SOURCE = (
-    ROOT / "packaging" / "voiceink-shell-windows-x64" / "voiceink-transcribe.png"
-)
+ICON_SOURCE = ROOT / "packaging" / "voiceink-shell-windows-x64" / "voiceink-transcribe.png"
+SIDEBAR_ICON_SOURCE = ROOT / "packaging" / "voiceink-shell-windows-x64" / "voiceink-shell.svg"
 ICON_BUILDER = ROOT / "scripts" / "build_icon.py"
-ICON_OUTPUT = ICON_BUILD_DIR / "voiceink-shell.ico"
+ICON_OUTPUT = ICON_BUILD_DIR / "voiceink-transcribe.ico"
 RUNTIME_ICON_DESTINATION = "."
 PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
 VALIDATOR = ROOT / "scripts" / "frontend_package_smoke.py"
@@ -132,7 +130,7 @@ def _build_executable(name: str, mode: str, python: str) -> None:
         "--add-data",
         f"{ICON_SOURCE};{RUNTIME_ICON_DESTINATION}",
         "--add-data",
-        f"{ICON_TRANSCRIBE_SOURCE};{RUNTIME_ICON_DESTINATION}",
+        f"{SIDEBAR_ICON_SOURCE};{RUNTIME_ICON_DESTINATION}",
         "--distpath",
         str(DIST),
         "--workpath",
@@ -150,11 +148,11 @@ def _build_executable(name: str, mode: str, python: str) -> None:
 
 
 def _generate_icon(python: str) -> None:
-    if not ICON_SOURCE.is_file():
-        raise FrontendBuildError(f"Missing repository-owned SVG icon source: {ICON_SOURCE}")
-    if not ICON_TRANSCRIBE_SOURCE.is_file() or ICON_TRANSCRIBE_SOURCE.stat().st_size == 0:
+    if not ICON_SOURCE.is_file() or ICON_SOURCE.stat().st_size == 0:
+        raise FrontendBuildError(f"Missing repository-owned application icon source: {ICON_SOURCE}")
+    if not SIDEBAR_ICON_SOURCE.is_file():
         raise FrontendBuildError(
-            f"Missing repository-owned Transcribe icon source: {ICON_TRANSCRIBE_SOURCE}"
+            f"Missing repository-owned sidebar icon source: {SIDEBAR_ICON_SOURCE}"
         )
     _run([python, str(ICON_BUILDER), str(ICON_SOURCE), str(ICON_OUTPUT)])
     if not ICON_OUTPUT.is_file() or ICON_OUTPUT.stat().st_size == 0:

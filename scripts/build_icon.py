@@ -1,4 +1,4 @@
-"""Rasterize the repository-owned SVG into a multi-size Windows ICO."""
+"""Convert the repository-owned PNG into a multi-size Windows ICO."""
 
 from __future__ import annotations
 
@@ -6,19 +6,25 @@ import struct
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+from PySide6.QtCore import QBuffer, QIODevice, QSize, Qt
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtSvg import QSvgRenderer
 
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def _render_png(renderer: QSvgRenderer, size: int) -> bytes:
+def _render_png(source: QImage, size: int) -> bytes:
     image = QImage(size, size, QImage.Format.Format_ARGB32)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
     try:
-        renderer.render(painter)
+        scaled = source.scaled(
+            QSize(size, size),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x = (size - scaled.width()) // 2
+        y = (size - scaled.height()) // 2
+        painter.drawImage(x, y, scaled)
     finally:
         painter.end()
 
@@ -62,15 +68,15 @@ def _write_ico(output: Path, images: list[tuple[int, bytes]]) -> None:
 
 
 def build_icon(source: Path, output: Path) -> None:
-    renderer = QSvgRenderer(QByteArray(source.read_bytes()))
-    if not renderer.isValid():
-        raise ValueError(f"Invalid SVG icon source: {source}")
-    _write_ico(output, [(size, _render_png(renderer, size)) for size in ICON_SIZES])
+    source_image = QImage(str(source))
+    if source_image.isNull():
+        raise ValueError(f"Invalid PNG icon source: {source}")
+    _write_ico(output, [(size, _render_png(source_image, size)) for size in ICON_SIZES])
 
 
 def main() -> int:
     if len(sys.argv) != 3:
-        print(f"usage: {Path(sys.argv[0]).name} SOURCE.svg OUTPUT.ico", file=sys.stderr)
+        print(f"usage: {Path(sys.argv[0]).name} SOURCE.png OUTPUT.ico", file=sys.stderr)
         return 2
     try:
         build_icon(Path(sys.argv[1]), Path(sys.argv[2]))
