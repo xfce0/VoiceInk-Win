@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 
-from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QObject, QPoint, QSize, Qt, Signal
+from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -22,12 +23,21 @@ from PySide6.QtWidgets import (
 from voiceink_win.application import (
     GlobalToggleShortcutService,
     HistoryDeletionService,
+    MicrophoneRecorderController,
     PersistenceService,
     ShellController,
     TranscribePageController,
 )
 from voiceink_win.application.transcribe_output import LocalTextFilePort
-from voiceink_win.domain import ModelMetadata, ShellSnapshot, ShellState
+from voiceink_win.domain import (
+    ACTIVE_RECORDER_STATES,
+    TERMINAL_RECORDER_STATES,
+    ModelMetadata,
+    RecorderSnapshot,
+    RecorderState,
+    ShellSnapshot,
+    ShellState,
+)
 from voiceink_win.infrastructure import discover_model_metadata
 
 from .ai_models_page import AIModelsPage
@@ -61,17 +71,93 @@ class _SnapshotBridge(QObject):
     changed = Signal(object)
 
 
+class _ShellRecorderAdapter:
+    """Keep old shell-only callers working while production uses the recorder controller."""
+
+    def __init__(self, controller: ShellController) -> None:
+        self._controller = controller
+        self._snapshot = self._convert(controller.snapshot)
+        self._listeners: list[Callable[[RecorderSnapshot], None]] = []
+        self._unsubscribe = controller.subscribe(self._changed)
+
+    @property
+    def snapshot(self) -> RecorderSnapshot:
+        return self._snapshot
+
+    def subscribe(self, listener: Callable[[RecorderSnapshot], None]) -> Callable[[], None]:
+        self._listeners.append(listener)
+
+        def unsubscribe() -> None:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+        return unsubscribe
+
+    def start(self) -> bool:
+        return self._controller.start_recording()
+
+    def stop(self) -> bool:
+        return self._controller.stop_recording()
+
+    def cancel(self) -> bool:
+        self._controller.reset()
+        return True
+
+    def dismiss(self) -> bool:
+        self._controller.reset()
+        return True
+
+    def close(self, deadline: float = 0.0) -> None:
+        del deadline
+        self._unsubscribe()
+
+    def start_recording(self) -> bool:
+        return self.start()
+
+    def stop_recording(self) -> bool:
+        return self.stop()
+
+    def _changed(self, snapshot: ShellSnapshot) -> None:
+        self._snapshot = self._convert(snapshot)
+        for listener in tuple(self._listeners):
+            listener(self._snapshot)
+
+    @staticmethod
+    def _convert(snapshot: ShellSnapshot) -> RecorderSnapshot:
+        state_map = {
+            ShellState.UNAVAILABLE: RecorderState.UNAVAILABLE,
+            ShellState.IDLE: RecorderState.IDLE,
+            ShellState.RECORDING: RecorderState.RECORDING_SOUNDING,
+            ShellState.PROCESSING: RecorderState.PROCESSING,
+            ShellState.TRANSCRIPT_READY: RecorderState.SUCCEEDED,
+            ShellState.EMPTY: RecorderState.EMPTY,
+            ShellState.ERROR: RecorderState.ERROR,
+        }
+        return RecorderSnapshot(
+            state_map[snapshot.state],
+            message=snapshot.error,
+            transcript=snapshot.transcript,
+            level=1.0 if snapshot.state is ShellState.RECORDING else 0.0,
+        )
+
+
 class FloatingRecorderWindow(QFrame):
-    """Cross-platform floating panel; OS tray/activation policies stay outside this class."""
+    """Small independent recorder overlay; native window policy stays behind Qt flags."""
 
     def __init__(
         self,
-        controller: ShellController,
+        controller: MicrophoneRecorderController | _ShellRecorderAdapter,
         parent: QWidget | None = None,
         theme: ThemeTokens | None = None,
         locale_config: LocaleConfig | None = None,
     ) -> None:
-        super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        del parent
+        flags = (
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        super().__init__(None, flags)
         self._controller = controller
         self._locale_config = locale_config or LocaleConfig(parent=self)
         self._locale_signal = self._locale_config.locale_changed
@@ -84,9 +170,10 @@ class FloatingRecorderWindow(QFrame):
         self.setObjectName("recorder")
         self.setFixedSize(300, 92)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self._timer: QTimer | None = None
+        self._timer = None
         self._disposed = False
         self._build_ui(theme or theme_for(ThemeMode.LIGHT))
+        self.setStyleSheet(stylesheet_for(theme or theme_for(ThemeMode.LIGHT)))
         self._render(controller.snapshot)
 
     def _build_ui(self, theme: ThemeTokens) -> None:
@@ -113,7 +200,7 @@ class FloatingRecorderWindow(QFrame):
         self._close_button = QPushButton(self)
         self._close_button.setObjectName("closeButton")
         self._close_button.setFixedSize(28, 28)
-        self._close_button.clicked.connect(self.dismiss)
+        self._close_button.clicked.connect(self._close_or_cancel)
         row.addWidget(self._close_button, 0, Qt.AlignmentFlag.AlignTop)
         self.apply_locale()
 
@@ -134,31 +221,21 @@ class FloatingRecorderWindow(QFrame):
 
     def _toggle_recording(self) -> None:
         state = self._controller.snapshot.state
-        if state is ShellState.RECORDING:
-            self._controller.stop_recording()
+        if state in {RecorderState.RECORDING_SILENT, RecorderState.RECORDING_SOUNDING}:
+            self._controller.stop()
             return
-        if state is not ShellState.PROCESSING:
-            self._controller.start_recording()
+        if state in {RecorderState.IDLE, *TERMINAL_RECORDER_STATES}:
+            self._controller.start()
 
-    def _schedule_processing(self) -> None:
-        if self._timer is not None:
-            return
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.setInterval(220)
-        self._timer.timeout.connect(self._complete_processing)
-        self._timer.start()
-
-    def _complete_processing(self) -> None:
-        self._timer = None
-        self._controller.complete_processing()
+    def _close_or_cancel(self) -> None:
+        if self._controller.snapshot.state in ACTIVE_RECORDER_STATES:
+            self._controller.cancel()
+        else:
+            self.dismiss()
 
     def dismiss(self) -> None:
-        if self._timer is not None:
-            self._timer.stop()
-            self._timer = None
-        self._controller.reset()
-        self.hide()
+        if self._controller.dismiss():
+            self.hide()
 
     def dispose(self) -> None:
         if self._disposed:
@@ -170,44 +247,79 @@ class FloatingRecorderWindow(QFrame):
             except (RuntimeError, TypeError):
                 pass
             self._locale_connected = False
-        self.dismiss()
+        self._controller.close(2.0)
+        self.hide()
         self._unsubscribe()
 
     def show_near(self, anchor: QWidget) -> None:
         origin = anchor.mapToGlobal(
             QPoint(anchor.width() - self.width() - 24, anchor.height() - self.height() - 24)
         )
+        screen = anchor.screen() or QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            x = min(max(origin.x(), available.left()), available.right() - self.width() + 1)
+            y = min(max(origin.y(), available.top()), available.bottom() - self.height() + 1)
+            origin = QPoint(x, y)
         self.move(origin)
         self.show()
         self.raise_()
 
     def _render(self, snapshot: ShellSnapshot) -> None:
         labels = {
-            ShellState.UNAVAILABLE: (
+            RecorderState.UNAVAILABLE: (
                 TranslationKey.RECORDER_STATUS_UNAVAILABLE,
                 TranslationKey.RECORDER_ACTION_UNAVAILABLE,
             ),
-            ShellState.IDLE: (
+            RecorderState.IDLE: (
                 TranslationKey.RECORDER_STATUS_READY,
                 TranslationKey.RECORDER_ACTION_START,
             ),
-            ShellState.RECORDING: (
+            RecorderState.RECORDING_SILENT: (
                 TranslationKey.RECORDER_STATUS_LISTENING,
                 TranslationKey.RECORDER_ACTION_STOP,
             ),
-            ShellState.PROCESSING: (
+            RecorderState.RECORDING_SOUNDING: (
+                TranslationKey.RECORDER_STATUS_LISTENING,
+                TranslationKey.RECORDER_ACTION_STOP,
+            ),
+            RecorderState.REQUESTING_ACCESS: (
+                TranslationKey.RECORDER_STATUS_REQUESTING,
+                TranslationKey.RECORDER_ACTION_WORKING,
+            ),
+            RecorderState.STARTING: (
+                TranslationKey.RECORDER_STATUS_STARTING,
+                TranslationKey.RECORDER_ACTION_WORKING,
+            ),
+            RecorderState.STOPPING: (
+                TranslationKey.RECORDER_STATUS_STOPPING,
+                TranslationKey.RECORDER_ACTION_WORKING,
+            ),
+            RecorderState.PROCESSING: (
                 TranslationKey.RECORDER_STATUS_TRANSCRIBING,
                 TranslationKey.RECORDER_ACTION_WORKING,
             ),
-            ShellState.TRANSCRIPT_READY: (
+            RecorderState.CANCEL_REQUESTED: (
+                TranslationKey.RECORDER_STATUS_CANCELLING,
+                TranslationKey.RECORDER_ACTION_WORKING,
+            ),
+            RecorderState.RECOVERY_PENDING: (
+                TranslationKey.RECORDER_STATUS_RECOVERY,
+                TranslationKey.RECORDER_ACTION_WORKING,
+            ),
+            RecorderState.SUCCEEDED: (
                 TranslationKey.RECORDER_STATUS_TRANSCRIPT_READY,
                 TranslationKey.RECORDER_ACTION_START_AGAIN,
             ),
-            ShellState.EMPTY: (
+            RecorderState.EMPTY: (
                 TranslationKey.RECORDER_STATUS_NO_WORDS,
                 TranslationKey.RECORDER_ACTION_TRY_AGAIN,
             ),
-            ShellState.ERROR: (
+            RecorderState.CANCELLED: (
+                TranslationKey.RECORDER_STATUS_READY,
+                TranslationKey.RECORDER_ACTION_TRY_AGAIN,
+            ),
+            RecorderState.ERROR: (
                 TranslationKey.RECORDER_STATUS_ACTION_NEEDED,
                 TranslationKey.RECORDER_ACTION_TRY_AGAIN,
             ),
@@ -215,13 +327,20 @@ class FloatingRecorderWindow(QFrame):
         status_key, action_key = labels[snapshot.state]
         status = self._t(status_key)
         action = self._t(action_key)
-        if snapshot.state is ShellState.ERROR:
-            status = translate_message(snapshot.error, self._locale_config.locale) or status
+        if snapshot.state in {RecorderState.ERROR, RecorderState.RECOVERY_PENDING}:
+            status = translate_message(snapshot.message, self._locale_config.locale) or status
         self._status.setText(status)
         self._record_button.setText(action)
-        unavailable = snapshot.state is ShellState.UNAVAILABLE
+        unavailable = snapshot.state is RecorderState.UNAVAILABLE
         self._record_button.setEnabled(
-            snapshot.state is not ShellState.PROCESSING and not unavailable
+            snapshot.state
+            in {
+                RecorderState.IDLE,
+                RecorderState.RECORDING_SILENT,
+                RecorderState.RECORDING_SOUNDING,
+                *TERMINAL_RECORDER_STATES,
+            }
+            and not unavailable
         )
         if unavailable:
             self._record_button.setAccessibleName(
@@ -237,16 +356,30 @@ class FloatingRecorderWindow(QFrame):
             self._record_button.setAccessibleDescription(
                 self._t(TranslationKey.RECORDER_RECORD_DESCRIPTION)
             )
-        self._record_button.setProperty("recording", snapshot.state is ShellState.RECORDING)
+        self._record_button.setProperty(
+            "recording",
+            snapshot.state in {RecorderState.RECORDING_SILENT, RecorderState.RECORDING_SOUNDING},
+        )
         self._record_button.style().unpolish(self._record_button)
         self._record_button.style().polish(self._record_button)
-        self._waveform.set_active(snapshot.state is ShellState.RECORDING)
-        if snapshot.state is ShellState.PROCESSING:
-            self._schedule_processing()
+        active = snapshot.state is RecorderState.RECORDING_SOUNDING
+        self._waveform.set_active(active)
+        close_description = (
+            self._t(TranslationKey.RECORDER_CANCEL_DESCRIPTION)
+            if snapshot.state in ACTIVE_RECORDER_STATES
+            else self._t(TranslationKey.RECORDER_CLOSE_DESCRIPTION)
+        )
+        self._close_button.setToolTip(close_description)
+        self._close_button.setAccessibleName(close_description)
+        self._close_button.setAccessibleDescription(close_description)
 
     def closeEvent(self, event) -> None:
-        self.dismiss()
-        event.accept()
+        if self._controller.snapshot.state in ACTIVE_RECORDER_STATES:
+            self._controller.cancel()
+            event.ignore()
+        else:
+            self.dismiss()
+            event.accept()
 
 
 class MainWindow(QMainWindow):
@@ -267,6 +400,7 @@ class MainWindow(QMainWindow):
         global_shortcut: GlobalToggleShortcutService | None = None,
         audio_port: HistoryAudioPort | None = None,
         folder_port: HistoryFolderPort | None = None,
+        recorder_controller: MicrophoneRecorderController | None = None,
     ) -> None:
         super().__init__()
         self._theme = theme or theme_for(ThemeMode.LIGHT)
@@ -294,6 +428,7 @@ class MainWindow(QMainWindow):
             else None
         )
         self._global_shortcut = global_shortcut
+        self._recorder_controller = recorder_controller or _ShellRecorderAdapter(controller)
         self._owns_history_deletion = history_deletion is None and (
             self._history_deletion is not None
         )
@@ -308,7 +443,7 @@ class MainWindow(QMainWindow):
         self._theme_callback = None
         self._disposed = False
         self._recorder = FloatingRecorderWindow(
-            controller, self, self._theme, locale_config=self._locale_config
+            self._recorder_controller, theme=self._theme, locale_config=self._locale_config
         )
         self.setWindowTitle(self._t(TranslationKey.APP_TITLE))
         self.setFixedSize(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)

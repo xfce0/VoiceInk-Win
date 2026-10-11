@@ -15,6 +15,7 @@ from .global_shortcut import (
 )
 from .import_queue import ImportQueue, ReservationState, ReservationToken
 from .import_service import ImportedMediaService, ImportedMediaTranscriptionService, SystemClock
+from .microphone_recorder import MicrophoneRecorderController
 from .microphone_service import MicrophoneRecordingHandle, MicrophoneRecordingService
 from .persistence import HistoryDeletionService, PersistenceService
 from .shell_controller import ShellController, ShellTranscriptionBackend
@@ -40,6 +41,7 @@ __all__ = [
     "ShortcutAvailability",
     "MicrophoneRecordingHandle",
     "MicrophoneRecordingService",
+    "MicrophoneRecorderController",
     "PersistenceService",
     "HistoryDeletionService",
     "ShellController",

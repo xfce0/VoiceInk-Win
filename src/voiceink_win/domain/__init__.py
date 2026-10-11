@@ -10,6 +10,7 @@ from .audio_capture import (
     CaptureLimits,
     CaptureTimeoutError,
     InputDevice,
+    InputLevel,
     InvalidCaptureChunkError,
     MicrophoneAvailability,
     MicrophoneCapability,
@@ -131,6 +132,12 @@ from .ports import (
     GlobalShortcutPort,
     GlobalShortcutRegistration,
 )
+from .recorder import (
+    ACTIVE_RECORDER_STATES,
+    TERMINAL_RECORDER_STATES,
+    RecorderSnapshot,
+    RecorderState,
+)
 from .shell import ShellSnapshot, ShellState
 from .shortcuts import (
     DEFAULT_GLOBAL_TOGGLE_SHORTCUT,
@@ -205,6 +212,10 @@ __all__ = [
     "canonical_dictionary_key",
     "ShellSnapshot",
     "ShellState",
+    "ACTIVE_RECORDER_STATES",
+    "TERMINAL_RECORDER_STATES",
+    "RecorderSnapshot",
+    "RecorderState",
     "AsrTimeoutError",
     "BackendUnavailableError",
     "CancellationError",
@@ -217,6 +228,7 @@ __all__ = [
     "ModelMetadata",
     "InvalidInputError",
     "InputDevice",
+    "InputLevel",
     "InvalidCaptureChunkError",
     "MissingModelError",
     "MicrophoneAvailability",
