@@ -66,6 +66,7 @@ class GlobalToggleShortcutService:
         self._shortcut = shortcut or GlobalShortcut()
         self._registration: GlobalShortcutRegistration | None = None
         self._registration_requested = False
+        self._closed = False
         self._status = GlobalShortcutStatus(self._shortcut, ShortcutAvailability.DISABLED)
 
     @property
@@ -73,6 +74,8 @@ class GlobalToggleShortcutService:
         return self._status
 
     def register(self) -> GlobalShortcutStatus:
+        if self._closed:
+            return self._set_status(ShortcutAvailability.DISABLED, "closed")
         if self._registration is not None:
             return self._status
         self._registration_requested = True
@@ -104,6 +107,10 @@ class GlobalToggleShortcutService:
             self._registration = None
         return self._set_status(ShortcutAvailability.DISABLED)
 
+    def close(self) -> GlobalShortcutStatus:
+        self._closed = True
+        return self.unregister()
+
     def update_shortcut(self, value: str) -> GlobalShortcutStatus:
         shortcut = GlobalShortcut(value or DEFAULT_GLOBAL_TOGGLE_SHORTCUT)
         return self.replace_shortcut(shortcut)
@@ -118,6 +125,8 @@ class GlobalToggleShortcutService:
 
     def replace_shortcut(self, shortcut: GlobalShortcut) -> GlobalShortcutStatus:
         """Replace a registration and restore the previous one on failure."""
+        if self._closed:
+            return self._set_status(ShortcutAvailability.DISABLED, "closed")
         if shortcut == self._shortcut:
             if self._registration is None and self._registration_requested:
                 return self.register()
@@ -233,11 +242,13 @@ class GlobalHotkeySettingsService:
     def close(self) -> None:
         with self._lock:
             self._closed = True
-        invalidate = getattr(self._dispatcher, "invalidate", None)
-        if invalidate is not None:
-            invalidate()
-        self._executor.shutdown(wait=False, cancel_futures=True)
-        self._dispatch(self._shortcut_service.unregister)
+        try:
+            self._dispatch(self._shortcut_service.close)
+        finally:
+            invalidate = getattr(self._dispatcher, "invalidate", None)
+            if invalidate is not None:
+                invalidate()
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
     def _update_serial(self, candidate: GlobalShortcut) -> GlobalShortcutStatus:
         with self._operation_lock:
@@ -339,16 +350,20 @@ class GlobalHotkeySettingsService:
                 )
         else:
             with self._lock:
-                if not self._closed:
+                closed = self._closed
+                if not closed:
                     self._committed = candidate
-            try:
-                status = self._dispatch(lambda: self._shortcut_service.status)
-            except BaseException:
-                status = GlobalShortcutStatus(
-                    candidate,
-                    ShortcutAvailability.DISABLED,
-                    "closed",
-                )
+            if closed:
+                status = GlobalShortcutStatus(candidate, ShortcutAvailability.DISABLED, "closed")
+            else:
+                try:
+                    status = self._dispatch(lambda: self._shortcut_service.status)
+                except BaseException:
+                    status = GlobalShortcutStatus(
+                        candidate,
+                        ShortcutAvailability.DISABLED,
+                        "closed",
+                    )
         finally:
             with self._lock:
                 if self._reconciliation is reconciliation:

@@ -236,7 +236,9 @@ class BackendApplication:
         return self._microphone
 
     def transcribe(self, request: AsrRequest) -> TranscriptResult:
-        return self._asr.transcribe(request)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._asr.transcribe(request)
 
     @property
     def imported_media_available(self) -> bool:
@@ -244,11 +246,15 @@ class BackendApplication:
 
     def submit(self, path: str, options: ImportOptions | None = None) -> JobId:
         """Submit an imported-media job through the configured application service."""
-        return self._require_imported_media().submit(path, options)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().submit(path, options)
 
     def status_or_wait(self, job_id: JobId, timeout: float | None = None) -> TerminalResult:
         """Return a terminal imported-media result, waiting up to ``timeout``."""
-        return self._require_imported_media().wait(job_id, timeout=timeout)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().wait(job_id, timeout=timeout)
 
     def wait(self, job_id: JobId, timeout: float | None = None) -> TerminalResult:
         """Expose the imported-media wait contract to application page adapters."""
@@ -256,11 +262,19 @@ class BackendApplication:
 
     def observe(self, job_id: JobId):
         """Observe an imported-media job through the existing service state machine."""
-        return self._require_imported_media().observe(job_id)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().observe(job_id)
 
     def cancel(self, job_id: JobId) -> bool:
         """Request cancellation of an imported-media job."""
-        return self._require_imported_media().cancel(job_id)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().cancel(job_id)
+
+    def _ensure_admission_locked(self) -> None:
+        if self._closed or self._closing or self._failed:
+            raise RuntimeUnavailableError("backend application is closed")
 
     def _require_imported_media(self) -> ImportedMediaTranscriptionService:
         if self._imported_media is None:
