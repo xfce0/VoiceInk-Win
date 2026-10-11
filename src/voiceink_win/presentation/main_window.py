@@ -47,7 +47,7 @@ from .audio_page import AudioPage
 from .clipboard import QtClipboardPort
 from .dictionary_page import DictionaryPage
 from .geometry import MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, SIDEBAR_WIDTH
-from .history_page import HistoryAudioPort, HistoryFolderPort, HistoryPage
+from .history_page import HistoryPage
 from .icon_registry import SIDEBAR_ITEMS
 from .localization import (
     LocaleConfig,
@@ -397,8 +397,6 @@ class MainWindow(QMainWindow):
         model_metadata: ModelMetadata | None = None,
         global_shortcut: GlobalToggleShortcutService | None = None,
         global_hotkey_settings: GlobalHotkeySettingsService | None = None,
-        audio_port: HistoryAudioPort | None = None,
-        folder_port: HistoryFolderPort | None = None,
         recorder_controller: MicrophoneRecorderController | None = None,
         media_actions: HistoryMediaActionService | None = None,
     ) -> None:

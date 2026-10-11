@@ -25,9 +25,9 @@ from voiceink_win.infrastructure import (
     AudioArtifactStore,
     SQLitePersistence,
     VoiceInkPaths,
-    create_global_shortcut_port,
     WindowsHistoryArtifactRevealAdapter,
     WindowsHistoryAudioPlaybackAdapter,
+    create_global_shortcut_port,
     packaged_runtime_available,
 )
 

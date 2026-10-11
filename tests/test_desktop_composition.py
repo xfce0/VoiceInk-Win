@@ -190,14 +190,25 @@ def test_composition_close_continues_after_media_adapter_failure() -> None:
             events.append("media.close")
             raise RuntimeError("media cleanup failed")
 
+    class Recorder:
+        def close(self, _timeout: float) -> None:
+            pass
+
+    class HotkeySettings:
+        def close(self) -> None:
+            pass
+
     composition = _DesktopComposition(
         controller=ShellController.unavailable(),
+        recorder=Recorder(),  # type: ignore[arg-type]
         transcribe_controller=Transcribe(),  # type: ignore[arg-type]
         persistence=Persistence(),  # type: ignore[arg-type]
         artifact_cleanup=lambda _path: None,
         audio_artifact_port=object(),
         media_actions=Media(),  # type: ignore[arg-type]
         history_deletion=Deletion(),  # type: ignore[arg-type]
+        global_shortcut=object(),  # type: ignore[arg-type]
+        global_hotkey_settings=HotkeySettings(),  # type: ignore[arg-type]
     )
 
     composition.close()
