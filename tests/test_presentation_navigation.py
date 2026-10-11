@@ -18,6 +18,7 @@ except ImportError:
 from tests.support.fake_shell import FakeShellBackend
 from voiceink_win.application import ShellController
 from voiceink_win.domain import TranscriptResult
+from voiceink_win.presentation.geometry import PAGE_VIEWPORT_WIDTH
 from voiceink_win.presentation.icon_registry import SIDEBAR_ITEMS
 from voiceink_win.presentation.main_window import (
     MAIN_WINDOW_HEIGHT,
@@ -55,6 +56,7 @@ def test_sidebar_is_expanded_with_visible_labels_at_minimum_window(
     assert window.size() == QSize(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
     assert window.minimumSize() == window.maximumSize() == window.size()
     assert sidebar.width() == SIDEBAR_WIDTH
+    assert window._pages.width() == PAGE_VIEWPORT_WIDTH
     assert [button.text() for button in buttons] == [item.label for item in SIDEBAR_ITEMS]
     assert [button.accessibleName() for button in buttons] == [item.label for item in SIDEBAR_ITEMS]
     assert all(button.height() >= SIDEBAR_ITEM_HEIGHT for button in buttons)
