@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import Lock
@@ -242,7 +242,10 @@ class GlobalHotkeySettingsService:
                 persistence_future = self._persistence.update_settings(
                     {"hotkeys.start_stop": candidate.value}
                 )
-                persistence_future.result(timeout=HOTKEY_PERSISTENCE_TIMEOUT_SECONDS)
+                try:
+                    persistence_future.result(timeout=HOTKEY_PERSISTENCE_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    persistence_future.result()
             except BaseException:
                 restored = self._dispatch(lambda: self._shortcut_service.replace_shortcut(previous))
                 if restored.availability is ShortcutAvailability.REGISTERED:

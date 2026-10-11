@@ -94,7 +94,7 @@ class MicrophoneRecordingHandle:
         self._session.stop()
 
     def cancel(self) -> None:
-        if (self._done.is_set() and not self._recovery_pending) or self._cancel_requested.is_set():
+        if self._done.is_set() and not self._recovery_pending:
             return
         self._cancel_requested.set()
         failure: Exception | None = None
@@ -234,8 +234,14 @@ class MicrophoneRecordingHandle:
         try:
             handle.await_quiescence()
         except RuntimeRecoveryPendingError as error:
-            result = RecordingResult(RecordingState.FAILED, error=error)
             self._recovery_pending = True
+            Thread(
+                target=self._reconcile_asr,
+                args=(handle, result or RecordingResult(RecordingState.FAILED, error=error)),
+                name=f"microphone-asr-recovery-{self._request_id}",
+                daemon=True,
+            ).start()
+            return
         else:
             try:
                 handle.release()
@@ -245,6 +251,26 @@ class MicrophoneRecordingHandle:
             if not self._recovery_pending:
                 self._set_asr_handle(None)
         self._finish(result or RecordingResult(RecordingState.FAILED))
+
+    def _reconcile_asr(self, handle: AsrRequestHandle, result: RecordingResult) -> None:
+        while True:
+            try:
+                handle.await_quiescence(deadline=time.monotonic() + 0.5)
+                break
+            except RuntimeRecoveryPendingError:
+                time.sleep(0.1)
+        while True:
+            try:
+                handle.release()
+                break
+            except RuntimeRecoveryPendingError:
+                time.sleep(0.1)
+            except AsrError as error:
+                result = RecordingResult(RecordingState.FAILED, error=error)
+                break
+        self._set_asr_handle(None)
+        self._recovery_pending = False
+        self._finish(result)
 
 
 class MicrophoneRecordingService:

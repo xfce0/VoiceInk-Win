@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError
+from threading import Lock
 from time import monotonic
 from typing import Protocol
 
@@ -93,6 +94,28 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     class _RecorderAvailabilityBridge(QObject):
         ready = Signal()
 
+    class _DispatchRequest:
+        def __init__(self, operation) -> None:
+            self.operation = operation
+            self.result = Future()
+            self._lock = Lock()
+            self._claimed = False
+            self._cancelled = False
+
+        def claim(self) -> bool:
+            with self._lock:
+                if self._cancelled:
+                    return False
+                self._claimed = True
+                return True
+
+        def cancel(self) -> bool:
+            with self._lock:
+                if self._claimed:
+                    return False
+                self._cancelled = True
+                return True
+
     class _QtOperationBridge(QObject):
         requested = Signal(object)
 
@@ -103,16 +126,22 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         def dispatch(self, operation):
             if QThread.currentThread() == self.thread():
                 return operation()
-            result = Future()
-            self.requested.emit((operation, result))
-            return result.result(timeout=5.0)
+            request = _DispatchRequest(operation)
+            self.requested.emit(request)
+            try:
+                return request.result.result(timeout=5.0)
+            except TimeoutError:
+                if request.cancel():
+                    raise
+                return request.result.result()
 
         def _execute(self, payload) -> None:
-            operation, result = payload
+            if not payload.claim():
+                return
             try:
-                result.set_result(operation())
+                payload.result.set_result(payload.operation())
             except BaseException as error:
-                result.set_exception(error)
+                payload.result.set_exception(error)
 
     lease = create_instance_lease()
     if not lease.acquire():
