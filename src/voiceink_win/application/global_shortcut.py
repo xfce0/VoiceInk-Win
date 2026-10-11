@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
@@ -177,6 +178,8 @@ class GlobalHotkeySettingsService:
         self,
         shortcut_service: GlobalToggleShortcutService,
         persistence: PersistenceService,
+        dispatcher: Callable[[Callable[[], GlobalShortcutStatus]], GlobalShortcutStatus]
+        | None = None,
     ) -> None:
         self._shortcut_service = shortcut_service
         self._persistence = persistence
@@ -184,6 +187,13 @@ class GlobalHotkeySettingsService:
         self._lock = Lock()
         self._operation_lock = Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hotkey-settings")
+        self._dispatcher = dispatcher
+
+    def set_dispatcher(
+        self,
+        dispatcher: Callable[[Callable[[], GlobalShortcutStatus]], GlobalShortcutStatus],
+    ) -> None:
+        self._dispatcher = dispatcher
 
     @property
     def status(self) -> GlobalShortcutStatus:
@@ -219,13 +229,13 @@ class GlobalHotkeySettingsService:
     def close(self) -> None:
         self._executor.shutdown(wait=True, cancel_futures=True)
         with self._operation_lock:
-            self._shortcut_service.unregister()
+            self._dispatch(self._shortcut_service.unregister)
 
     def _update_serial(self, candidate: GlobalShortcut) -> GlobalShortcutStatus:
         with self._operation_lock:
             with self._lock:
                 previous = self._committed
-            status = self._shortcut_service.replace_shortcut(candidate)
+            status = self._dispatch(lambda: self._shortcut_service.replace_shortcut(candidate))
             if status.availability is not ShortcutAvailability.REGISTERED:
                 return status
             try:
@@ -234,7 +244,7 @@ class GlobalHotkeySettingsService:
                 )
                 persistence_future.result(timeout=HOTKEY_PERSISTENCE_TIMEOUT_SECONDS)
             except BaseException:
-                restored = self._shortcut_service.replace_shortcut(previous)
+                restored = self._dispatch(lambda: self._shortcut_service.replace_shortcut(previous))
                 if restored.availability is ShortcutAvailability.REGISTERED:
                     return GlobalShortcutStatus(
                         restored.shortcut,
@@ -248,4 +258,9 @@ class GlobalHotkeySettingsService:
                 )
             with self._lock:
                 self._committed = candidate
-            return self._shortcut_service.status
+            return self._dispatch(lambda: self._shortcut_service.status)
+
+    def _dispatch(self, operation: Callable[[], GlobalShortcutStatus]) -> GlobalShortcutStatus:
+        if self._dispatcher is None:
+            return operation()
+        return self._dispatcher(operation)

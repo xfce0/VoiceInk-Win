@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from concurrent.futures import Future
 from time import monotonic
 from typing import Protocol
 
@@ -64,7 +65,7 @@ def _run_session(
 
 def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     try:
-        from PySide6.QtCore import QObject, Qt, QTimer, Signal
+        from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
         from PySide6.QtGui import QFont, QFontDatabase
         from PySide6.QtWidgets import QApplication
     except ImportError as error:
@@ -92,6 +93,27 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     class _RecorderAvailabilityBridge(QObject):
         ready = Signal()
 
+    class _QtOperationBridge(QObject):
+        requested = Signal(object)
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.requested.connect(self._execute, Qt.ConnectionType.QueuedConnection)
+
+        def dispatch(self, operation):
+            if QThread.currentThread() == self.thread():
+                return operation()
+            result = Future()
+            self.requested.emit((operation, result))
+            return result.result(timeout=5.0)
+
+        def _execute(self, payload) -> None:
+            operation, result = payload
+            try:
+                result.set_result(operation())
+            except BaseException as error:
+                result.set_exception(error)
+
     lease = create_instance_lease()
     if not lease.acquire():
         return 0
@@ -105,6 +127,8 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         lease.release()
         raise
     global_shortcut = composition.global_shortcut
+    operation_bridge = _QtOperationBridge()
+    composition.global_hotkey_settings.set_dispatcher(operation_bridge.dispatch)
     recorder_bridge = _RecorderAvailabilityBridge()
     recorder_bridge.ready.connect(
         global_shortcut.register,

@@ -20,6 +20,7 @@ from voiceink_win.domain import (
     RecorderState,
     RecordingResult,
     RecordingState,
+    RuntimeRecoveryPendingError,
 )
 
 from .microphone_service import MicrophoneRecordingHandle, MicrophoneRecordingService
@@ -149,7 +150,11 @@ class MicrophoneRecorderController:
 
     def dismiss(self) -> bool:
         with self._lock:
-            if self._snapshot.state in ACTIVE_RECORDER_STATES or self._handle is not None:
+            if (
+                self._snapshot.state in ACTIVE_RECORDER_STATES
+                or self._handle is not None
+                or self._snapshot.state is RecorderState.RECOVERY_PENDING
+            ):
                 return False
             self._clear_level_subscription_locked()
             generation = self._generation
@@ -336,7 +341,18 @@ class MicrophoneRecorderController:
             result = handle.wait()
         except Exception:
             logger.exception("microphone result wait failed")
-            self._publish_error(generation, "microphone recording failed")
+            with self._lock:
+                if generation == self._generation:
+                    self._handle = None
+                    self._clear_level_subscription_locked()
+            self._publish_if_current(
+                RecorderSnapshot(
+                    RecorderState.RECOVERY_PENDING,
+                    message="microphone completion is still pending",
+                    generation=generation,
+                ),
+                generation,
+            )
             return
         self._publish_result(generation, result)
 
@@ -363,7 +379,7 @@ class MicrophoneRecorderController:
         elif (
             isinstance(result.error, CaptureError)
             and result.error.code is CaptureErrorCode.CLEANUP_FAILED
-        ):
+        ) or isinstance(result.error, RuntimeRecoveryPendingError):
             snapshot = RecorderSnapshot(
                 RecorderState.RECOVERY_PENDING,
                 message="microphone cleanup is still pending",
