@@ -41,7 +41,7 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
     tmp_path: Path, monkeypatch
 ) -> None:
     commands: list[list[str]] = []
-    icon_output = tmp_path / "build" / "dist" / "voiceink-shell.ico"
+    icon_output = tmp_path / "build" / "dist" / "voiceink-transcribe.ico"
     monkeypatch.setattr(frontend_build, "ICON_OUTPUT", icon_output)
 
     def fake_run(command, **kwargs) -> None:
@@ -79,15 +79,15 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
         for command in pyinstaller_commands
     )
     assert all(
-        f"{frontend_build.ICON_TRANSCRIBE_SOURCE};{frontend_build.RUNTIME_ICON_DESTINATION}"
-        in command
+        f"{frontend_build.SIDEBAR_ICON_SOURCE};{frontend_build.RUNTIME_ICON_DESTINATION}" in command
         for command in pyinstaller_commands
     )
-    assert 'fill="#db594b"' in frontend_build.ICON_SOURCE.read_text(encoding="utf-8")
-    assert 'd="M3 12h2l1.5-5L9 19l2-14 2.5 11 1.5-4H21"' in frontend_build.ICON_SOURCE.read_text(
-        encoding="utf-8"
+    assert frontend_build.ICON_SOURCE.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert 'fill="#db594b"' in frontend_build.SIDEBAR_ICON_SOURCE.read_text(encoding="utf-8")
+    assert (
+        'd="M3 12h2l1.5-5L9 19l2-14 2.5 11 1.5-4H21"'
+        in frontend_build.SIDEBAR_ICON_SOURCE.read_text(encoding="utf-8")
     )
-    assert frontend_build.ICON_TRANSCRIBE_SOURCE.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_frontend_build_reports_native_arm64_as_unsupported(monkeypatch) -> None:

@@ -8,7 +8,7 @@ from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
-from .app_icon import branding_asset_paths
+from .app_icon import sidebar_icon_paths
 from .icon_registry import LUCIDE_PATHS, SidebarItem
 
 ICON_SCALE_FACTORS = (1, 1.25, 1.5, 2, 2.5, 3)
@@ -74,26 +74,34 @@ def _render_asset(item: SidebarItem, size: int, scale: float, *, disabled: bool)
         raise ValueError(f"Missing sidebar asset name for {item.icon_name}")
     physical_size = round(size * scale)
     source = next(
-        (path for path in branding_asset_paths((asset_filename,)) if path.is_file()),
+        (path for path in sidebar_icon_paths() if path.is_file()),
         None,
     )
     if source is None:
         raise ValueError(f"Missing sidebar asset for {item.icon_name}: {asset_filename}")
 
-    source_pixmap = QPixmap(str(source))
-    if source_pixmap.isNull():
-        raise ValueError(f"Invalid sidebar asset for {item.icon_name}: {source}")
     pixmap = QPixmap(QSize(physical_size, physical_size))
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.drawPixmap(
-        pixmap.rect(),
-        source_pixmap.scaled(
-            pixmap.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        ),
-    )
+    if source.suffix.lower() == ".svg":
+        renderer = QSvgRenderer(str(source))
+        if not renderer.isValid():
+            painter.end()
+            raise ValueError(f"Invalid sidebar asset for {item.icon_name}: {source}")
+        renderer.render(painter)
+    else:
+        source_pixmap = QPixmap(str(source))
+        if source_pixmap.isNull():
+            painter.end()
+            raise ValueError(f"Invalid sidebar asset for {item.icon_name}: {source}")
+        painter.drawPixmap(
+            pixmap.rect(),
+            source_pixmap.scaled(
+                pixmap.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ),
+        )
     if disabled:
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
         painter.fillRect(pixmap.rect(), QColor(_muted_color(item.icon_foreground)))
