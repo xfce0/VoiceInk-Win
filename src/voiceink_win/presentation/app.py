@@ -64,7 +64,7 @@ def _run_session(
 
 def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     try:
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QObject, Qt, QTimer, Signal
         from PySide6.QtGui import QFont, QFontDatabase
         from PySide6.QtWidgets import QApplication
     except ImportError as error:
@@ -89,6 +89,9 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
 
     from .main_window import MainWindow
 
+    class _RecorderAvailabilityBridge(QObject):
+        ready = Signal()
+
     lease = create_instance_lease()
     if not lease.acquire():
         return 0
@@ -102,6 +105,12 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         lease.release()
         raise
     global_shortcut = composition.global_shortcut
+    recorder_bridge = _RecorderAvailabilityBridge()
+    recorder_bridge.ready.connect(
+        global_shortcut.register,
+        Qt.ConnectionType.QueuedConnection,
+    )
+    composition.recorder.subscribe(lambda _snapshot: recorder_bridge.ready.emit())
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:

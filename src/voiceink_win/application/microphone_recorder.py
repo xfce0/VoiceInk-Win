@@ -92,6 +92,8 @@ class MicrophoneRecorderController:
                 return False
             if self._snapshot.state not in {RecorderState.IDLE, *TERMINAL_RECORDER_STATES}:
                 return False
+            if self._handle is not None:
+                return False
             self._generation += 1
             generation = self._generation
             self._pending_cancel = False
@@ -147,7 +149,7 @@ class MicrophoneRecorderController:
 
     def dismiss(self) -> bool:
         with self._lock:
-            if self._snapshot.state in ACTIVE_RECORDER_STATES:
+            if self._snapshot.state in ACTIVE_RECORDER_STATES or self._handle is not None:
                 return False
             self._clear_level_subscription_locked()
             generation = self._generation
@@ -241,15 +243,21 @@ class MicrophoneRecorderController:
                 self._last_level_timestamp = -1.0
         self._subscribe_levels(handle, generation)
         if cancel:
-            self._publish_if_current(
-                RecorderSnapshot(RecorderState.CANCEL_REQUESTED, generation=generation), generation
-            )
-            handle.cancel()
+            try:
+                self._publish_if_current(
+                    RecorderSnapshot(RecorderState.CANCEL_REQUESTED, generation=generation),
+                    generation,
+                )
+                handle.cancel()
+            except Exception:
+                logger.exception("microphone cancellation after start failed")
+                self._publish_error(generation, "microphone cancellation failed")
         elif pending_stop:
-            self._publish_if_current(
-                RecorderSnapshot(RecorderState.PROCESSING, generation=generation), generation
-            )
-            handle.stop()
+            try:
+                handle.stop()
+            except Exception:
+                logger.exception("microphone stop after start failed")
+                self._publish_error(generation, "microphone stop failed")
         else:
             self._publish_if_current(
                 RecorderSnapshot(RecorderState.RECORDING_SILENT, generation=generation), generation

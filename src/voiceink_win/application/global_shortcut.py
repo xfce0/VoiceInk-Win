@@ -24,6 +24,8 @@ from voiceink_win.domain import (
 
 from .persistence import PersistenceService
 
+HOTKEY_PERSISTENCE_TIMEOUT_SECONDS = 5.0
+
 
 class RecordingTogglePort(Protocol):
     @property
@@ -230,7 +232,7 @@ class GlobalHotkeySettingsService:
                 persistence_future = self._persistence.update_settings(
                     {"hotkeys.start_stop": candidate.value}
                 )
-                persistence_future.result()
+                persistence_future.result(timeout=HOTKEY_PERSISTENCE_TIMEOUT_SECONDS)
             except BaseException:
                 restored = self._shortcut_service.replace_shortcut(previous)
                 if restored.availability is ShortcutAvailability.REGISTERED:

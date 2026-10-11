@@ -147,8 +147,13 @@ class _DesktopComposition:
                 readiness_timeout=self.readiness_timeout,
             )
             backend.start()
+            if not backend.imported_media_available:
+                self._close_backend_safely(backend)
+                self.transcribe_controller.mark_unavailable(
+                    "Imported media transcription is unavailable: configuration is incomplete."
+                )
+                return
             self.recorder.attach_service(getattr(backend, "microphone", None))
-            self.global_shortcut.register()
         except (
             ConfigurationError,
             MissingModelError,
@@ -174,13 +179,6 @@ class _DesktopComposition:
             logger.exception("unexpected imported-media bootstrap failure")
             self.transcribe_controller.mark_unavailable(
                 "Imported media transcription is unavailable: startup failed."
-            )
-            return
-
-        if not backend.imported_media_available:
-            self._close_backend_safely(backend)
-            self.transcribe_controller.mark_unavailable(
-                "Imported media transcription is unavailable: configuration is incomplete."
             )
             return
 

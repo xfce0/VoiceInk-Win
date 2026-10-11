@@ -293,7 +293,7 @@ class MicrophoneRecordingService:
         active = self.active
         if active is None or active.is_done:
             return
-        active.cancel()
+        Thread(target=_cancel_recording, args=(active,), daemon=True).start()
         active.wait(timeout)
 
     def _cancel_asr(self, recording: MicrophoneRecordingHandle) -> None:
@@ -320,3 +320,10 @@ def _capture_result(error: CaptureError) -> RecordingResult:
 def _asr_result(error: AsrError, *, cancelled: bool) -> RecordingResult:
     state = RecordingState.CANCELLED if cancelled else RecordingState.FAILED
     return RecordingResult(state, error=error)
+
+
+def _cancel_recording(recording: MicrophoneRecordingHandle) -> None:
+    try:
+        recording.cancel()
+    except Exception:
+        logger.exception("microphone service cancellation failed during close")
