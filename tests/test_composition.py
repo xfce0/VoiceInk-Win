@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -338,6 +339,62 @@ def test_environment_build_supports_ffmpeg_path_only_and_complete_import_config(
     configuration = captured[1]
     assert isinstance(configuration, ImportedMediaConfiguration)
     assert configuration.ffmpeg_artifact.sha256 == "1" * 64
+
+
+def test_environment_build_prefers_packaged_runtime_over_complete_legacy_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ffmpeg = tmp_path / "package" / "tools" / "ffmpeg.exe"
+    workspace = tmp_path / "package" / "workspace"
+    ffmpeg.parent.mkdir(parents=True)
+    workspace.mkdir()
+    ffmpeg.write_bytes(b"ffmpeg")
+    package_environment = {
+        "VOICEINK_FFMPEG_PATH": str(ffmpeg),
+        "VOICEINK_FFMPEG_VERSION": "ffmpeg-package",
+        "VOICEINK_FFMPEG_PROVENANCE_URL": "https://example.invalid/package-ffmpeg",
+        "VOICEINK_FFMPEG_SHA256": "1" * 64,
+        "VOICEINK_FFMPEG_LICENSE": "GPL-3.0-or-later",
+        "VOICEINK_IMPORT_WORKSPACE_ROOT": str(workspace),
+    }
+    packaged = SimpleNamespace(
+        manifest=object(),
+        artifact_lock=object(),
+        environment=package_environment,
+    )
+    configuration = object()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(composition, "load_packaged_runtime", lambda environ: packaged)
+    monkeypatch.setattr(
+        composition,
+        "load_runtime_configuration",
+        lambda manifest, lock: configuration,
+    )
+    monkeypatch.setattr(
+        composition,
+        "build_application_from_configuration",
+        lambda loaded, **kwargs: captured.update(configuration=loaded, **kwargs) or object(),
+    )
+    monkeypatch.setattr(
+        composition,
+        "build_application",
+        lambda *args, **kwargs: pytest.fail("legacy runtime must not be selected"),
+    )
+
+    result = composition.build_application_from_environment(
+        environ={
+            "VOICEINK_RUNTIME_MANIFEST": "stale-manifest.json",
+            "VOICEINK_ARTIFACT_LOCK": "stale-lock.json",
+            "VOICEINK_ARTIFACT_LOCK_SHA256": "0" * 64,
+        }
+    )
+
+    assert result is not None
+    assert captured["configuration"] is configuration
+    imported_media = captured["imported_media"]
+    assert isinstance(imported_media, ImportedMediaConfiguration)
+    assert imported_media.ffmpeg_path == ffmpeg
 
 
 def test_disabled_imported_media_facade_rejects_operations() -> None:

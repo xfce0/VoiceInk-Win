@@ -504,15 +504,9 @@ def build_application_from_environment(
     audio_artifact_port: HistoryAudioArtifactPort | None = None,
 ) -> BackendApplication:
     values = environ if environ is not None else os.environ
-    runtime_names = (
-        "VOICEINK_RUNTIME_MANIFEST",
-        "VOICEINK_ARTIFACT_LOCK",
-        "VOICEINK_ARTIFACT_LOCK_SHA256",
-    )
-    packaged = None
-    package_root_configured = values.get("VOICEINK_PACKAGE_ROOT", "").strip()
-    if package_root_configured or not all(values.get(name, "").strip() for name in runtime_names):
-        packaged = load_packaged_runtime(environ=values)
+    # A portable package is self-contained and must take precedence over stale
+    # runtime variables inherited from a developer or previous installation.
+    packaged = load_packaged_runtime(environ=values)
     if packaged is not None:
         configuration = load_runtime_configuration(packaged.manifest, packaged.artifact_lock)
         imported_media = ImportedMediaConfiguration.from_environment(packaged.environment)
