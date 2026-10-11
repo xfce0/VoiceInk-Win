@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+from collections.abc import Callable
 from enum import StrEnum
 from threading import Lock
 from typing import Protocol
@@ -13,6 +14,7 @@ from voiceink_win.domain import (
     CaptureError,
     CaptureErrorCode,
     InputDevice,
+    InputLevel,
     MicrophoneAvailability,
     MicrophoneCapability,
     MicrophoneStatus,
@@ -213,6 +215,12 @@ class _MappedCaptureSession:
             except WindowsCaptureError as error:
                 raise _map_provider_error(error) from None
             self._closed = True
+
+    def subscribe_level(self, listener: Callable[[InputLevel], None]) -> Callable[[], None]:
+        subscribe = getattr(self._session, "subscribe_level", None)
+        if subscribe is None:
+            return lambda: None
+        return subscribe(listener)
 
 
 def _map_provider_error(error: WindowsCaptureError) -> CaptureError:

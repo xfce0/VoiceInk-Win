@@ -142,6 +142,20 @@ class MicrophoneStatus:
     capability: MicrophoneCapability = MicrophoneCapability.SUPPORTED
 
 
+@dataclass(frozen=True, slots=True)
+class InputLevel:
+    """A bounded, timestamped input level with no retained audio data."""
+
+    value: float
+    timestamp: float
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.value) or not 0.0 <= self.value <= 1.0:
+            raise ValueError("input level must be finite and within [0.0, 1.0]")
+        if not math.isfinite(self.timestamp) or self.timestamp < 0:
+            raise ValueError("input level timestamp must be a finite monotonic value")
+
+
 DEFAULT_CAPTURE_LIMITS = CaptureLimits()
 
 
