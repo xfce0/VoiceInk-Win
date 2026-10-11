@@ -84,7 +84,8 @@ class QtTraySurface:
         on_quit: Callable[[], None],
         on_activate: Callable[[], None],
     ) -> None:
-        from PySide6.QtWidgets import QAction, QMenu, QSystemTrayIcon
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
         self._tray = QSystemTrayIcon(icon)
         self._menu = QMenu()
