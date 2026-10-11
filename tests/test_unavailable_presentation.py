@@ -142,7 +142,7 @@ def test_production_entrypoint_runs_real_composition_session(
     monkeypatch.setattr(QApplication, "exec", record_exec)
 
     assert presentation_app.main(smoke=True) == 0
-    assert events == ["build", "construct", "show", "exec", "exec-return", "close"]
+    assert events == ["build", "construct", "show", "exec", "close", "exec-return"]
 
 
 def test_production_entrypoint_closes_composition_on_event_loop_failure(

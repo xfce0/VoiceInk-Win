@@ -1,12 +1,15 @@
 VoiceInk Windows x64 portable CPU package
 
-Run the user-facing GUI from PowerShell:
+Launch the user-facing GUI directly from Explorer or PowerShell:
 
     .\voiceink-shell.exe
 
-Or use the package launcher, which also works after moving the package:
+`voiceink-shell.cmd` is retained only as a developer/CLI helper. It is not the
+Explorer shortcut target because command scripts can flash a terminal window.
 
-    .\voiceink-shell.cmd
+For diagnostics, use the console smoke executable explicitly:
+
+    .\voiceink-shell-smoke.exe --smoke
 
 The artifact also contains `voiceink-shell-smoke.exe`. It is a CI-only
 console-mode smoke-test executable used to launch the same UI in offscreen

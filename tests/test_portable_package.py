@@ -109,6 +109,10 @@ def test_build_package_stages_and_discovers_verified_runtime(tmp_path: Path) -> 
 
     descriptor_path = output / "voiceink-package.json"
     descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    assert descriptor["launch"] == {
+        "executable": "voiceink-shell.exe",
+        "subsystem": "windows-gui",
+    }
     descriptor.pop("import_roots")
     descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
     without_legacy_roots = load_packaged_runtime(
