@@ -111,7 +111,7 @@ def test_russian_locale_translates_neutral_availability_states(
     del application
     window = MainWindow(ShellController.unavailable(), locale_config=LocaleConfig(Locale.RUSSIAN))
     try:
-        assert window._settings_page._availability.text() == "Локальное хранилище недоступно."
+        assert window._settings_page._status.text() == "Локальное хранилище недоступно."
         assert window._settings_page._model_value.text() == "Недоступно."
         assert window._history_page._availability.text() == "Локальное хранилище недоступно."
         assert window._dictionary_page._state_detail.text() == "Локальное хранилище недоступно."
