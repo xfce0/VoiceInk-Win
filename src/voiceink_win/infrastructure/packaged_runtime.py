@@ -136,11 +136,17 @@ def load_packaged_runtime(
         "ffmpeg",
         "workspace_root",
     }
-    allowed = required | {"import_roots"}
-    if set(descriptor) not in (required, allowed):
+    optional = {"import_roots", "launch"}
+    if not set(descriptor).issubset(required | optional) or not required.issubset(descriptor):
         raise _invalid("packaged runtime descriptor schema is malformed")
     if descriptor["schema"] != PACKAGE_SCHEMA or descriptor["version"] != 1:
         raise _invalid("packaged runtime descriptor schema is unsupported")
+    launch = descriptor.get("launch")
+    if launch is not None:
+        if not isinstance(launch, Mapping) or set(launch) != {"executable", "subsystem"}:
+            raise _invalid("packaged runtime launch metadata is malformed")
+        if launch["executable"] != "voiceink-shell.exe" or launch["subsystem"] != "windows-gui":
+            raise _invalid("packaged runtime launch target is not the GUI executable")
     trusted = trusted_artifacts or TRUSTED_PACKAGE_ARTIFACTS
 
     executable_id = _string(descriptor["executable_artifact_id"], "executable_artifact_id")

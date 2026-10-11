@@ -134,7 +134,9 @@ make portable-package `
 ```
 
 The result is `release/voiceink-shell-windows-x64`. It contains the shell,
-FFmpeg, sidecar, model, package-relative runtime metadata, and a launcher.
+FFmpeg, sidecar, model, and package-relative runtime metadata. Launch the
+user-facing `voiceink-shell.exe` directly; the retained `.cmd` file is only a
+developer/CLI helper and is not an Explorer shortcut target.
 The builder verifies every supplied file against
 `.github/native-smoke/artifact-lock.template.json`; it does not download
 artifacts.

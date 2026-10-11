@@ -24,6 +24,13 @@ from .global_shortcut import (
     WindowsGlobalShortcutPort,
     create_global_shortcut_port,
 )
+from .instance_lease import (
+    WINDOWS_INSTANCE_NAME,
+    InstanceLease,
+    NoopInstanceLease,
+    WindowsInstanceLease,
+    create_instance_lease,
+)
 from .loopback_proxy import LoopbackProxy
 from .media_process import (
     ProcessCancelled,
@@ -194,6 +201,11 @@ __all__ = [
     "UnavailableGlobalShortcutPort",
     "WindowsGlobalShortcutPort",
     "create_global_shortcut_port",
+    "InstanceLease",
+    "NoopInstanceLease",
+    "WINDOWS_INSTANCE_NAME",
+    "WindowsInstanceLease",
+    "create_instance_lease",
     "WindowsAudioInputAdapter",
     "WindowsCaptureError",
     "WindowsCaptureFailureCode",
