@@ -80,4 +80,4 @@ jobs:
         run: python -c "from PySide6.QtWidgets import QApplication; print(QApplication.__name__)"
 
       - name: Run unavailable presentation contract
-        run: python -m pytest tests/test_unavailable_presentation.py
+        run: python -m pytest tests/test_unavailable_presentation.py tests/test_settings_history_dictionary_gui.py

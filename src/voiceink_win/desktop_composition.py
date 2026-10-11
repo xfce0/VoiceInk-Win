@@ -7,7 +7,6 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from inspect import Parameter, signature
-from pathlib import Path
 from threading import Lock, Thread, current_thread
 from typing import Protocol
 
@@ -15,6 +14,7 @@ from voiceink_win.application import (
     GlobalHotkeySettingsService,
     GlobalToggleShortcutService,
     HistoryDeletionService,
+    HistoryMediaActionService,
     MicrophoneRecorderController,
     PersistenceService,
     ShellController,
@@ -25,6 +25,8 @@ from voiceink_win.infrastructure import (
     AudioArtifactStore,
     SQLitePersistence,
     VoiceInkPaths,
+    WindowsHistoryArtifactRevealAdapter,
+    WindowsHistoryAudioPlaybackAdapter,
     create_global_shortcut_port,
     packaged_runtime_available,
 )
@@ -49,10 +51,7 @@ class DesktopComposition(Protocol):
     def artifact_cleanup(self) -> Callable[[str], None]: ...
 
     @property
-    def artifact_reveal(self) -> Callable[[str], Path]: ...
-
-    @property
-    def artifact_folder(self) -> Path: ...
+    def media_actions(self) -> HistoryMediaActionService: ...
 
     @property
     def history_deletion(self) -> HistoryDeletionService: ...
@@ -73,9 +72,8 @@ class _DesktopComposition:
     transcribe_controller: TranscribePageController
     persistence: PersistenceService
     artifact_cleanup: Callable[[str], None]
-    artifact_reveal: Callable[[str], Path]
-    artifact_folder: Path
     audio_artifact_port: object
+    media_actions: HistoryMediaActionService
     history_deletion: HistoryDeletionService
     global_shortcut: GlobalToggleShortcutService
     global_hotkey_settings: GlobalHotkeySettingsService
@@ -118,6 +116,10 @@ class _DesktopComposition:
             self._backend = None
         if backend is not None:
             self._close_backend_safely(backend)
+        try:
+            self.media_actions.close()
+        except Exception:
+            logger.exception("failed to close history media adapters")
         try:
             self.history_deletion.close()
         except Exception:
@@ -235,6 +237,11 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
 
         windows_adapter = NativeWindowsMediaSecurityAdapter()
     artifacts = AudioArtifactStore(paths.audio, windows_adapter=windows_adapter)
+    media_actions = HistoryMediaActionService(
+        artifacts,
+        WindowsHistoryAudioPlaybackAdapter(),
+        WindowsHistoryArtifactRevealAdapter(),
+    )
     history_deletion = HistoryDeletionService(persistence, artifacts.delete)
     history_deletion.start()
     transcribe_controller = TranscribePageController(
@@ -251,9 +258,8 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
         transcribe_controller=transcribe_controller,
         persistence=persistence,
         artifact_cleanup=artifacts.delete,
-        artifact_reveal=artifacts.reveal_path,
-        artifact_folder=artifacts.folder_path,
         audio_artifact_port=artifacts,
+        media_actions=media_actions,
         history_deletion=history_deletion,
         global_shortcut=global_shortcut,
         global_hotkey_settings=GlobalHotkeySettingsService(global_shortcut, persistence),

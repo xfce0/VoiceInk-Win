@@ -24,6 +24,10 @@ from .global_shortcut import (
     WindowsGlobalShortcutPort,
     create_global_shortcut_port,
 )
+from .history_media import (
+    WindowsHistoryArtifactRevealAdapter,
+    WindowsHistoryAudioPlaybackAdapter,
+)
 from .instance_lease import (
     WINDOWS_INSTANCE_NAME,
     InstanceLease,
@@ -210,4 +214,6 @@ __all__ = [
     "WindowsCaptureError",
     "WindowsCaptureFailureCode",
     "WindowsCaptureProvider",
+    "WindowsHistoryArtifactRevealAdapter",
+    "WindowsHistoryAudioPlaybackAdapter",
 ]
