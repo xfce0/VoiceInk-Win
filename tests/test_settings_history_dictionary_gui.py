@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+    from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
 except ImportError:
     if os.environ.get("VOICEINK_GUI_TESTS") == "1":
         raise
@@ -98,11 +98,13 @@ def test_unavailable_persistence_uses_neutral_page_states(application: QApplicat
         history = window._history_page
         dictionary = window._dictionary_page
 
-        assert not settings._availability.isHidden()
-        assert settings._availability.text() == "Local storage is unavailable."
+        assert not settings.findChildren(QLabel, "pageUnavailable")
+        assert not settings._status.isHidden()
+        assert settings._status.text() == "Local storage is unavailable."
         assert settings._model_value.text() == "Not available."
         assert settings._audio_value.text() == "Not available."
         assert settings._error.text() == ""
+        assert settings._error.isHidden()
         assert not settings._language_combo.isEnabled()
         assert not settings._theme_combo.isEnabled()
 
@@ -132,7 +134,10 @@ def test_settings_capability_placeholder_stays_inline_when_storage_is_available(
         window._select_page("Settings")
         page = window._settings_page
         _wait(application, lambda: not page._loading)
-        assert page._availability.isHidden()
+        assert not page.findChildren(QLabel, "pageUnavailable")
+        assert page._status.isHidden()
+        assert page._status.text() == ""
+        assert page._error.isHidden()
         assert page._model_value.text() == "Not available."
         assert page._audio_value.text() == "Not available."
         assert page._language_combo.isEnabled()
