@@ -537,10 +537,10 @@ class HistoryPage(QWidget):
             self._error.clear()
             if row is not None:
                 row.set_media_available(
-                    audio=False if artifact_unavailable or action == "audio" else None,
-                    folder=False if artifact_unavailable or action == "folder" else None,
-                    audio_error=False if artifact_unavailable or action == "audio" else None,
-                    folder_error=False if artifact_unavailable or action == "folder" else None,
+                    audio=False if action == "audio" and artifact_unavailable else None,
+                    folder=False if action == "folder" and artifact_unavailable else None,
+                    audio_error=False if action == "audio" and artifact_unavailable else None,
+                    folder_error=False if action == "folder" and artifact_unavailable else None,
                 )
             return
         self._status.setText(self._t(TranslationKey.COMMON_ERROR))
