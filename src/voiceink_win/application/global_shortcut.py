@@ -26,6 +26,7 @@ from voiceink_win.domain import (
 from .persistence import PersistenceService
 
 HOTKEY_PERSISTENCE_TIMEOUT_SECONDS = 5.0
+HOTKEY_RECONCILIATION_TIMEOUT_SECONDS = 30.0
 
 
 class RecordingTogglePort(Protocol):
@@ -189,6 +190,7 @@ class GlobalHotkeySettingsService:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hotkey-settings")
         self._dispatcher = dispatcher
         self._reconciliation: Event | None = None
+        self._reconciliation_result: GlobalShortcutStatus | None = None
         self._closed = False
 
     def set_dispatcher(
@@ -262,12 +264,18 @@ class GlobalHotkeySettingsService:
                     reconciliation = Event()
                     with self._lock:
                         self._reconciliation = reconciliation
+                        self._reconciliation_result = None
                     Thread(
                         target=self._reconcile_persistence,
                         args=(persistence_future, candidate, previous, reconciliation),
                         name="hotkey-persistence-reconciliation",
                         daemon=True,
                     ).start()
+                    if reconciliation.wait(HOTKEY_RECONCILIATION_TIMEOUT_SECONDS):
+                        with self._lock:
+                            reconciled = self._reconciliation_result
+                        if reconciled is not None:
+                            return reconciled
                     return GlobalShortcutStatus(
                         candidate,
                         ShortcutAvailability.UNAVAILABLE,
@@ -297,21 +305,55 @@ class GlobalHotkeySettingsService:
         previous: GlobalShortcut,
         reconciliation: Event,
     ) -> None:
+        status = GlobalShortcutStatus(
+            previous,
+            ShortcutAvailability.UNAVAILABLE,
+            "reconciliation_error",
+        )
         try:
             persistence_future.result()
         except BaseException:
             with self._lock:
                 closed = self._closed
             if not closed:
-                self._dispatch(lambda: self._shortcut_service.replace_shortcut(previous))
+                try:
+                    restored = self._dispatch(
+                        lambda: self._shortcut_service.replace_shortcut(previous)
+                    )
+                except BaseException:
+                    restored = GlobalShortcutStatus(
+                        previous,
+                        ShortcutAvailability.UNAVAILABLE,
+                        "restoration_error",
+                    )
+                status = GlobalShortcutStatus(
+                    restored.shortcut,
+                    restored.availability,
+                    "persistence_error",
+                )
+            else:
+                status = GlobalShortcutStatus(
+                    previous,
+                    ShortcutAvailability.DISABLED,
+                    "closed",
+                )
         else:
             with self._lock:
                 if not self._closed:
                     self._committed = candidate
+            try:
+                status = self._dispatch(lambda: self._shortcut_service.status)
+            except BaseException:
+                status = GlobalShortcutStatus(
+                    candidate,
+                    ShortcutAvailability.DISABLED,
+                    "closed",
+                )
         finally:
             with self._lock:
                 if self._reconciliation is reconciliation:
                     self._reconciliation = None
+                self._reconciliation_result = status
             reconciliation.set()
 
     def _dispatch(self, operation: Callable[[], GlobalShortcutStatus]) -> GlobalShortcutStatus:

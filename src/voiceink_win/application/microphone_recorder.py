@@ -202,12 +202,6 @@ class MicrophoneRecorderController:
         with self._command_lock:
             try:
                 handle.stop()
-                handle.wait_capture()
-                if not handle.is_done:
-                    self._publish_if_current(
-                        RecorderSnapshot(RecorderState.PROCESSING, generation=generation),
-                        generation,
-                    )
             except Exception:
                 logger.exception("microphone stop command failed")
                 self._publish_if_current(
@@ -218,6 +212,23 @@ class MicrophoneRecorderController:
                     ),
                     generation,
                 )
+                return
+        try:
+            handle.wait_capture()
+        except Exception:
+            logger.exception("microphone capture completion wait failed")
+            return
+        with self._lock:
+            should_publish = (
+                generation == self._generation
+                and self._snapshot.state is RecorderState.STOPPING
+                and self._handle is handle
+            )
+        if should_publish and not handle.is_done:
+            self._publish_if_current(
+                RecorderSnapshot(RecorderState.PROCESSING, generation=generation),
+                generation,
+            )
 
     def _cancel_worker(self, handle: MicrophoneRecordingHandle, generation: int) -> None:
         with self._command_lock:

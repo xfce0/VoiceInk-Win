@@ -135,9 +135,14 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             try:
                 return request.result.result(timeout=5.0)
             except TimeoutError:
-                request.cancel()
-                request.abandon()
-                raise
+                if request.cancel():
+                    request.abandon()
+                    raise
+                try:
+                    return request.result.result(timeout=5.0)
+                except TimeoutError:
+                    request.abandon()
+                    raise
 
         __call__ = dispatch
 
