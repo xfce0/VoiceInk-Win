@@ -74,6 +74,12 @@ class LevelSession:
             listener(level)
 
 
+class SlowStopSession(LevelSession):
+    def stop(self) -> None:
+        time.sleep(0.2)
+        super().stop()
+
+
 class Input:
     def __init__(self, session: LevelSession, error: Exception | None = None) -> None:
         self.session = session
@@ -190,6 +196,21 @@ def test_stop_transitions_through_processing_to_success_and_cancel_is_idempotent
         assert RecorderState.STOPPING in {snapshot.state for snapshot in snapshots}
         assert RecorderState.PROCESSING in {snapshot.state for snapshot in snapshots}
         assert not controller.cancel()
+    finally:
+        controller.close()
+        asr.close()
+
+
+def test_stop_does_not_block_the_calling_thread() -> None:
+    session = SlowStopSession()
+    controller, asr = make_controller(Input(session))
+    try:
+        controller.start()
+        wait_for(lambda: controller.snapshot.state is RecorderState.RECORDING_SILENT)
+        started = time.monotonic()
+        assert controller.stop()
+        assert time.monotonic() - started < 0.1
+        wait_for(lambda: controller.snapshot.state is RecorderState.SUCCEEDED)
     finally:
         controller.close()
         asr.close()

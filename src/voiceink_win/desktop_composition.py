@@ -148,6 +148,7 @@ class _DesktopComposition:
             )
             backend.start()
             self.recorder.attach_service(getattr(backend, "microphone", None))
+            self.global_shortcut.register()
         except (
             ConfigurationError,
             MissingModelError,
@@ -251,10 +252,11 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
         unavailable_message="Loading imported-media transcription runtime...",
     )
     controller = ShellController.unavailable()
-    global_shortcut = GlobalToggleShortcutService(controller, create_global_shortcut_port())
+    recorder = MicrophoneRecorderController()
+    global_shortcut = GlobalToggleShortcutService(recorder, create_global_shortcut_port())
     composition = _DesktopComposition(
         controller=controller,
-        recorder=MicrophoneRecorderController(),
+        recorder=recorder,
         transcribe_controller=transcribe_controller,
         persistence=persistence,
         artifact_cleanup=artifacts.delete,

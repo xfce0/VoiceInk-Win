@@ -64,6 +64,7 @@ class MicrophoneRecordingHandle:
         self._capture = BoundedPcm16Capture(limits)
         self._stop_requested = Event()
         self._cancel_requested = Event()
+        self._capture_done = Event()
         self._done = Event()
         self._control_lock = Lock()
         self._asr_handle: AsrRequestHandle | None = None
@@ -77,6 +78,9 @@ class MicrophoneRecordingHandle:
     @property
     def is_done(self) -> bool:
         return self._done.is_set()
+
+    def wait_capture(self) -> None:
+        self._capture_done.wait()
 
     def stop(self) -> None:
         if self._done.is_set():
@@ -137,11 +141,13 @@ class MicrophoneRecordingHandle:
             audio = self._capture.finish()
         except CaptureError as error:
             close_error = self._close_session()
+            self._capture_done.set()
             self._finish(_capture_result(close_error or error))
             return
         except Exception:
             logger.exception("microphone capture worker failed")
             self._close_session()
+            self._capture_done.set()
             self._finish(
                 RecordingResult(
                     RecordingState.FAILED,
@@ -154,6 +160,7 @@ class MicrophoneRecordingHandle:
             return
 
         close_error = self._close_session()
+        self._capture_done.set()
         if close_error is not None:
             self._finish(_capture_result(close_error))
             return

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
+from threading import Event
 
 import pytest
 
@@ -21,6 +22,7 @@ from voiceink_win.domain import (
 )
 from voiceink_win.infrastructure.global_shortcut import (
     UnavailableGlobalShortcutPort,
+    _raise_registration_error,
     _windows_hotkey_parts,
 )
 
@@ -62,6 +64,24 @@ class _Persistence:
             future.set_result(Settings(hotkeys=changes))
         else:
             future.set_exception(self.error)
+        return future
+
+
+class _BlockingPersistence:
+    def __init__(self) -> None:
+        self.changes = []
+        self.futures: list[Future[Settings]] = []
+        self.first_started = Event()
+        self.second_started = Event()
+
+    def update_settings(self, changes):
+        self.changes.append(changes)
+        future: Future[Settings] = Future()
+        self.futures.append(future)
+        if len(self.changes) == 1:
+            self.first_started.set()
+        if len(self.changes) == 2:
+            self.second_started.set()
         return future
 
 
@@ -156,6 +176,12 @@ def test_windows_shortcut_parser_supports_default_and_rejects_unmodified_keys() 
         GlobalShortcut("Space")
 
 
+@pytest.mark.parametrize("error_code", [1, 5, 87])
+def test_windows_hotkey_rejects_unexpected_register_error(error_code: int) -> None:
+    with pytest.raises(ShortcutUnavailableError, match="Windows rejected"):
+        _raise_registration_error(error_code)
+
+
 def test_global_shortcut_canonicalizes_modifier_order_and_key_aliases() -> None:
     assert GlobalShortcut("alt+control+space").value == "Ctrl+Alt+Space"
     assert GlobalShortcut("shift+ctrl+escape").value == "Ctrl+Shift+Escape"
@@ -197,4 +223,29 @@ def test_hotkey_settings_restores_previous_registration_when_persistence_fails()
         "Ctrl+Space",
         "Alt+Space",
         "Ctrl+Space",
+    ]
+
+
+def test_hotkey_settings_serializes_native_and_persistence_updates() -> None:
+    port = _ShortcutPort()
+    shortcut = GlobalToggleShortcutService(ShellController(FakeShellBackend()), port)
+    persistence = _BlockingPersistence()
+    settings = GlobalHotkeySettingsService(shortcut, persistence)
+    settings.load(Settings())
+
+    first = settings.update("Alt+Space")
+    assert persistence.first_started.wait(1)
+    second = settings.update("Shift+Space")
+    assert persistence.changes == [{"hotkeys.start_stop": "Alt+Space"}]
+
+    persistence.futures[0].set_result(Settings())
+    assert persistence.second_started.wait(1)
+    persistence.futures[1].set_result(Settings())
+
+    assert first.result(timeout=1).shortcut.value == "Alt+Space"
+    assert second.result(timeout=1).shortcut.value == "Shift+Space"
+    assert [item.value for item in port.shortcuts] == [
+        "Ctrl+Space",
+        "Alt+Space",
+        "Shift+Space",
     ]
