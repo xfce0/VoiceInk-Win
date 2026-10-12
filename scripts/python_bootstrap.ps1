@@ -85,8 +85,10 @@ function Install-Python([string]$TargetArchitecture) {
     Move-Item -Force $temporaryInstaller $installer
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     & $installer /quiet InstallAllUsers=0 PrependPath=0 Include_test=0 TargetDir=$target
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Python $python $TargetArchitecture)) {
-        throw "Python $RequiredPython ($TargetArchitecture) installation failed."
+    $installerExitCode = $LASTEXITCODE
+    $pythonInstalled = Test-Python $python $TargetArchitecture
+    if ($installerExitCode -notin @(0, 3010, 1641) -or -not $pythonInstalled) {
+        throw "Python $RequiredPython ($TargetArchitecture) installation failed (exit code $installerExitCode)."
     }
     return $python
 }
