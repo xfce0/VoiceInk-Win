@@ -10,10 +10,13 @@ ifeq ($(OS),Windows_NT)
 PYTHON ?= python
 VENV_PYTHON := $(VENV)/Scripts/python.exe
 VENV_PIP := $(VENV)/Scripts/python.exe -m pip
+WINDOWS_BOOTSTRAP := powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/python_bootstrap.ps1
+PLATFORM_CHECK_COMMAND := $(WINDOWS_BOOTSTRAP) -Check
 else
 PYTHON ?= python3
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/python -m pip
+PLATFORM_CHECK_COMMAND := $(PYTHON) scripts/windows_platform.py --check
 endif
 
 .PHONY: help setup format format-check lint spec-check wasapi-contract-check test compile platform-check build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
@@ -58,7 +61,7 @@ compile:
 
 ## platform-check: Detect Windows version/architecture and selected x64 artifact settings
 platform-check:
-	$(PYTHON) scripts/windows_platform.py --check
+	$(PLATFORM_CHECK_COMMAND)
 
 ## require-windows: Stop Windows-only packaging with an actionable error elsewhere
 require-windows:
@@ -66,12 +69,11 @@ require-windows:
 
 ## build-deps: Create the build environment and verify the exact GUI/PyInstaller extras
 build-deps: require-windows
-	$(PYTHON) -c "import platform, sys; version = sys.version_info[:2]; allowed = {(3, 12), (3, 13), (3, 14)}; sys.exit('Python 3.12, 3.13, or 3.14 is required; found ' + platform.python_version()) if version not in allowed else None"
-	$(PYTHON) -m venv $(VENV)
+	$(WINDOWS_BOOTSTRAP) -EnsureVenv -VenvPath "$(VENV)"
 	$(VENV_PIP) install --upgrade "pip==$(PIP_VERSION)"
 	$(VENV_PIP) install --editable ".[gui,build]" --constraint "$(BUILD_CONSTRAINTS)"
 	$(VENV_PIP) check
-	$(VENV_PYTHON) -c "import importlib.metadata as metadata; import sys; expected = {'Pillow': '12.3.0', 'PySide6': '6.12.0', 'PySide6-Addons': '6.12.0', 'PySide6-Essentials': '6.12.0', 'PySide6-Pdf': '6.12.0.140', 'PySide6-WebEngine': '6.12.0.140', 'altgraph': '0.17.5', 'packaging': '26.3', 'pefile': '2024.8.26', 'pyinstaller': '6.22.3', 'pyinstaller-hooks-contrib': '2026.8', 'pywin32-ctypes': '0.2.3', 'shiboken6': '6.12.0'}; actual = {name: metadata.version(name) for name in expected}; mismatches = [name + '==' + actual[name] + ' (expected ' + version + ')' for name, version in expected.items() if actual[name] != version]; sys.exit('Build dependency pin mismatch: ' + ', '.join(mismatches)) if mismatches else print('Verified build dependency pins: ' + ', '.join(name + '==' + actual[name] for name in sorted(actual)))"
+	$(VENV_PYTHON) -c "import importlib.metadata as metadata; import sys; expected = {'Pillow': '12.3.0', 'PySide6': '6.12.0', 'PySide6-Addons': '6.12.0', 'PySide6-Essentials': '6.12.0', 'PySide6-Pdf': '6.12.0.140', 'PySide6-WebEngine': '6.12.0.140', 'altgraph': '0.17.5', 'packaging': '26.3', 'pefile': '2024.8.26', 'pyinstaller': '6.22.3', 'pyinstaller-hooks-contrib': '2026.8', 'pywin32-ctypes': '0.2.3', 'shiboken6': '6.12.0', 'sounddevice': '0.5.6'}; actual = {name: metadata.version(name) for name in expected}; mismatches = [name + '==' + actual[name] + ' (expected ' + version + ')' for name, version in expected.items() if actual[name] != version]; sys.exit('Build dependency pin mismatch: ' + ', '.join(mismatches)) if mismatches else print('Verified build dependency pins: ' + ', '.join(name + '==' + actual[name] for name in sorted(actual)))"
 
 ## build: Build and validate the Windows GUI and console smoke executables in dist/
 build: require-windows build-deps

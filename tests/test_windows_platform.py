@@ -100,7 +100,7 @@ def test_rejects_old_windows_build() -> None:
 
 
 def test_rejects_32_bit_toolchain() -> None:
-    with pytest.raises(WindowsPlatformError, match="x64 Python/toolchain"):
+    with pytest.raises(WindowsPlatformError, match="64-bit Windows"):
         detect_windows_platform(
             system=lambda: "Windows",
             machine=lambda: "x86",

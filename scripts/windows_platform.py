@@ -36,11 +36,13 @@ class WindowsPlatform:
 
     @property
     def package_id(self) -> str:
-        return "voiceink-shell-windows-x64"
+        return f"voiceink-shell-windows-{self.target_architecture}"
 
     @property
     def execution_mode(self) -> str:
-        return "x64-on-arm64-emulation" if self.emulation else "native-x64"
+        if self.emulation:
+            return "x64-on-arm64-emulation"
+        return f"native-{self.target_architecture}"
 
     @property
     def diagnostic(self) -> str:
@@ -140,9 +142,13 @@ def detect_windows_platform(
             "Native ARM64 Windows packaging is not supported by the artifact matrix. "
             "Install and run the x64 Python/toolchain under Windows x64 emulation."
         )
+    elif host_architecture == X64 and process_architecture == X86:
+        raise WindowsPlatformError(
+            "64-bit Windows requires the automatically selected 64-bit Python/toolchain."
+        )
     elif host_architecture == X86 or process_architecture == X86:
         raise WindowsPlatformError(
-            "Windows packaging requires an x64 Python/toolchain; 32-bit Windows is unsupported."
+            "Windows frontend packaging requires 64-bit Windows and a 64-bit Python/toolchain."
         )
     else:
         raise WindowsPlatformError(

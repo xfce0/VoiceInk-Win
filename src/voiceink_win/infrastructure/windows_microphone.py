@@ -85,12 +85,7 @@ _SAFE_FAILURE_MESSAGES = {
 
 
 class WindowsAudioInputAdapter:
-    """Expose a verified provider through the domain audio-input port.
-
-    The default adapter is intentionally unavailable until a native provider is
-    supplied. This prevents an unverified executable or Python fallback from
-    becoming an accidental production capture path.
-    """
+    """Expose a provider through the domain audio-input port."""
 
     def __init__(
         self,

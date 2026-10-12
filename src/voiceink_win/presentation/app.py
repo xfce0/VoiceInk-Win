@@ -74,11 +74,12 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             "PySide6 is optional. Install the GUI extra with `pip install -e '.[gui]'`."
         ) from error
 
+    from .app_icon import application_icon, set_windows_app_user_model_id
+
+    set_windows_app_user_model_id()
     application = QApplication.instance() or QApplication(sys.argv)
     application.setQuitOnLastWindowClosed(False)
     application.setApplicationName("VoiceInk")
-    from .app_icon import application_icon
-
     application.setWindowIcon(application_icon())
     from .theme import detect_system_theme, theme_for
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -10,6 +11,21 @@ from PySide6.QtGui import QIcon
 
 APPLICATION_ICON_FILENAMES = ("voiceink-transcribe.png", "voiceink-transcribe.ico")
 SIDEBAR_ICON_FILENAME = "voiceink-shell.svg"
+WINDOWS_APP_USER_MODEL_ID = "VoiceInk.Windows.Desktop"
+
+
+def set_windows_app_user_model_id() -> None:
+    """Give Windows a stable taskbar identity for the main application window."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            ctypes.c_wchar_p(WINDOWS_APP_USER_MODEL_ID)
+        )
+    except (AttributeError, OSError):
+        return
 
 
 def application_icon_paths(

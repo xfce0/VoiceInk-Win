@@ -33,6 +33,7 @@ from voiceink_win.infrastructure import (
     NeMoSidecarRuntime,
     RuntimeArtifactManifest,
     SidecarConfig,
+    SoundDeviceCaptureProvider,
     SubprocessConfig,
     SubprocessMediaNormalizer,
     SubprocessSupervisor,
@@ -420,7 +421,9 @@ def build_application_from_configuration(
             supervisor,
         )
         asr = AsrApplicationService(runtime)
-        microphone = MicrophoneRecordingService(WindowsAudioInputAdapter(), asr)
+        microphone = MicrophoneRecordingService(
+            WindowsAudioInputAdapter(SoundDeviceCaptureProvider()), asr
+        )
         if imported_media is not None:
             if history_port is None and audio_artifact_port is None:
                 imported_service = _build_imported_media_service(imported_media, asr)

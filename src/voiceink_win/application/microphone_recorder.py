@@ -15,6 +15,7 @@ from voiceink_win.domain import (
     CaptureError,
     CaptureErrorCode,
     InputLevel,
+    MicrophoneAvailability,
     MicrophoneCapability,
     RecorderSnapshot,
     RecorderState,
@@ -77,7 +78,10 @@ class MicrophoneRecorderController:
         status = service.status
         state = (
             RecorderState.IDLE
-            if status.capability is MicrophoneCapability.SUPPORTED
+            if (
+                status.capability is MicrophoneCapability.SUPPORTED
+                and status.availability is MicrophoneAvailability.AVAILABLE
+            )
             else RecorderState.UNAVAILABLE
         )
         with self._lock:

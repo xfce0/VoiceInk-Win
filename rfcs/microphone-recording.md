@@ -2,17 +2,14 @@
 
 ## Status
 
-Status: Draft - implementation blocked.
+Status: Superseded for the current pragmatic capture slice.
 
-This RFC is documentation and evidence planning only. It authorizes no
-production microphone code, WASAPI binding, native helper, IPC transport,
-packaging change, fake adapter, or ASR service change. Implementation remains
-blocked until D1-D19 and the pre-implementation portions of G1, G2, G3a, and
-G4a have written approvals. G4a must have outcome `GO`. G3b and G4b remain
-post-implementation enablement gates.
-
-The values marked `RECOMMENDED` are concrete engineering recommendations for
-review. They are not approvals, evidence, or permission to implement.
+This document remains the historical WASAPI helper design and its approval
+gates. The current implementation deliberately uses the approved pragmatic
+PortAudio path through `sounddevice`, with the same domain boundary and shared
+ASR service. It is not an implementation of the WASAPI protocol described
+below; future WASAPI work must create a new RFC rather than treating this
+document as an active production block.
 
 ## Summary
 
