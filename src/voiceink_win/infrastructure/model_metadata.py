@@ -6,9 +6,10 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from voiceink_win.domain import ConfigurationError, ModelMetadata
+from voiceink_win.domain import ConfigurationError, MissingModelError, ModelMetadata
 
 from .packaged_runtime import TRUSTED_PACKAGE_ARTIFACTS, load_packaged_runtime
+from .process import RuntimeArtifactVerifier
 from .runtime_manifest import LoadedRuntimeManifest, load_runtime_manifest
 
 PARAKEET_ARTIFACT_ID = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
@@ -58,13 +59,23 @@ def discover_model_metadata(*, environ: Mapping[str, str] | None = None) -> Mode
 
 def _metadata_from_loaded(loaded: LoadedRuntimeManifest, *, label: str) -> ModelMetadata:
     model_artifact = loaded.model_artifact
+    available = False
+    expected_sha256 = getattr(model_artifact, "sha256", None)
+    if isinstance(expected_sha256, str):
+        try:
+            RuntimeArtifactVerifier().verify_model(loaded.model, expected_sha256)
+            available = loaded.executable.is_file()
+        except (ConfigurationError, MissingModelError, OSError):
+            pass
+    else:
+        available = loaded.executable.is_file() and loaded.model.is_file()
     return ModelMetadata(
         name=PARAKEET_NAME,
         model_id=loaded.model_id,
         version=model_artifact.version,
         backend=loaded.backend,
         trusted=True,
-        available=loaded.executable.is_file() and loaded.model.is_file(),
+        available=available,
         safe_path=_redact_path(loaded.model, loaded.lock.install_root, label),
     )
 

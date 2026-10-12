@@ -31,6 +31,8 @@ from voiceink_win.domain import (
 from .authentication import ASR_API_KEY_ENV, ASR_NONCE_ENV, ASR_NONCE_HEADER, generate_nonce
 from .startup_diagnostics import StartupDiagnostics
 
+_CREATE_NO_WINDOW = 0x08000000
+
 
 class ProcessHandle(Protocol):
     pid: int
@@ -524,7 +526,7 @@ class SubprocessSupervisor:
             if os.name == "nt":
                 from .media_process import WindowsJobObject, _resume_suspended_process
 
-                kwargs["creationflags"] = 0x00000004  # CREATE_SUSPENDED
+                kwargs["creationflags"] = 0x00000004 | _CREATE_NO_WINDOW
                 phase = "job_assignment"
                 operation = "assign_job"
                 windows_job = WindowsJobObject(
