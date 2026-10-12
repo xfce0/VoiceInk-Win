@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from inspect import Parameter, signature
 from threading import Lock, Thread, current_thread
@@ -64,6 +65,10 @@ class DesktopComposition(Protocol):
 
     def close(self) -> None: ...
 
+    def reload_backend(self) -> Future[bool]: ...
+
+    def unload_backend(self) -> Future[bool]: ...
+
 
 @dataclass(slots=True)
 class _DesktopComposition:
@@ -79,9 +84,11 @@ class _DesktopComposition:
     global_hotkey_settings: GlobalHotkeySettingsService
     readiness_timeout: float | None = field(default=None, repr=False)
     _backend: object | None = field(default=None, init=False, repr=False)
+    _cleanup_pending: object | None = field(default=None, init=False, repr=False)
     _bootstrap_thread: Thread | None = field(default=None, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _closing: bool = field(default=False, init=False)
+    _lifecycle_active: bool = field(default=False, init=False, repr=False)
 
     def start(self) -> None:
         thread = Thread(
@@ -115,7 +122,7 @@ class _DesktopComposition:
             backend = self._backend
             self._backend = None
         if backend is not None:
-            self._close_backend_safely(backend)
+            self._close_backend_or_track(backend)
         try:
             self.media_actions.close()
         except Exception:
@@ -128,6 +135,100 @@ class _DesktopComposition:
             self.persistence.close().result(timeout=3.0)
         except Exception:
             logger.exception("failed to close SQLite persistence")
+
+    def reload_backend(self) -> Future[bool]:
+        """Rebuild the backend after a runtime artifact changes on disk."""
+        result: Future[bool] = Future()
+
+        def reload() -> None:
+            try:
+                with self._lock:
+                    if self._closing:
+                        raise RuntimeError("desktop composition is closing")
+                    if self._lifecycle_active:
+                        raise RuntimeError("desktop backend lifecycle operation is running")
+                    if self._bootstrap_thread is not None and self._bootstrap_thread.is_alive():
+                        raise RuntimeError("desktop backend bootstrap is still running")
+                    self._lifecycle_active = True
+                    current = self._backend
+                    pending = self._cleanup_pending
+                    if pending is not None:
+                        self._cleanup_pending = None
+                self.recorder.attach_service(None)
+                if pending is not None and not self._close_backend_safely(pending):
+                    with self._lock:
+                        self._cleanup_pending = pending
+                    raise RuntimeError("failed to finish stopping the transcription runtime")
+                if current is not None:
+                    if not self._close_backend_safely(current):
+                        raise RuntimeError("failed to stop the current transcription runtime")
+                    with self._lock:
+                        if self._backend is current:
+                            self._backend = None
+                self.transcribe_controller.mark_unavailable(
+                    "Loading the updated transcription runtime..."
+                )
+                self._bootstrap_backend()
+                result.set_result(
+                    self.transcribe_controller.snapshot.availability
+                    is TranscribeAvailability.AVAILABLE
+                )
+            except BaseException as error:
+                result.set_exception(error)
+            finally:
+                with self._lock:
+                    self._lifecycle_active = False
+
+        thread = Thread(target=reload, name="desktop-backend-reload", daemon=True)
+        with self._lock:
+            self._bootstrap_thread = thread
+        thread.start()
+        return result
+
+    def unload_backend(self) -> Future[bool]:
+        """Stop the backend before a managed runtime artifact is removed."""
+        result: Future[bool] = Future()
+
+        def unload() -> None:
+            try:
+                with self._lock:
+                    if self._closing:
+                        raise RuntimeError("desktop composition is closing")
+                    if self._lifecycle_active:
+                        raise RuntimeError("desktop backend lifecycle operation is running")
+                    if self._bootstrap_thread is not None and self._bootstrap_thread.is_alive():
+                        raise RuntimeError("desktop backend bootstrap is still running")
+                    self._lifecycle_active = True
+                    current = self._backend
+                    pending = self._cleanup_pending
+                    if pending is not None:
+                        self._cleanup_pending = None
+                self.recorder.attach_service(None)
+                if pending is not None and not self._close_backend_safely(pending):
+                    with self._lock:
+                        self._cleanup_pending = pending
+                    raise RuntimeError("failed to finish stopping the transcription runtime")
+                if current is not None:
+                    if not self._close_backend_safely(current):
+                        raise RuntimeError("failed to stop the current transcription runtime")
+                    with self._lock:
+                        if self._backend is current:
+                            self._backend = None
+                self.transcribe_controller.mark_unavailable(
+                    "Transcription runtime is unavailable until a model is downloaded."
+                )
+                result.set_result(True)
+            except BaseException as error:
+                result.set_exception(error)
+            finally:
+                with self._lock:
+                    self._lifecycle_active = False
+
+        thread = Thread(target=unload, name="desktop-backend-unload", daemon=True)
+        with self._lock:
+            self._bootstrap_thread = thread
+        thread.start()
+        return result
 
     def _bootstrap_backend(self) -> None:
         backend = None
@@ -148,7 +249,7 @@ class _DesktopComposition:
             )
             backend.start()
             if not backend.imported_media_available:
-                self._close_backend_safely(backend)
+                self._close_backend_or_track(backend)
                 self.transcribe_controller.mark_unavailable(
                     "Imported media transcription is unavailable: configuration is incomplete."
                 )
@@ -162,7 +263,7 @@ class _DesktopComposition:
             OSError,
         ) as error:
             if backend is not None:
-                self._close_backend_safely(backend)
+                self._close_backend_or_track(backend)
             diagnostics = getattr(backend, "diagnostics", None)
             logger.warning(
                 "imported-media runtime unavailable: %s; diagnostics=%s",
@@ -175,7 +276,7 @@ class _DesktopComposition:
             return
         except Exception:
             if backend is not None:
-                self._close_backend_safely(backend)
+                self._close_backend_or_track(backend)
             logger.exception("unexpected imported-media bootstrap failure")
             self.transcribe_controller.mark_unavailable(
                 "Imported media transcription is unavailable: startup failed."
@@ -187,14 +288,22 @@ class _DesktopComposition:
             if not closing:
                 self._backend = backend
         if closing or not self.transcribe_controller.attach_backend(backend):
-            self._close_backend_safely(backend)
+            self._close_backend_or_track(backend)
+
+    def _close_backend_or_track(self, backend: object) -> None:
+        if self._close_backend_safely(backend):
+            return
+        with self._lock:
+            self._cleanup_pending = backend
 
     @staticmethod
-    def _close_backend_safely(backend: object) -> None:
+    def _close_backend_safely(backend: object) -> bool:
         try:
             backend.close()
+            return True
         except Exception:
             logger.exception("failed to close imported-media runtime")
+            return False
 
 
 def _build_backend(

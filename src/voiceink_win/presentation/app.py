@@ -195,6 +195,8 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             global_shortcut=composition.global_shortcut,
             global_hotkey_settings=composition.global_hotkey_settings,
             recorder_controller=recorder_controller,
+            on_model_changed=getattr(composition, "reload_backend", None),
+            on_model_delete=getattr(composition, "unload_backend", None),
         )
         window.setWindowIcon(application.windowIcon())
         if color_scheme_changed is not None:

@@ -231,6 +231,12 @@ def _reject_symlink_components(path: Path) -> None:
         current /= part
         if current.is_symlink():
             raise InvalidAudioArtifactPathError("audio storage path contains a symlink")
+        if os.name == "nt" and current.exists():
+            import ctypes
+
+            attributes = ctypes.windll.kernel32.GetFileAttributesW(str(current))
+            if attributes == 0xFFFFFFFF or attributes & 0x400:
+                raise InvalidAudioArtifactPathError("audio storage path contains a reparse point")
 
 
 def _regular_file_size(path: Path) -> int:

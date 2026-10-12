@@ -40,7 +40,7 @@ from voiceink_win.domain import (
     ShellSnapshot,
     ShellState,
 )
-from voiceink_win.infrastructure import discover_model_metadata
+from voiceink_win.infrastructure import ModelDownloadService, discover_model_metadata
 
 from .ai_models_page import AIModelsPage
 from .audio_page import AudioPage
@@ -395,6 +395,9 @@ class MainWindow(QMainWindow):
         artifact_cleanup=None,
         history_deletion: HistoryDeletionService | None = None,
         model_metadata: ModelMetadata | None = None,
+        model_manager: ModelDownloadService | None = None,
+        on_model_changed: Callable[[], object] | None = None,
+        on_model_delete: Callable[[], object] | None = None,
         global_shortcut: GlobalToggleShortcutService | None = None,
         global_hotkey_settings: GlobalHotkeySettingsService | None = None,
         recorder_controller: MicrophoneRecorderController | None = None,
@@ -414,6 +417,10 @@ class MainWindow(QMainWindow):
         self._bridge.changed.connect(self._render)
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
         self._persistence = persistence
+        self._model_manager = model_manager or ModelDownloadService()
+        self._owns_model_manager = model_manager is None
+        self._on_model_changed = on_model_changed
+        self._on_model_delete = on_model_delete
         self._model_metadata = model_metadata or discover_model_metadata()
         self._artifact_cleanup = artifact_cleanup
         self._media_actions = media_actions
@@ -499,7 +506,12 @@ class MainWindow(QMainWindow):
         )
         self._pages.addWidget(self._dictionary_page)
         self._ai_models_page = AIModelsPage(
-            self._model_metadata, self._pages, locale_config=self._locale_config
+            self._model_metadata,
+            self._pages,
+            locale_config=self._locale_config,
+            model_manager=self._model_manager,
+            on_model_changed=self._on_model_changed,
+            on_model_delete=self._on_model_delete,
         )
         self._pages.addWidget(self._ai_models_page)
         self._audio_page = AudioPage(
@@ -889,6 +901,8 @@ class MainWindow(QMainWindow):
         self._ai_models_page.dispose()
         self._audio_page.dispose()
         self._settings_page.dispose()
+        if self._owns_model_manager:
+            self._model_manager.close()
         if self._owns_history_deletion and self._history_deletion is not None:
             self._history_deletion.close()
         self._unsubscribe()

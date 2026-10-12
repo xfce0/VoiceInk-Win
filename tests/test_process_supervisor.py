@@ -282,9 +282,11 @@ def test_windows_supervisor_uses_canonical_launch_order(tmp_path: Path, monkeypa
             events.append("job-close")
 
     process = FakeProcess()
+    captured_kwargs: dict[str, object] = {}
 
     def popen(argv, **kwargs):
-        del argv, kwargs
+        del argv
+        captured_kwargs.update(kwargs)
         events.append("popen")
         return process
 
@@ -324,6 +326,7 @@ def test_windows_supervisor_uses_canonical_launch_order(tmp_path: Path, monkeypa
     assert max(index for index, event in enumerate(events) if event == "lease") < events.index(
         "popen"
     )
+    assert captured_kwargs["creationflags"] == 0x00000004 | 0x08000000
 
 
 def test_artifact_lock_retains_failed_handle_for_retry() -> None:

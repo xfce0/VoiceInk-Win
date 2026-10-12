@@ -94,6 +94,14 @@ class TranslationKey(StrEnum):
     AI_MODEL_STATE_AVAILABLE = "ai_models.state.available"
     AI_MODEL_STATE_UNAVAILABLE = "ai_models.state.unavailable"
     AI_MODEL_UNAVAILABLE = "ai_models.unavailable"
+    AI_MODEL_DOWNLOAD = "ai_models.download"
+    AI_MODEL_DELETE = "ai_models.delete"
+    AI_MODEL_DOWNLOADING = "ai_models.downloading"
+    AI_MODEL_DOWNLOADED = "ai_models.downloaded"
+    AI_MODEL_DELETING = "ai_models.deleting"
+    AI_MODEL_DELETED = "ai_models.deleted"
+    AI_MODEL_DOWNLOAD_ERROR = "ai_models.download_error"
+    AI_MODEL_RUNTIME_ERROR = "ai_models.runtime_error"
 
     SETTINGS_TITLE = "settings.title"
     SETTINGS_SUBTITLE = "settings.subtitle"
@@ -460,10 +468,8 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     ),
     TranslationKey.AI_MODELS_TITLE: _entry("AI Models", "Модели ИИ"),
     TranslationKey.AI_MODELS_SUBTITLE: _entry(
-        "Installed model metadata comes from the trusted runtime package or manifest. "
-        "This page does not download models.",
-        "Метаданные установленной модели берутся из доверенного пакета или manifest. "
-        "Эта страница не загружает модели.",
+        "Download the pinned Parakeet model from Hugging Face or remove the local copy.",
+        "Загрузите утверждённую модель Parakeet с Hugging Face или удалите локальную копию.",
     ),
     TranslationKey.AI_MODEL_NAME: _entry("Name", "Название"),
     TranslationKey.AI_MODEL_VERSION: _entry("Version / revision", "Версия / ревизия"),
@@ -478,10 +484,27 @@ CATALOG: Final[dict[TranslationKey, dict[Locale, str]]] = {
     TranslationKey.AI_MODEL_STATE_AVAILABLE: _entry("Available", "Доступна"),
     TranslationKey.AI_MODEL_STATE_UNAVAILABLE: _entry("Unavailable", "Недоступна"),
     TranslationKey.AI_MODEL_UNAVAILABLE: _entry(
-        "The package or runtime is not available. Install the approved runtime package "
-        "to use this model.",
-        "Пакет или среда выполнения недоступны. Установите утверждённый пакет среды, "
-        "чтобы использовать эту модель.",
+        "The model is not downloaded. Download it to make the pinned model available.",
+        "Модель не загружена. Загрузите её, чтобы сделать утверждённую модель доступной.",
+    ),
+    TranslationKey.AI_MODEL_DOWNLOAD: _entry("Download model", "Загрузить модель"),
+    TranslationKey.AI_MODEL_DELETE: _entry("Delete downloaded model", "Удалить загруженную модель"),
+    TranslationKey.AI_MODEL_DOWNLOADING: _entry("Downloading model...", "Загрузка модели..."),
+    TranslationKey.AI_MODEL_DOWNLOADED: _entry(
+        "Model downloaded and verified.", "Модель загружена и проверена."
+    ),
+    TranslationKey.AI_MODEL_DELETING: _entry(
+        "Stopping the transcription runtime...", "Остановка среды расшифровки..."
+    ),
+    TranslationKey.AI_MODEL_DELETED: _entry(
+        "Downloaded model deleted.", "Загруженная модель удалена."
+    ),
+    TranslationKey.AI_MODEL_DOWNLOAD_ERROR: _entry(
+        "Model operation failed", "Операция с моделью не выполнена"
+    ),
+    TranslationKey.AI_MODEL_RUNTIME_ERROR: _entry(
+        "Model downloaded, but the transcription runtime is unavailable.",
+        "Модель загружена, но среда расшифровки недоступна.",
     ),
     TranslationKey.SETTINGS_TITLE: _entry("Settings", "Настройки"),
     TranslationKey.SETTINGS_SUBTITLE: _entry(
