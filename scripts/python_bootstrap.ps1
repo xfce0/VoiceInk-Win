@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RequiredPython = "3.13.11"
+$RequiredPython = "3.12.10"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot ".." )).Path
 
 function Get-TargetArchitecture {
@@ -42,9 +42,16 @@ function Find-Python([string]$TargetArchitecture) {
     $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($null -ne $launcher) {
         $launcherArch = "64"
-        $candidate = & $launcher.Source "-3.13-$launcherArch" -c "import sys; print(sys.executable)" 2>$null
-        if ($LASTEXITCODE -eq 0 -and (Test-Python $candidate.Trim() $TargetArchitecture)) {
-            return $candidate.Trim()
+        try {
+            $candidate = & $launcher.Source "-3.12-$launcherArch" -c "import sys; print(sys.executable)" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $candidate) {
+                $candidatePath = ($candidate | Select-Object -Last 1).Trim()
+                if (Test-Python $candidatePath $TargetArchitecture) {
+                    return $candidatePath
+                }
+            }
+        } catch {
+            # The launcher reports a terminating error when the requested runtime is absent.
         }
     }
 
