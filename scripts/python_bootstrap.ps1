@@ -17,7 +17,7 @@ function Get-TargetArchitecture {
 
 function Get-PythonArchitecture([string]$PythonPath) {
     try {
-        $value = & $PythonPath -c "import platform,sys; print(f'{sys.version_info.major}.{sys.version_info.minor}|{platform.machine()}')" 2>$null
+        $value = & $PythonPath -E -c "import sys,sysconfig; print(f'{sys.version_info.major}.{sys.version_info.minor}|{sysconfig.get_platform()}')" 2>$null
         if ($LASTEXITCODE -ne 0) { return $null }
         return ($value | Select-Object -Last 1).Trim()
     } catch {
@@ -31,11 +31,11 @@ function Test-Python([string]$PythonPath, [string]$TargetArchitecture) {
     if ($null -eq $info) { return $false }
     $parts = $info.Split("|")
     if ($parts[0] -notin @("3.12", "3.13", "3.14")) { return $false }
-    $machine = $parts[1].ToUpperInvariant()
+    $platform = $parts[1].ToLowerInvariant()
     if ($TargetArchitecture -eq "x64") {
-        return $machine -in @("AMD64", "X86_64")
+        return $platform -in @("win-amd64", "win_amd64")
     }
-    return $machine -in @("X86", "I386", "I686")
+    return $platform -in @("win32", "win-x86", "win_x86")
 }
 
 function Find-Python([string]$TargetArchitecture) {
@@ -43,7 +43,7 @@ function Find-Python([string]$TargetArchitecture) {
     if ($null -ne $launcher) {
         $launcherArch = "64"
         try {
-            $candidate = & $launcher.Source "-3.12-$launcherArch" -c "import sys; print(sys.executable)" 2>$null
+            $candidate = & $launcher.Source "-3.12-$launcherArch" -E -c "import sys; print(sys.executable)" 2>$null
             if ($LASTEXITCODE -eq 0 -and $candidate) {
                 $candidatePath = ($candidate | Select-Object -Last 1).Trim()
                 if (Test-Python $candidatePath $TargetArchitecture) {
@@ -74,6 +74,7 @@ function Install-Python([string]$TargetArchitecture) {
     New-Item -ItemType Directory -Force -Path $downloadRoot | Out-Null
     $installer = Join-Path $downloadRoot ("python-{0}-{1}.exe" -f $RequiredPython, $suffix)
     $temporaryInstaller = "$installer.download"
+    $installerLog = "$installer.log"
     $url = "https://www.python.org/ftp/python/$RequiredPython/python-$RequiredPython-$suffix.exe"
     Write-Host "Downloading Python $RequiredPython ($TargetArchitecture)"
     Invoke-WebRequest -Uri $url -OutFile $temporaryInstaller
@@ -84,9 +85,12 @@ function Install-Python([string]$TargetArchitecture) {
     }
     Move-Item -Force $temporaryInstaller $installer
     New-Item -ItemType Directory -Force -Path $target | Out-Null
-    & $installer /quiet InstallAllUsers=0 PrependPath=0 Include_test=0 TargetDir=$target
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Python $python $TargetArchitecture)) {
-        throw "Python $RequiredPython ($TargetArchitecture) installation failed."
+    & $installer /quiet /log $installerLog InstallAllUsers=0 PrependPath=0 Include_test=0 Include_launcher=0 InstallLauncherAllUsers=0 TargetDir=$target
+    $installerExitCode = $LASTEXITCODE
+    $pythonInstalled = Test-Python $python $TargetArchitecture
+    if ($installerExitCode -notin @(0, 3010, 1641) -or -not $pythonInstalled) {
+        $detected = if (Test-Path $python) { Get-PythonArchitecture $python } else { "python.exe not found" }
+        throw "Python $RequiredPython ($TargetArchitecture) installation failed (exit code $installerExitCode; detected $detected; log $installerLog)."
     }
     return $python
 }
