@@ -147,17 +147,12 @@ class _DesktopComposition:
                         raise RuntimeError("desktop composition is closing")
                     if self._lifecycle_active:
                         raise RuntimeError("desktop backend lifecycle operation is running")
-                    if (
-                        self._bootstrap_thread is not None
-                        and self._bootstrap_thread is not current_thread()
-                        and self._bootstrap_thread.is_alive()
-                    ):
-                        raise RuntimeError("desktop backend bootstrap is still running")
                     self._lifecycle_active = True
+                self._wait_for_bootstrap()
+                with self._lock:
                     current = self._backend
                     pending = self._cleanup_pending
-                    if pending is not None:
-                        self._cleanup_pending = None
+                    self._cleanup_pending = None
                 self.recorder.attach_service(None)
                 if pending is not None and not self._close_backend_safely(pending):
                     with self._lock:
@@ -200,17 +195,12 @@ class _DesktopComposition:
                         raise RuntimeError("desktop composition is closing")
                     if self._lifecycle_active:
                         raise RuntimeError("desktop backend lifecycle operation is running")
-                    if (
-                        self._bootstrap_thread is not None
-                        and self._bootstrap_thread is not current_thread()
-                        and self._bootstrap_thread.is_alive()
-                    ):
-                        raise RuntimeError("desktop backend bootstrap is still running")
                     self._lifecycle_active = True
+                self._wait_for_bootstrap()
+                with self._lock:
                     current = self._backend
                     pending = self._cleanup_pending
-                    if pending is not None:
-                        self._cleanup_pending = None
+                    self._cleanup_pending = None
                 self.recorder.attach_service(None)
                 if pending is not None and not self._close_backend_safely(pending):
                     with self._lock:
@@ -303,6 +293,17 @@ class _DesktopComposition:
             return
         with self._lock:
             self._cleanup_pending = backend
+
+    def _wait_for_bootstrap(self) -> None:
+        with self._lock:
+            bootstrap = self._bootstrap_thread
+        if bootstrap is None or bootstrap is current_thread() or not bootstrap.is_alive():
+            return
+        bootstrap.join(self.readiness_timeout or 30.0)
+        if bootstrap.is_alive():
+            raise RuntimeError(
+                "desktop backend bootstrap did not finish before the operation deadline"
+            )
 
     @staticmethod
     def _close_backend_safely(backend: object) -> bool:
