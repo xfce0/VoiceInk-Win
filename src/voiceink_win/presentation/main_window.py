@@ -417,10 +417,14 @@ class MainWindow(QMainWindow):
         self._bridge.changed.connect(self._render)
         self._transcribe_controller = transcribe_controller or TranscribePageController(None)
         self._persistence = persistence
-        self._model_manager = model_manager or ModelDownloadService()
-        self._owns_model_manager = model_manager is None
         self._on_model_changed = on_model_changed
         self._on_model_delete = on_model_delete
+        self._model_manager = model_manager
+        if self._model_manager is None and (
+            self._on_model_changed is not None or self._on_model_delete is not None
+        ):
+            self._model_manager = ModelDownloadService()
+        self._owns_model_manager = self._model_manager is not None and model_manager is None
         self._model_metadata = model_metadata or discover_model_metadata()
         self._artifact_cleanup = artifact_cleanup
         self._media_actions = media_actions
