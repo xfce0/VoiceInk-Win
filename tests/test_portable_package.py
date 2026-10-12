@@ -53,7 +53,6 @@ def test_build_package_stages_and_discovers_verified_runtime(tmp_path: Path) -> 
     shell_dist = tmp_path / "dist"
     shell_dist.mkdir()
     (shell_dist / "voiceink-shell.exe").write_bytes(b"shell")
-    (shell_dist / "voiceink-shell-smoke.exe").write_bytes(b"smoke")
     lock_path = tmp_path / "lock.json"
     lock_path.write_text(json.dumps(_lock(ffmpeg, sidecar, model)), encoding="utf-8")
     ffmpeg_path = tmp_path / "ffmpeg.exe"
@@ -152,7 +151,6 @@ def test_build_package_rejects_changed_pinned_artifact(tmp_path: Path) -> None:
     shell_dist = tmp_path / "dist"
     shell_dist.mkdir()
     (shell_dist / "voiceink-shell.exe").write_bytes(b"shell")
-    (shell_dist / "voiceink-shell-smoke.exe").write_bytes(b"smoke")
     lock_path = tmp_path / "lock.json"
     lock_path.write_text(json.dumps(_lock(ffmpeg, sidecar, model)), encoding="utf-8")
     ffmpeg_path = tmp_path / "ffmpeg.exe"
@@ -180,7 +178,6 @@ def test_build_package_copies_sidecar_dll_dependencies(tmp_path: Path) -> None:
     shell_dist = tmp_path / "dist"
     shell_dist.mkdir()
     (shell_dist / "voiceink-shell.exe").write_bytes(b"shell")
-    (shell_dist / "voiceink-shell-smoke.exe").write_bytes(b"smoke")
     lock_path = tmp_path / "lock.json"
     lock_path.write_text(json.dumps(_lock(ffmpeg, sidecar, model)), encoding="utf-8")
     ffmpeg_path = tmp_path / "ffmpeg.exe"

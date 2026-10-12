@@ -79,11 +79,6 @@ class GlobalToggleShortcutService:
         if self._registration is not None:
             return self._status
         self._registration_requested = True
-        if self._state_value() == ShellState.UNAVAILABLE.value:
-            return self._set_status(
-                ShortcutAvailability.UNAVAILABLE,
-                "Recording is unavailable in this build.",
-            )
         try:
             registration = self._shortcut_port.register(self._shortcut, self._toggle)
         except ShortcutConflictError as error:

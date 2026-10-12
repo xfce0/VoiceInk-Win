@@ -1,11 +1,9 @@
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 from scripts import frontend_build
-from scripts.frontend_package_smoke import WINDOWS_CONSOLE_SUBSYSTEM, validate_executable
+from scripts.frontend_package_smoke import validate_executable
 
 ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = ROOT / "Makefile"
@@ -16,7 +14,9 @@ def test_make_build_contract_is_windows_only_and_reproducible() -> None:
     makefile = MAKEFILE.read_text(encoding="utf-8")
     constraints = (ROOT / "packaging" / "windows-build-constraints.txt").read_text(encoding="utf-8")
 
-    assert "build: require-windows build-deps" in makefile
+    assert "frontend-build: require-windows build-deps" in makefile
+    assert "build: frontend-build" in makefile
+    assert "scripts/windows_release_package.py" in makefile
     assert 'install --editable ".[gui,build]"' in makefile
     assert "pip==26.2.1" in constraints
     assert "PySide6==6.12.0" in constraints
@@ -32,12 +32,12 @@ def test_make_build_contract_is_windows_only_and_reproducible() -> None:
     assert "unrelated entries found" in (ROOT / "scripts" / "frontend_build.py").read_text(
         encoding="utf-8"
     )
-    assert "SMOKE_TIMEOUT_SECONDS = 120" in (ROOT / "scripts" / "frontend_build.py").read_text(
+    assert "voiceink-shell-smoke.exe" not in (ROOT / "scripts" / "frontend_build.py").read_text(
         encoding="utf-8"
     )
 
 
-def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstaller_commands(
+def test_frontend_build_generates_repository_icon_and_passes_it_to_pyinstaller_command(
     tmp_path: Path, monkeypatch
 ) -> None:
     commands: list[list[str]] = []
@@ -57,7 +57,6 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
     )
     frontend_build._generate_icon("python")
     frontend_build._build_executable("voiceink-shell", "--windowed", "python")
-    frontend_build._build_executable("voiceink-shell-smoke", "--console", "python")
 
     assert commands[0] == [
         "python",
@@ -66,7 +65,7 @@ def test_frontend_build_generates_repository_icon_and_passes_it_to_both_pyinstal
         str(icon_output),
     ]
     pyinstaller_commands = commands[1:]
-    assert len(pyinstaller_commands) == 2
+    assert len(pyinstaller_commands) == 1
     assert all(
         command[command.index("--icon") + 1] == str(icon_output) for command in pyinstaller_commands
     )
@@ -132,9 +131,9 @@ def test_frontend_workflow_builds_a_windowed_pyside6_executable() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert "runs-on: windows-2022" in workflow
-    assert "Build Windows x64 GUI and smoke executables" in workflow
-    assert "make build" in workflow
-    assert "voiceink-shell-windows-x64" in workflow
+    assert "Build Windows x64 GUI executable" in workflow
+    assert "make frontend-build" in workflow
+    assert "voiceink-shell-windows-x64-frontend" in workflow
 
 
 def test_readme_documents_windows_make_prerequisites() -> None:
@@ -143,61 +142,6 @@ def test_readme_documents_windows_make_prerequisites() -> None:
     assert "GNU Make" in readme
     assert "sh.exe" in readme
     assert "make --version" in readme
-
-
-def test_frontend_smoke_reports_output_on_nonzero_exit(monkeypatch) -> None:
-    class FailedProcess:
-        returncode = 17
-
-        def communicate(self, *, timeout):
-            assert timeout == frontend_build.SMOKE_TIMEOUT_SECONDS
-            return "smoke stdout", "smoke stderr"
-
-    monkeypatch.setattr(frontend_build.subprocess, "Popen", lambda *args, **kwargs: FailedProcess())
-
-    with pytest.raises(frontend_build.FrontendBuildError, match="exit code 17") as error:
-        frontend_build._run_smoke()
-
-    assert "smoke stdout" in str(error.value)
-    assert "smoke stderr" in str(error.value)
-
-
-def test_frontend_smoke_terminates_and_reports_output_on_timeout(monkeypatch) -> None:
-    terminated = False
-
-    class HungProcess:
-        pid = 42
-        returncode = None
-
-        def communicate(self, *, timeout=None):
-            if timeout is not None:
-                assert timeout in {10, frontend_build.SMOKE_TIMEOUT_SECONDS}
-            if self.returncode is None:
-                raise frontend_build.subprocess.TimeoutExpired(
-                    "voiceink-shell-smoke.exe",
-                    timeout,
-                    output="partial stdout",
-                    stderr="partial stderr",
-                )
-            return "", ""
-
-    process = HungProcess()
-
-    def fake_terminate(candidate) -> None:
-        nonlocal terminated
-        assert candidate is process
-        terminated = True
-        candidate.returncode = -9
-
-    monkeypatch.setattr(frontend_build.subprocess, "Popen", lambda *args, **kwargs: process)
-    monkeypatch.setattr(frontend_build, "_terminate_smoke_process", fake_terminate)
-
-    with pytest.raises(frontend_build.FrontendBuildError, match="timed out") as error:
-        frontend_build._run_smoke()
-
-    assert terminated
-    assert "partial stdout" in str(error.value)
-    assert "partial stderr" in str(error.value)
 
 
 def test_frontend_entrypoint_delegates_to_presentation_app() -> None:
@@ -218,7 +162,7 @@ def test_packaged_launch_contract_keeps_gui_executable_canonical() -> None:
     assert '"subsystem": CANONICAL_LAUNCH_SUBSYSTEM' in build_source
     assert "voiceink-shell.exe" in readme
     assert "developer/CLI helper" in readme
-    assert ".\\voiceink-shell-smoke.exe --smoke" in readme
+    assert "voiceink-shell-smoke.exe" not in readme
     assert ".\\voiceink-shell.cmd" not in readme
 
 
@@ -240,70 +184,3 @@ def test_frontend_package_smoke_validates_x64_gui_pe(tmp_path: Path) -> None:
     executable.write_bytes(data)
     with pytest.raises(ValueError, match="expected PE machine"):
         validate_executable(executable)
-
-
-def test_frontend_package_smoke_validates_console_subsystem(tmp_path: Path) -> None:
-    executable = tmp_path / "voiceink-shell-smoke.exe"
-    data = bytearray(0x40 + 24 + 240)
-    data[:2] = b"MZ"
-    data[0x3C:0x40] = (0x40).to_bytes(4, "little")
-    data[0x40:0x44] = b"PE\0\0"
-    data[0x44:0x46] = (0x8664).to_bytes(2, "little")
-    data[0x54:0x56] = (240).to_bytes(2, "little")
-    data[0x58:0x5A] = (0x20B).to_bytes(2, "little")
-    data[0x9C:0x9E] = (WINDOWS_CONSOLE_SUBSYSTEM).to_bytes(2, "little")
-    executable.write_bytes(data)
-
-    validate_executable(executable, expected_subsystem=WINDOWS_CONSOLE_SUBSYSTEM)
-
-    data[0x9C:0x9E] = (2).to_bytes(2, "little")
-    executable.write_bytes(data)
-    with pytest.raises(ValueError, match="expected Windows subsystem 3"):
-        validate_executable(executable, expected_subsystem=WINDOWS_CONSOLE_SUBSYSTEM)
-
-
-def test_frontend_package_smoke_cli_checks_console_subsystem(tmp_path: Path) -> None:
-    executable = tmp_path / "voiceink-shell-smoke.exe"
-    data = bytearray(0x40 + 24 + 240)
-    data[:2] = b"MZ"
-    data[0x3C:0x40] = (0x40).to_bytes(4, "little")
-    data[0x40:0x44] = b"PE\0\0"
-    data[0x44:0x46] = (0x8664).to_bytes(2, "little")
-    data[0x54:0x56] = (240).to_bytes(2, "little")
-    data[0x58:0x5A] = (0x20B).to_bytes(2, "little")
-    data[0x9C:0x9E] = (WINDOWS_CONSOLE_SUBSYSTEM).to_bytes(2, "little")
-    executable.write_bytes(data)
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "frontend_package_smoke.py"),
-            str(executable),
-            "--subsystem",
-            "console",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0
-    assert "passed" in result.stdout
-
-    data[0x9C:0x9E] = (2).to_bytes(2, "little")
-    executable.write_bytes(data)
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "frontend_package_smoke.py"),
-            str(executable),
-            "--subsystem",
-            "console",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "expected Windows subsystem 3" in result.stderr

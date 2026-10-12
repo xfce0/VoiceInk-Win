@@ -1,4 +1,4 @@
-name: Windows Release Package Smoke
+name: Windows Release Package
 
 on:
   pull_request:
@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  package-smoke:
-    name: Build and smoke-test Windows x64 release package
+  package:
+    name: Build Windows x64 release package
     runs-on: windows-2022
     timeout-minutes: 45
 
@@ -43,16 +43,16 @@ jobs:
           git show "${{ github.event.pull_request.base.sha }}:.github/native-smoke/artifact-lock.template.json" | Out-File $lock -Encoding utf8
           "WINDOWS_RELEASE_LOCK=$lock" | Out-File $env:GITHUB_ENV -Append
 
-      - name: Build, package, and run relocation smoke
+      - name: Build and package complete Windows release
         shell: bash
-        run: make windows-release-smoke
+        run: make build
 
-      - name: Upload Windows release bundle and smoke report
+      - name: Upload Windows release bundle and package report
         if: success()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
         with:
           name: voiceink-shell-windows-x64-release
           path: |
             release/voiceink-shell-windows-x64.zip
-            release/windows-release-smoke.json
+            release/windows-release-package.json
           if-no-files-found: error

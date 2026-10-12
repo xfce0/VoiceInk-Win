@@ -85,9 +85,9 @@ and must not introduce an AppIcon derivative or invent another brand variant.
   `voiceink-transcribe.png`. The converter must produce a multi-size
   `voiceink-transcribe.ico` suitable for PyInstaller PE metadata; it must not
   redraw the PNG or use the excluded macOS AppIcon.
-- Pass the generated `voiceink-transcribe.ico` to `--icon` for both
-  `voiceink-shell.exe` and `voiceink-shell-smoke.exe`.
-- Bundle both corrected runtime inputs in both one-file executables:
+- Pass the generated `voiceink-transcribe.ico` to `--icon` for the
+  `voiceink-shell.exe` one-file executable.
+- Bundle both corrected runtime inputs in the one-file executable:
   `voiceink-transcribe.png` for the application icon and `voiceink-shell.svg`
   for the Transcribe sidebar. The generated ICO must also be bundled for
   runtime lookup.
@@ -115,8 +115,8 @@ and must not introduce an AppIcon derivative or invent another brand variant.
 - Asset provenance test: the tracked PNG remains a valid 750x750 PNG and its
   SHA-256 stays equal to the approved macOS source copy. The generated ICO
   contains the expected multi-size entries and is derived from the PNG.
-- Packaging test: both PyInstaller command constructions use the PNG-derived
-  ICO and bundle both role assets for both executables.
+- Packaging test: the PyInstaller command uses the PNG-derived ICO and bundles
+  both role assets for the GUI executable.
 - Accessibility regression test: the sidebar button continues to expose the
   localized `Transcribe` accessible name and destination description; icon
   swapping must not change accessible text or keyboard routing.

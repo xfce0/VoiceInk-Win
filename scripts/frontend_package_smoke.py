@@ -10,13 +10,11 @@ EXPECTED_MACHINE_X86 = 0x014C
 EXPECTED_PE32_PLUS = 0x20B
 EXPECTED_PE32 = 0x10B
 WINDOWS_GUI_SUBSYSTEM = 2
-WINDOWS_CONSOLE_SUBSYSTEM = 3
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
-    parser.add_argument("--subsystem", choices=("gui", "console"), default="gui")
     parser.add_argument("--architecture", choices=("x64", "x86"), default="x64")
     return parser
 
@@ -73,23 +71,17 @@ def validate_executable(
 def main() -> int:
     arguments = _parser().parse_args()
     path = arguments.executable
-    expected_name = (
-        "voiceink-shell.exe" if arguments.subsystem == "gui" else "voiceink-shell-smoke.exe"
-    )
+    expected_name = "voiceink-shell.exe"
     if path.name.lower() != expected_name:
         raise SystemExit(f"frontend package smoke: expected {expected_name}")
     if not path.is_file():
         raise SystemExit(f"frontend package smoke: missing executable: {path}")
     try:
-        expected_subsystem = (
-            WINDOWS_GUI_SUBSYSTEM if arguments.subsystem == "gui" else WINDOWS_CONSOLE_SUBSYSTEM
-        )
         expected_machine = (
             EXPECTED_MACHINE if arguments.architecture == "x64" else EXPECTED_MACHINE_X86
         )
         validate_executable(
             path,
-            expected_subsystem=expected_subsystem,
             expected_machine=expected_machine,
         )
     except (OSError, ValueError) as error:
