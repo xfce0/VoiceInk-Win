@@ -139,6 +139,7 @@ def test_run_package_smoke_terminates_a_hung_process(
 
     process = HungProcess()
     monkeypatch.setattr(release_package.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(release_package, "_terminate_process", lambda candidate: candidate.kill())
 
     with pytest.raises(WindowsReleasePackageError, match="timed out"):
         release_package._run_package_smoke(package)
