@@ -178,7 +178,9 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         global_shortcut.register,
         Qt.ConnectionType.QueuedConnection,
     )
-    composition.recorder.subscribe(lambda _snapshot: recorder_bridge.ready.emit())
+    recorder_controller = getattr(composition, "recorder", None)
+    if recorder_controller is not None:
+        recorder_controller.subscribe(lambda _snapshot: recorder_bridge.ready.emit())
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
@@ -192,7 +194,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             media_actions=getattr(composition, "media_actions", None),
             global_shortcut=composition.global_shortcut,
             global_hotkey_settings=composition.global_hotkey_settings,
-            recorder_controller=getattr(composition, "recorder", None),
+            recorder_controller=recorder_controller,
         )
         window.setWindowIcon(application.windowIcon())
         if color_scheme_changed is not None:
