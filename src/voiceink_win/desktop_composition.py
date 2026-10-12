@@ -147,7 +147,11 @@ class _DesktopComposition:
                         raise RuntimeError("desktop composition is closing")
                     if self._lifecycle_active:
                         raise RuntimeError("desktop backend lifecycle operation is running")
-                    if self._bootstrap_thread is not None and self._bootstrap_thread.is_alive():
+                    if (
+                        self._bootstrap_thread is not None
+                        and self._bootstrap_thread is not current_thread()
+                        and self._bootstrap_thread.is_alive()
+                    ):
                         raise RuntimeError("desktop backend bootstrap is still running")
                     self._lifecycle_active = True
                     current = self._backend
@@ -196,7 +200,11 @@ class _DesktopComposition:
                         raise RuntimeError("desktop composition is closing")
                     if self._lifecycle_active:
                         raise RuntimeError("desktop backend lifecycle operation is running")
-                    if self._bootstrap_thread is not None and self._bootstrap_thread.is_alive():
+                    if (
+                        self._bootstrap_thread is not None
+                        and self._bootstrap_thread is not current_thread()
+                        and self._bootstrap_thread.is_alive()
+                    ):
                         raise RuntimeError("desktop backend bootstrap is still running")
                     self._lifecycle_active = True
                     current = self._backend
