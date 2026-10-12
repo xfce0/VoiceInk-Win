@@ -54,8 +54,8 @@ After a clean clone, `make build` is the reproducible Windows packaging command.
 It creates or updates only the frontend outputs in `dist/`, installs the exact
 `.[gui,build]` extras into `.venv`, validates both x64 PE subsystems, and runs
 the console executable with Qt's offscreen platform. It requires 64-bit Windows
-10/11 and GNU Make. The bootstrap selects a compatible 64-bit Python 3.13
-runtime automatically and downloads Python 3.13.11 when no matching interpreter
+10/11 and GNU Make. The bootstrap selects a compatible 64-bit Python 3.12
+runtime automatically and downloads Python 3.12.10 when no matching interpreter
 is installed. 32-bit Windows is rejected because the pinned PySide6 build has no
 32-bit wheel. On an ARM64 host, x64 Python runs through Windows emulation;
 native ARM64 packaging is rejected because no ARM64 artifact matrix exists.
