@@ -123,6 +123,10 @@ def _build_executable(name: str, mode: str, python: str) -> None:
         "PySide6",
         "--collect-all",
         "shiboken6",
+        "--collect-all",
+        "sounddevice",
+        "--hidden-import",
+        "sounddevice",
         "--add-data",
         f"{MIGRATION_SOURCE};{MIGRATION_DESTINATION}",
         "--add-data",
@@ -159,7 +163,7 @@ def _generate_icon(python: str) -> None:
         raise FrontendBuildError(f"Icon builder did not produce a non-empty {ICON_OUTPUT}")
 
 
-def _validate_package(python: str) -> None:
+def _validate_package(python: str, profile: WindowsPlatform) -> None:
     for name, subsystem in (
         ("voiceink-shell.exe", "gui"),
         ("voiceink-shell-smoke.exe", "console"),
@@ -167,7 +171,17 @@ def _validate_package(python: str) -> None:
         executable = DIST / name
         if not executable.is_file() or executable.stat().st_size == 0:
             raise FrontendBuildError(f"PyInstaller did not produce a non-empty {executable}")
-        _run([python, str(VALIDATOR), str(executable), "--subsystem", subsystem])
+        _run(
+            [
+                python,
+                str(VALIDATOR),
+                str(executable),
+                "--subsystem",
+                subsystem,
+                "--architecture",
+                profile.target_architecture,
+            ]
+        )
 
     if not PACKAGE_README.is_file():
         raise FrontendBuildError(f"Missing package README: {PACKAGE_README}")
@@ -257,13 +271,16 @@ def _run_smoke() -> None:
 def main() -> int:
     try:
         profile = _require_supported_host()
-        print(f"frontend build: selected x64 settings ({profile.diagnostic})")
+        print(
+            f"frontend build: selected {profile.target_architecture} settings "
+            f"({profile.diagnostic})"
+        )
         _prepare_outputs()
         python = sys.executable
         _generate_icon(python)
         _build_executable("voiceink-shell", "--windowed", python)
         _build_executable("voiceink-shell-smoke", "--console", python)
-        _validate_package(python)
+        _validate_package(python, profile)
         _run_smoke()
     except FrontendBuildError as error:
         print(f"frontend build: {error}", file=sys.stderr)

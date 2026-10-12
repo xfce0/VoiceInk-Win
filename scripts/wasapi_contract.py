@@ -294,7 +294,7 @@ def main() -> int:
             print(f"wasapi-contract: {error}", file=sys.stderr)
         return 1
     mode = "template" if allow_template else "pinned"
-    print(f"wasapi-contract: passed ({mode}; microphone remains disabled)")
+    print(f"wasapi-contract: passed ({mode}; legacy WASAPI helper remains disabled)")
     return 0
 
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from concurrent.futures import Future, TimeoutError
+from threading import Lock
 from time import monotonic
 from typing import Protocol
 
@@ -64,7 +66,7 @@ def _run_session(
 
 def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
     try:
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
         from PySide6.QtGui import QFont, QFontDatabase
         from PySide6.QtWidgets import QApplication
     except ImportError as error:
@@ -72,11 +74,12 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             "PySide6 is optional. Install the GUI extra with `pip install -e '.[gui]'`."
         ) from error
 
+    from .app_icon import application_icon, set_windows_app_user_model_id
+
+    set_windows_app_user_model_id()
     application = QApplication.instance() or QApplication(sys.argv)
     application.setQuitOnLastWindowClosed(False)
     application.setApplicationName("VoiceInk")
-    from .app_icon import application_icon
-
     application.setWindowIcon(application_icon())
     from .theme import detect_system_theme, theme_for
 
@@ -88,6 +91,72 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             break
 
     from .main_window import MainWindow
+
+    class _RecorderAvailabilityBridge(QObject):
+        ready = Signal()
+
+    class _DispatchRequest:
+        def __init__(self, operation) -> None:
+            self.operation = operation
+            self.result = Future()
+            self._lock = Lock()
+            self._claimed = False
+            self._cancelled = False
+
+        def claim(self) -> bool:
+            with self._lock:
+                if self._cancelled:
+                    return False
+                self._claimed = True
+                return True
+
+        def cancel(self) -> bool:
+            with self._lock:
+                if self._claimed:
+                    return False
+                self._cancelled = True
+                return True
+
+        def abandon(self) -> None:
+            with self._lock:
+                self._cancelled = True
+
+    class _QtOperationBridge(QObject):
+        requested = Signal(object)
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.requested.connect(self._execute, Qt.ConnectionType.QueuedConnection)
+
+        def dispatch(self, operation):
+            if QThread.currentThread() == self.thread():
+                return operation()
+            request = _DispatchRequest(operation)
+            self.requested.emit(request)
+            try:
+                return request.result.result(timeout=5.0)
+            except TimeoutError:
+                if request.cancel():
+                    request.abandon()
+                    raise
+                try:
+                    return request.result.result(timeout=5.0)
+                except TimeoutError:
+                    request.abandon()
+                    raise
+
+        __call__ = dispatch
+
+        def _execute(self, payload) -> None:
+            if not payload.claim():
+                return
+            try:
+                payload.result.set_result(payload.operation())
+            except BaseException as error:
+                payload.result.set_exception(error)
+
+        def invalidate(self) -> None:
+            self.requested.disconnect(self._execute)
 
     lease = create_instance_lease()
     if not lease.acquire():
@@ -102,6 +171,16 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
         lease.release()
         raise
     global_shortcut = composition.global_shortcut
+    operation_bridge = _QtOperationBridge()
+    composition.global_hotkey_settings.set_dispatcher(operation_bridge)
+    recorder_bridge = _RecorderAvailabilityBridge()
+    recorder_bridge.ready.connect(
+        global_shortcut.register,
+        Qt.ConnectionType.QueuedConnection,
+    )
+    recorder_controller = getattr(composition, "recorder", None)
+    if recorder_controller is not None:
+        recorder_controller.subscribe(lambda _snapshot: recorder_bridge.ready.emit())
     color_scheme_changed = getattr(application.styleHints(), "colorSchemeChanged", None)
 
     def create_window() -> MainWindow:
@@ -115,7 +194,7 @@ def main(*, smoke: bool = False, package_smoke: bool = False) -> int:
             media_actions=getattr(composition, "media_actions", None),
             global_shortcut=composition.global_shortcut,
             global_hotkey_settings=composition.global_hotkey_settings,
-            recorder_controller=getattr(composition, "recorder", None),
+            recorder_controller=recorder_controller,
         )
         window.setWindowIcon(application.windowIcon())
         if color_scheme_changed is not None:

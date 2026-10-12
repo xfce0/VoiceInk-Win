@@ -84,6 +84,7 @@ from .runtime_manifest import (
     load_runtime_manifest,
 )
 from .sidecar import NeMoSidecarRuntime, ProcessSupervisor, SidecarConfig, SidecarTransport
+from .sounddevice_microphone import SoundDeviceCaptureProvider, SoundDeviceCaptureSession
 from .sqlite_persistence import SQLitePersistence
 from .startup_diagnostics import PrimaryFailure, StartupDiagnostics
 from .storage_paths import (
@@ -214,6 +215,8 @@ __all__ = [
     "WindowsCaptureError",
     "WindowsCaptureFailureCode",
     "WindowsCaptureProvider",
+    "SoundDeviceCaptureProvider",
+    "SoundDeviceCaptureSession",
     "WindowsHistoryArtifactRevealAdapter",
     "WindowsHistoryAudioPlaybackAdapter",
 ]

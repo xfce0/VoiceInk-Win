@@ -33,6 +33,7 @@ from voiceink_win.infrastructure import (
     NeMoSidecarRuntime,
     RuntimeArtifactManifest,
     SidecarConfig,
+    SoundDeviceCaptureProvider,
     SubprocessConfig,
     SubprocessMediaNormalizer,
     SubprocessSupervisor,
@@ -236,7 +237,9 @@ class BackendApplication:
         return self._microphone
 
     def transcribe(self, request: AsrRequest) -> TranscriptResult:
-        return self._asr.transcribe(request)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._asr.transcribe(request)
 
     @property
     def imported_media_available(self) -> bool:
@@ -244,11 +247,15 @@ class BackendApplication:
 
     def submit(self, path: str, options: ImportOptions | None = None) -> JobId:
         """Submit an imported-media job through the configured application service."""
-        return self._require_imported_media().submit(path, options)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().submit(path, options)
 
     def status_or_wait(self, job_id: JobId, timeout: float | None = None) -> TerminalResult:
         """Return a terminal imported-media result, waiting up to ``timeout``."""
-        return self._require_imported_media().wait(job_id, timeout=timeout)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().wait(job_id, timeout=timeout)
 
     def wait(self, job_id: JobId, timeout: float | None = None) -> TerminalResult:
         """Expose the imported-media wait contract to application page adapters."""
@@ -256,11 +263,19 @@ class BackendApplication:
 
     def observe(self, job_id: JobId):
         """Observe an imported-media job through the existing service state machine."""
-        return self._require_imported_media().observe(job_id)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().observe(job_id)
 
     def cancel(self, job_id: JobId) -> bool:
         """Request cancellation of an imported-media job."""
-        return self._require_imported_media().cancel(job_id)
+        with self._lifecycle_lock:
+            self._ensure_admission_locked()
+            return self._require_imported_media().cancel(job_id)
+
+    def _ensure_admission_locked(self) -> None:
+        if self._closed or self._closing or self._failed:
+            raise RuntimeUnavailableError("backend application is closed")
 
     def _require_imported_media(self) -> ImportedMediaTranscriptionService:
         if self._imported_media is None:
@@ -406,7 +421,9 @@ def build_application_from_configuration(
             supervisor,
         )
         asr = AsrApplicationService(runtime)
-        microphone = MicrophoneRecordingService(WindowsAudioInputAdapter(), asr)
+        microphone = MicrophoneRecordingService(
+            WindowsAudioInputAdapter(SoundDeviceCaptureProvider()), asr
+        )
         if imported_media is not None:
             if history_port is None and audio_artifact_port is None:
                 imported_service = _build_imported_media_service(imported_media, asr)
@@ -490,15 +507,9 @@ def build_application_from_environment(
     audio_artifact_port: HistoryAudioArtifactPort | None = None,
 ) -> BackendApplication:
     values = environ if environ is not None else os.environ
-    runtime_names = (
-        "VOICEINK_RUNTIME_MANIFEST",
-        "VOICEINK_ARTIFACT_LOCK",
-        "VOICEINK_ARTIFACT_LOCK_SHA256",
-    )
-    packaged = None
-    package_root_configured = values.get("VOICEINK_PACKAGE_ROOT", "").strip()
-    if package_root_configured or not all(values.get(name, "").strip() for name in runtime_names):
-        packaged = load_packaged_runtime(environ=values)
+    # A portable package is self-contained and must take precedence over stale
+    # runtime variables inherited from a developer or previous installation.
+    packaged = load_packaged_runtime(environ=values)
     if packaged is not None:
         configuration = load_runtime_configuration(packaged.manifest, packaged.artifact_lock)
         imported_media = ImportedMediaConfiguration.from_environment(packaged.environment)

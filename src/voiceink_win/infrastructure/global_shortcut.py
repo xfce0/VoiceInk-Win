@@ -91,9 +91,7 @@ class _WindowsShortcutRegistration:
         hotkey_id = id(callback) & 0x7FFFFFFF or 1
         if not user32.RegisterHotKey(None, hotkey_id, modifiers, virtual_key):
             error_code = ctypes.get_last_error()
-            if error_code == ERROR_HOTKEY_ALREADY_REGISTERED:
-                raise ShortcutConflictError("The selected global shortcut is already in use.")
-                raise ShortcutUnavailableError("Windows rejected the global shortcut.")
+            _raise_registration_error(error_code)
         try:
             event_filter = _NativeHotkeyFilter(QAbstractNativeEventFilter, hotkey_id, callback)
             application.installNativeEventFilter(event_filter)
@@ -169,3 +167,9 @@ def _windows_hotkey_parts(shortcut: GlobalShortcut) -> tuple[int, int]:
     if key.startswith("F") and key[1:].isdigit() and 1 <= int(key[1:]) <= 24:
         return flags, 0x70 + int(key[1:]) - 1
     raise ShortcutUnavailableError("The global shortcut key is unsupported.")
+
+
+def _raise_registration_error(error_code: int) -> None:
+    if error_code == ERROR_HOTKEY_ALREADY_REGISTERED:
+        raise ShortcutConflictError("The selected global shortcut is already in use.")
+    raise ShortcutUnavailableError("Windows rejected the global shortcut.")

@@ -37,6 +37,7 @@ from .cancellation import EventCancellationToken
 logger = logging.getLogger(__name__)
 
 DEFAULT_ASR_DEADLINE_SECONDS = 45 * 60
+ASR_RECOVERY_BUDGET_SECONDS = 30.0
 
 
 class MicrophoneAsrScheduler(Protocol):
@@ -64,10 +65,12 @@ class MicrophoneRecordingHandle:
         self._capture = BoundedPcm16Capture(limits)
         self._stop_requested = Event()
         self._cancel_requested = Event()
+        self._capture_done = Event()
         self._done = Event()
         self._control_lock = Lock()
         self._asr_handle: AsrRequestHandle | None = None
         self._result: RecordingResult | None = None
+        self._recovery_pending = False
 
     @property
     def result(self) -> RecordingResult | None:
@@ -78,6 +81,13 @@ class MicrophoneRecordingHandle:
     def is_done(self) -> bool:
         return self._done.is_set()
 
+    @property
+    def recovery_pending(self) -> bool:
+        return self._recovery_pending
+
+    def wait_capture(self) -> None:
+        self._capture_done.wait()
+
     def stop(self) -> None:
         if self._done.is_set():
             return
@@ -85,11 +95,22 @@ class MicrophoneRecordingHandle:
         self._session.stop()
 
     def cancel(self) -> None:
-        if self._done.is_set() or self._cancel_requested.is_set():
+        if self._done.is_set() and not self._recovery_pending:
             return
         self._cancel_requested.set()
-        self._service._cancel_asr(self)
-        self._session.cancel()
+        failure: Exception | None = None
+        try:
+            self._service._cancel_asr(self)
+        except Exception as error:
+            failure = error
+            logger.exception("microphone ASR cancellation failed")
+        try:
+            self._session.cancel()
+        except Exception as error:
+            failure = failure or error
+            logger.exception("microphone capture cancellation failed")
+        if failure is not None:
+            raise failure
 
     def subscribe_level(self, listener: Callable[[InputLevel], None]) -> Callable[[], None]:
         subscribe = getattr(self._session, "subscribe_level", None)
@@ -137,11 +158,13 @@ class MicrophoneRecordingHandle:
             audio = self._capture.finish()
         except CaptureError as error:
             close_error = self._close_session()
+            self._capture_done.set()
             self._finish(_capture_result(close_error or error))
             return
         except Exception:
             logger.exception("microphone capture worker failed")
             self._close_session()
+            self._capture_done.set()
             self._finish(
                 RecordingResult(
                     RecordingState.FAILED,
@@ -154,6 +177,7 @@ class MicrophoneRecordingHandle:
             return
 
         close_error = self._close_session()
+        self._capture_done.set()
         if close_error is not None:
             self._finish(_capture_result(close_error))
             return
@@ -190,6 +214,9 @@ class MicrophoneRecordingHandle:
         except QueueFullError as error:
             self._finish(RecordingResult(RecordingState.REJECTED, error=error))
             return
+        except CancellationError as error:
+            self._finish(_asr_result(error, cancelled=True))
+            return
         except AsrError as error:
             self._finish(RecordingResult(RecordingState.FAILED, error=error))
             return
@@ -211,15 +238,50 @@ class MicrophoneRecordingHandle:
         try:
             handle.await_quiescence()
         except RuntimeRecoveryPendingError as error:
-            result = RecordingResult(RecordingState.FAILED, error=error)
+            self._recovery_pending = True
+            Thread(
+                target=self._reconcile_asr,
+                args=(handle, result or RecordingResult(RecordingState.FAILED, error=error)),
+                name=f"microphone-asr-recovery-{self._request_id}",
+                daemon=True,
+            ).start()
+            return
         else:
             try:
                 handle.release()
             except AsrError as error:
                 result = RecordingResult(RecordingState.FAILED, error=error)
         finally:
-            self._set_asr_handle(None)
+            if not self._recovery_pending:
+                self._set_asr_handle(None)
         self._finish(result or RecordingResult(RecordingState.FAILED))
+
+    def _reconcile_asr(self, handle: AsrRequestHandle, result: RecordingResult) -> None:
+        deadline = time.monotonic() + ASR_RECOVERY_BUDGET_SECONDS
+        while True:
+            try:
+                handle.await_quiescence(deadline=min(deadline, time.monotonic() + 0.5))
+                break
+            except RuntimeRecoveryPendingError:
+                if time.monotonic() >= deadline:
+                    logger.error("microphone ASR recovery exceeded its deadline")
+                    return
+                time.sleep(0.1)
+        while True:
+            try:
+                handle.release()
+                break
+            except RuntimeRecoveryPendingError:
+                if time.monotonic() >= deadline:
+                    logger.error("microphone ASR release exceeded its deadline")
+                    return
+                time.sleep(0.1)
+            except AsrError as error:
+                result = RecordingResult(RecordingState.FAILED, error=error)
+                break
+        self._set_asr_handle(None)
+        self._recovery_pending = False
+        self._finish(result)
 
 
 class MicrophoneRecordingService:
@@ -241,6 +303,10 @@ class MicrophoneRecordingService:
         self._asr_deadline_seconds = asr_deadline_seconds
         self._lock = Lock()
         self._active: MicrophoneRecordingHandle | None = None
+        self._closed = False
+        self._opening = False
+        self._opening_done = Event()
+        self._opening_done.set()
 
     @property
     def status(self) -> MicrophoneStatus:
@@ -262,14 +328,35 @@ class MicrophoneRecordingService:
         deadline: float | None = None,
     ) -> MicrophoneRecordingHandle:
         with self._lock:
-            if self._active is not None and not self._active.is_done:
+            if self._closed:
+                raise CaptureError(CaptureErrorCode.CANCELLED, "microphone service is closed")
+            if self._active is not None and (
+                not self._active.is_done or self._active.recovery_pending
+            ):
                 raise CaptureBusyError()
             capture_deadline = (
                 deadline
                 if deadline is not None
                 else time.monotonic() + self._limits.max_duration_seconds
             )
+            self._opening = True
+            self._opening_done.clear()
+        try:
             session = self._audio_input.open(selection_token, capture_deadline)
+        except BaseException:
+            with self._lock:
+                self._opening = False
+                self._opening_done.set()
+            raise
+        with self._lock:
+            self._opening = False
+            self._opening_done.set()
+            if self._closed:
+                try:
+                    session.close()
+                except Exception:
+                    logger.exception("microphone session cleanup failed after close")
+                raise CaptureError(CaptureErrorCode.CANCELLED, "microphone service is closed")
             handle = MicrophoneRecordingHandle(
                 self,
                 session,
@@ -283,11 +370,18 @@ class MicrophoneRecordingService:
         return handle
 
     def close(self, timeout: float = 5.0) -> None:
-        active = self.active
-        if active is None or active.is_done:
+        deadline = time.monotonic() + timeout
+        with self._lock:
+            self._closed = True
+            active = self._active
+            opening = self._opening
+        if opening:
+            self._opening_done.wait(max(0.0, deadline - time.monotonic()))
+            active = self.active
+        if active is None or (active.is_done and not active.recovery_pending):
             return
-        active.cancel()
-        active.wait(timeout)
+        Thread(target=_cancel_recording, args=(active,), daemon=True).start()
+        active.wait(max(0.0, deadline - time.monotonic()))
 
     def _cancel_asr(self, recording: MicrophoneRecordingHandle) -> None:
         with recording._control_lock:
@@ -297,7 +391,7 @@ class MicrophoneRecordingService:
 
     def _finished(self, recording: MicrophoneRecordingHandle) -> None:
         with self._lock:
-            if self._active is recording:
+            if self._active is recording and not recording.recovery_pending:
                 self._active = None
 
 
@@ -313,3 +407,10 @@ def _capture_result(error: CaptureError) -> RecordingResult:
 def _asr_result(error: AsrError, *, cancelled: bool) -> RecordingResult:
     state = RecordingState.CANCELLED if cancelled else RecordingState.FAILED
     return RecordingResult(state, error=error)
+
+
+def _cancel_recording(recording: MicrophoneRecordingHandle) -> None:
+    try:
+        recording.cancel()
+    except Exception:
+        logger.exception("microphone service cancellation failed during close")

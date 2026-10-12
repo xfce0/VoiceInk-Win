@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import Future
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from enum import StrEnum
-from threading import Lock
+from threading import Event, Lock, Thread
 from typing import Protocol
 
 from voiceink_win.domain import (
@@ -23,6 +24,9 @@ from voiceink_win.domain import (
 )
 
 from .persistence import PersistenceService
+
+HOTKEY_PERSISTENCE_TIMEOUT_SECONDS = 5.0
+HOTKEY_RECONCILIATION_TIMEOUT_SECONDS = 30.0
 
 
 class RecordingTogglePort(Protocol):
@@ -62,6 +66,7 @@ class GlobalToggleShortcutService:
         self._shortcut = shortcut or GlobalShortcut()
         self._registration: GlobalShortcutRegistration | None = None
         self._registration_requested = False
+        self._closed = False
         self._status = GlobalShortcutStatus(self._shortcut, ShortcutAvailability.DISABLED)
 
     @property
@@ -69,6 +74,8 @@ class GlobalToggleShortcutService:
         return self._status
 
     def register(self) -> GlobalShortcutStatus:
+        if self._closed:
+            return self._set_status(ShortcutAvailability.DISABLED, "closed")
         if self._registration is not None:
             return self._status
         self._registration_requested = True
@@ -100,6 +107,10 @@ class GlobalToggleShortcutService:
             self._registration = None
         return self._set_status(ShortcutAvailability.DISABLED)
 
+    def close(self) -> GlobalShortcutStatus:
+        self._closed = True
+        return self.unregister()
+
     def update_shortcut(self, value: str) -> GlobalShortcutStatus:
         shortcut = GlobalShortcut(value or DEFAULT_GLOBAL_TOGGLE_SHORTCUT)
         return self.replace_shortcut(shortcut)
@@ -114,6 +125,8 @@ class GlobalToggleShortcutService:
 
     def replace_shortcut(self, shortcut: GlobalShortcut) -> GlobalShortcutStatus:
         """Replace a registration and restore the previous one on failure."""
+        if self._closed:
+            return self._set_status(ShortcutAvailability.DISABLED, "closed")
         if shortcut == self._shortcut:
             if self._registration is None and self._registration_requested:
                 return self.register()
@@ -175,12 +188,25 @@ class GlobalHotkeySettingsService:
         self,
         shortcut_service: GlobalToggleShortcutService,
         persistence: PersistenceService,
+        dispatcher: Callable[[Callable[[], GlobalShortcutStatus]], GlobalShortcutStatus]
+        | None = None,
     ) -> None:
         self._shortcut_service = shortcut_service
         self._persistence = persistence
         self._committed = GlobalShortcut()
-        self._generation = 0
         self._lock = Lock()
+        self._operation_lock = Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hotkey-settings")
+        self._dispatcher = dispatcher
+        self._reconciliation: Event | None = None
+        self._reconciliation_result: GlobalShortcutStatus | None = None
+        self._closed = False
+
+    def set_dispatcher(
+        self,
+        dispatcher: Callable[[Callable[[], GlobalShortcutStatus]], GlobalShortcutStatus],
+    ) -> None:
+        self._dispatcher = dispatcher
 
     @property
     def status(self) -> GlobalShortcutStatus:
@@ -195,91 +221,157 @@ class GlobalHotkeySettingsService:
         except ShortcutValidationError:
             shortcut = GlobalShortcut()
             warning = "invalid_stored_value"
-        with self._lock:
-            self._committed = shortcut
-            self._generation += 1
-        self._shortcut_service.configure_shortcut(shortcut.value)
-        status = self._shortcut_service.register()
+        with self._operation_lock:
+            with self._lock:
+                self._committed = shortcut
+            self._shortcut_service.configure_shortcut(shortcut.value)
+            status = self._shortcut_service.register()
         if warning:
             return GlobalShortcutStatus(status.shortcut, status.availability, warning)
         return status
 
     def update(self, value: str) -> Future[GlobalShortcutStatus]:
-        result: Future[GlobalShortcutStatus] = Future()
         try:
             candidate = GlobalShortcut(value)
         except ShortcutValidationError as error:
+            result: Future[GlobalShortcutStatus] = Future()
             result.set_exception(error)
             return result
-
-        with self._lock:
-            previous = self._committed
-            self._generation += 1
-            generation = self._generation
-        status = self._shortcut_service.replace_shortcut(candidate)
-        if status.availability is not ShortcutAvailability.REGISTERED:
-            result.set_result(status)
-            return result
-        try:
-            persistence_future = self._persistence.update_settings(
-                {"hotkeys.start_stop": candidate.value}
-            )
-        except BaseException as error:
-            self._finish_failed_update(result, generation, previous, error)
-            return result
-        persistence_future.add_done_callback(
-            lambda future: self._finish_persistence(result, generation, previous, candidate, future)
-        )
-        return result
+        return self._executor.submit(self._update_serial, candidate)
 
     def close(self) -> None:
-        self._shortcut_service.unregister()
+        with self._lock:
+            self._closed = True
+        try:
+            self._dispatch(self._shortcut_service.close)
+        finally:
+            invalidate = getattr(self._dispatcher, "invalidate", None)
+            if invalidate is not None:
+                invalidate()
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
-    def _finish_persistence(
+    def _update_serial(self, candidate: GlobalShortcut) -> GlobalShortcutStatus:
+        with self._operation_lock:
+            with self._lock:
+                if self._closed:
+                    return GlobalShortcutStatus(candidate, ShortcutAvailability.DISABLED, "closed")
+                if self._reconciliation is not None:
+                    return GlobalShortcutStatus(
+                        candidate,
+                        ShortcutAvailability.UNAVAILABLE,
+                        "persistence_pending",
+                    )
+                previous = self._committed
+            status = self._dispatch(lambda: self._shortcut_service.replace_shortcut(candidate))
+            if status.availability is not ShortcutAvailability.REGISTERED:
+                return status
+            try:
+                persistence_future = self._persistence.update_settings(
+                    {"hotkeys.start_stop": candidate.value}
+                )
+                try:
+                    persistence_future.result(timeout=HOTKEY_PERSISTENCE_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    reconciliation = Event()
+                    with self._lock:
+                        self._reconciliation = reconciliation
+                        self._reconciliation_result = None
+                    Thread(
+                        target=self._reconcile_persistence,
+                        args=(persistence_future, candidate, previous, reconciliation),
+                        name="hotkey-persistence-reconciliation",
+                        daemon=True,
+                    ).start()
+                    if reconciliation.wait(HOTKEY_RECONCILIATION_TIMEOUT_SECONDS):
+                        with self._lock:
+                            reconciled = self._reconciliation_result
+                        if reconciled is not None:
+                            return reconciled
+                    return GlobalShortcutStatus(
+                        candidate,
+                        ShortcutAvailability.UNAVAILABLE,
+                        "persistence_pending",
+                    )
+            except BaseException:
+                restored = self._dispatch(lambda: self._shortcut_service.replace_shortcut(previous))
+                if restored.availability is ShortcutAvailability.REGISTERED:
+                    return GlobalShortcutStatus(
+                        restored.shortcut,
+                        restored.availability,
+                        "persistence_error",
+                    )
+                return GlobalShortcutStatus(
+                    restored.shortcut,
+                    ShortcutAvailability.UNAVAILABLE,
+                    "restoration_error",
+                )
+            with self._lock:
+                self._committed = candidate
+            return self._dispatch(lambda: self._shortcut_service.status)
+
+    def _reconcile_persistence(
         self,
-        result: Future[GlobalShortcutStatus],
-        generation: int,
-        previous: GlobalShortcut,
-        candidate: GlobalShortcut,
         persistence_future: Future[Settings],
+        candidate: GlobalShortcut,
+        previous: GlobalShortcut,
+        reconciliation: Event,
     ) -> None:
+        status = GlobalShortcutStatus(
+            previous,
+            ShortcutAvailability.UNAVAILABLE,
+            "reconciliation_error",
+        )
         try:
             persistence_future.result()
-        except BaseException as error:
-            self._finish_failed_update(result, generation, previous, error)
-            return
-        with self._lock:
-            if generation == self._generation:
-                self._committed = candidate
-        if not result.done():
-            result.set_result(self._shortcut_service.status)
-
-    def _finish_failed_update(
-        self,
-        result: Future[GlobalShortcutStatus],
-        generation: int,
-        previous: GlobalShortcut,
-        error: BaseException,
-    ) -> None:
-        del error
-        with self._lock:
-            current = generation == self._generation
-        if current:
-            restored = self._shortcut_service.replace_shortcut(previous)
-            if restored.availability is ShortcutAvailability.REGISTERED:
-                restored = GlobalShortcutStatus(
+        except BaseException:
+            with self._lock:
+                closed = self._closed
+            if not closed:
+                try:
+                    restored = self._dispatch(
+                        lambda: self._shortcut_service.replace_shortcut(previous)
+                    )
+                except BaseException:
+                    restored = GlobalShortcutStatus(
+                        previous,
+                        ShortcutAvailability.UNAVAILABLE,
+                        "restoration_error",
+                    )
+                status = GlobalShortcutStatus(
                     restored.shortcut,
                     restored.availability,
                     "persistence_error",
                 )
             else:
-                restored = GlobalShortcutStatus(
-                    restored.shortcut,
-                    ShortcutAvailability.UNAVAILABLE,
-                    "restoration_error",
+                status = GlobalShortcutStatus(
+                    previous,
+                    ShortcutAvailability.DISABLED,
+                    "closed",
                 )
-            if not result.done():
-                result.set_result(restored)
-            return
-        if not result.done():
-            result.set_result(self._shortcut_service.status)
+        else:
+            with self._lock:
+                closed = self._closed
+                if not closed:
+                    self._committed = candidate
+            if closed:
+                status = GlobalShortcutStatus(candidate, ShortcutAvailability.DISABLED, "closed")
+            else:
+                try:
+                    status = self._dispatch(lambda: self._shortcut_service.status)
+                except BaseException:
+                    status = GlobalShortcutStatus(
+                        candidate,
+                        ShortcutAvailability.DISABLED,
+                        "closed",
+                    )
+        finally:
+            with self._lock:
+                if self._reconciliation is reconciliation:
+                    self._reconciliation = None
+                self._reconciliation_result = status
+            reconciliation.set()
+
+    def _dispatch(self, operation: Callable[[], GlobalShortcutStatus]) -> GlobalShortcutStatus:
+        if self._dispatcher is None:
+            return operation()
+        return self._dispatcher(operation)

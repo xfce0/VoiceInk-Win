@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import voiceink_win.infrastructure.model_metadata as model_metadata
 from voiceink_win.infrastructure import discover_model_metadata
 
 
@@ -94,3 +96,37 @@ def test_discovery_keeps_trust_but_reports_missing_runtime_artifact(tmp_path: Pa
     assert metadata.trusted is True
     assert metadata.available is False
     assert metadata.safe_path == "<runtime>/models/parakeet.gguf"
+
+
+def test_discovery_prefers_packaged_runtime_over_complete_legacy_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    package_executable = tmp_path / "package" / "runtime" / "nemo-speech.exe"
+    package_model = tmp_path / "package" / "models" / "parakeet.gguf"
+    package_executable.parent.mkdir(parents=True)
+    package_model.parent.mkdir(parents=True)
+    package_executable.write_bytes(b"package-runtime")
+    package_model.write_bytes(b"package-model")
+    packaged = SimpleNamespace(manifest=object(), artifact_lock=object())
+    loaded = SimpleNamespace(
+        model_artifact=SimpleNamespace(version="package-model-1"),
+        model_id="package-model-id",
+        backend="cpu",
+        executable=package_executable,
+        model=package_model,
+        lock=SimpleNamespace(install_root=tmp_path / "package"),
+    )
+    monkeypatch.setattr(model_metadata, "load_packaged_runtime", lambda environ: packaged)
+    monkeypatch.setattr(
+        model_metadata,
+        "load_runtime_manifest",
+        lambda manifest, lock: loaded,
+    )
+
+    legacy_root = tmp_path / "legacy"
+    legacy_root.mkdir()
+    metadata = model_metadata.discover_model_metadata(environ=_runtime_environment(legacy_root))
+
+    assert metadata.model_id == "package-model-id"
+    assert metadata.version == "package-model-1"
+    assert metadata.safe_path == "<package>/models/parakeet.gguf"

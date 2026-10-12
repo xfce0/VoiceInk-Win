@@ -33,22 +33,17 @@ def unavailable_model_metadata() -> ModelMetadata:
 def discover_model_metadata(*, environ: Mapping[str, str] | None = None) -> ModelMetadata:
     """Read existing package/runtime metadata and return only safe display values."""
     values = environ if environ is not None else os.environ
-    runtime_names = (
-        "VOICEINK_RUNTIME_MANIFEST",
-        "VOICEINK_ARTIFACT_LOCK",
-        "VOICEINK_ARTIFACT_LOCK_SHA256",
-    )
     try:
-        package_root_configured = values.get("VOICEINK_PACKAGE_ROOT", "").strip()
-        packaged = None
-        if package_root_configured or not all(
-            values.get(name, "").strip() for name in runtime_names
-        ):
-            packaged = load_packaged_runtime(environ=values)
+        packaged = load_packaged_runtime(environ=values)
         if packaged is not None:
             loaded = load_runtime_manifest(packaged.manifest, packaged.artifact_lock)
             return _metadata_from_loaded(loaded, label="package")
 
+        runtime_names = (
+            "VOICEINK_RUNTIME_MANIFEST",
+            "VOICEINK_ARTIFACT_LOCK",
+            "VOICEINK_ARTIFACT_LOCK_SHA256",
+        )
         if not all(values.get(name, "").strip() for name in runtime_names):
             return unavailable_model_metadata()
         loaded = load_runtime_manifest(

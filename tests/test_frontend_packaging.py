@@ -238,7 +238,7 @@ def test_frontend_package_smoke_validates_x64_gui_pe(tmp_path: Path) -> None:
 
     data[0x44:0x46] = (0x14C).to_bytes(2, "little")
     executable.write_bytes(data)
-    with pytest.raises(ValueError, match="expected x64 PE machine"):
+    with pytest.raises(ValueError, match="expected PE machine"):
         validate_executable(executable)
 
 

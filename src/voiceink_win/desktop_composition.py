@@ -147,6 +147,12 @@ class _DesktopComposition:
                 readiness_timeout=self.readiness_timeout,
             )
             backend.start()
+            if not backend.imported_media_available:
+                self._close_backend_safely(backend)
+                self.transcribe_controller.mark_unavailable(
+                    "Imported media transcription is unavailable: configuration is incomplete."
+                )
+                return
             self.recorder.attach_service(getattr(backend, "microphone", None))
         except (
             ConfigurationError,
@@ -173,13 +179,6 @@ class _DesktopComposition:
             logger.exception("unexpected imported-media bootstrap failure")
             self.transcribe_controller.mark_unavailable(
                 "Imported media transcription is unavailable: startup failed."
-            )
-            return
-
-        if not backend.imported_media_available:
-            self._close_backend_safely(backend)
-            self.transcribe_controller.mark_unavailable(
-                "Imported media transcription is unavailable: configuration is incomplete."
             )
             return
 
@@ -251,10 +250,11 @@ def _build_desktop_composition(readiness_timeout: float | None) -> DesktopCompos
         unavailable_message="Loading imported-media transcription runtime...",
     )
     controller = ShellController.unavailable()
-    global_shortcut = GlobalToggleShortcutService(controller, create_global_shortcut_port())
+    recorder = MicrophoneRecorderController()
+    global_shortcut = GlobalToggleShortcutService(recorder, create_global_shortcut_port())
     composition = _DesktopComposition(
         controller=controller,
-        recorder=MicrophoneRecorderController(),
+        recorder=recorder,
         transcribe_controller=transcribe_controller,
         persistence=persistence,
         artifact_cleanup=artifacts.delete,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread, Timer
 
 from voiceink_win.domain import (
@@ -16,11 +15,13 @@ from voiceink_win.domain import (
     CaptureError,
     CaptureErrorCode,
     InputLevel,
+    MicrophoneAvailability,
     MicrophoneCapability,
     RecorderSnapshot,
     RecorderState,
     RecordingResult,
     RecordingState,
+    RuntimeRecoveryPendingError,
 )
 
 from .microphone_service import MicrophoneRecordingHandle, MicrophoneRecordingService
@@ -39,10 +40,10 @@ class MicrophoneRecorderController:
 
     def __init__(self, service: MicrophoneRecordingService | None = None) -> None:
         self._lock = Lock()
+        self._command_lock = Lock()
         self._service = None
         self._snapshot = RecorderSnapshot()
         self._listeners: list[RecorderListener] = []
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="microphone-command")
         self._generation = 0
         self._handle: MicrophoneRecordingHandle | None = None
         self._pending_cancel = False
@@ -77,7 +78,10 @@ class MicrophoneRecorderController:
         status = service.status
         state = (
             RecorderState.IDLE
-            if status.capability is MicrophoneCapability.SUPPORTED
+            if (
+                status.capability is MicrophoneCapability.SUPPORTED
+                and status.availability is MicrophoneAvailability.AVAILABLE
+            )
             else RecorderState.UNAVAILABLE
         )
         with self._lock:
@@ -94,13 +98,20 @@ class MicrophoneRecorderController:
                 return False
             if self._snapshot.state not in {RecorderState.IDLE, *TERMINAL_RECORDER_STATES}:
                 return False
+            if self._handle is not None:
+                return False
             self._generation += 1
             generation = self._generation
             self._pending_cancel = False
             self._pending_stop = False
             service = self._service
         self._publish(RecorderSnapshot(RecorderState.REQUESTING_ACCESS, generation=generation))
-        self._executor.submit(self._start_worker, service, generation, selection_token)
+        Thread(
+            target=self._start_worker,
+            args=(service, generation, selection_token),
+            name=f"microphone-command-start-{generation}",
+            daemon=True,
+        ).start()
         return True
 
     def stop(self) -> bool:
@@ -116,18 +127,19 @@ class MicrophoneRecorderController:
         self._publish(RecorderSnapshot(RecorderState.STOPPING, generation=generation))
         if handle is None:
             return True
-        try:
-            handle.stop()
-        except Exception:
-            logger.exception("microphone stop command failed")
-            self._publish_error(generation, "microphone stop failed")
-            return False
-        self._publish(RecorderSnapshot(RecorderState.PROCESSING, generation=generation))
+        Thread(
+            target=self._stop_worker,
+            args=(handle, generation),
+            name=f"microphone-command-stop-{generation}",
+            daemon=True,
+        ).start()
         return True
 
     def cancel(self) -> bool:
         with self._lock:
-            if self._snapshot.state not in ACTIVE_RECORDER_STATES:
+            if self._snapshot.state not in ACTIVE_RECORDER_STATES and not (
+                self._snapshot.state is RecorderState.RECOVERY_PENDING and self._handle is not None
+            ):
                 return False
             self._pending_cancel = True
             self._pending_stop = False
@@ -135,20 +147,27 @@ class MicrophoneRecorderController:
             generation = self._generation
         self._publish(RecorderSnapshot(RecorderState.CANCEL_REQUESTED, generation=generation))
         if handle is not None:
-            try:
-                handle.cancel()
-            except Exception:
-                logger.exception("microphone cancel command failed")
-                self._publish_error(generation, "microphone cancellation failed")
+            Thread(
+                target=self._cancel_worker,
+                args=(handle, generation),
+                name=f"microphone-command-cancel-{generation}",
+                daemon=True,
+            ).start()
         return True
 
     def dismiss(self) -> bool:
         with self._lock:
-            if self._snapshot.state in ACTIVE_RECORDER_STATES:
+            if (
+                self._snapshot.state in ACTIVE_RECORDER_STATES
+                or self._handle is not None
+                or self._snapshot.state is RecorderState.RECOVERY_PENDING
+            ):
                 return False
             self._clear_level_subscription_locked()
             generation = self._generation
-        self._publish(RecorderSnapshot(self.snapshot.state, generation=generation))
+            state = self._snapshot.state
+        next_state = RecorderState.IDLE if state in TERMINAL_RECORDER_STATES else state
+        self._publish(RecorderSnapshot(next_state, generation=generation))
         return True
 
     def close(self, deadline: float = 5.0) -> None:
@@ -161,8 +180,13 @@ class MicrophoneRecorderController:
             handle = self._handle
             generation = self._generation
         if handle is not None:
+            Thread(
+                target=self._cancel_handle,
+                args=(handle,),
+                name=f"microphone-command-close-{generation}",
+                daemon=True,
+            ).start()
             try:
-                handle.cancel()
                 handle.wait(deadline)
             except Exception:
                 logger.exception("microphone recorder did not close cleanly")
@@ -171,13 +195,66 @@ class MicrophoneRecorderController:
                 )
         with self._lock:
             self._clear_level_subscription_locked()
-        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def start_recording(self) -> bool:
         return self.start()
 
     def stop_recording(self) -> bool:
         return self.stop()
+
+    def _stop_worker(self, handle: MicrophoneRecordingHandle, generation: int) -> None:
+        with self._command_lock:
+            try:
+                handle.stop()
+            except Exception:
+                logger.exception("microphone stop command failed")
+                self._publish_if_current(
+                    RecorderSnapshot(
+                        RecorderState.RECOVERY_PENDING,
+                        message="microphone stop is still pending",
+                        generation=generation,
+                    ),
+                    generation,
+                )
+                return
+        try:
+            handle.wait_capture()
+        except Exception:
+            logger.exception("microphone capture completion wait failed")
+            return
+        with self._lock:
+            should_publish = (
+                generation == self._generation
+                and self._snapshot.state is RecorderState.STOPPING
+                and self._handle is handle
+            )
+        if should_publish and not handle.is_done:
+            self._publish_if_current(
+                RecorderSnapshot(RecorderState.PROCESSING, generation=generation),
+                generation,
+            )
+
+    def _cancel_worker(self, handle: MicrophoneRecordingHandle, generation: int) -> None:
+        with self._command_lock:
+            try:
+                handle.cancel()
+            except Exception:
+                logger.exception("microphone cancel command failed")
+                self._publish_if_current(
+                    RecorderSnapshot(
+                        RecorderState.RECOVERY_PENDING,
+                        message="microphone cancellation is still pending",
+                        generation=generation,
+                    ),
+                    generation,
+                )
+
+    def _cancel_handle(self, handle: MicrophoneRecordingHandle) -> None:
+        with self._command_lock:
+            try:
+                handle.cancel()
+            except Exception:
+                logger.exception("microphone recorder cancellation failed during close")
 
     def _start_worker(
         self,
@@ -204,20 +281,42 @@ class MicrophoneRecorderController:
                 pending_stop = self._pending_stop
                 self._last_level_timestamp = -1.0
         self._subscribe_levels(handle, generation)
-        if cancel:
-            self._publish_if_current(
-                RecorderSnapshot(RecorderState.CANCEL_REQUESTED, generation=generation), generation
-            )
-            handle.cancel()
-        elif pending_stop:
-            self._publish_if_current(
-                RecorderSnapshot(RecorderState.PROCESSING, generation=generation), generation
-            )
-            handle.stop()
-        else:
-            self._publish_if_current(
-                RecorderSnapshot(RecorderState.RECORDING_SILENT, generation=generation), generation
-            )
+        with self._command_lock:
+            if cancel:
+                try:
+                    self._publish_if_current(
+                        RecorderSnapshot(RecorderState.CANCEL_REQUESTED, generation=generation),
+                        generation,
+                    )
+                    handle.cancel()
+                except Exception:
+                    logger.exception("microphone cancellation after start failed")
+                    self._publish_if_current(
+                        RecorderSnapshot(
+                            RecorderState.RECOVERY_PENDING,
+                            message="microphone cancellation is still pending",
+                            generation=generation,
+                        ),
+                        generation,
+                    )
+            elif pending_stop:
+                try:
+                    handle.stop()
+                except Exception:
+                    logger.exception("microphone stop after start failed")
+                    self._publish_if_current(
+                        RecorderSnapshot(
+                            RecorderState.RECOVERY_PENDING,
+                            message="microphone stop is still pending",
+                            generation=generation,
+                        ),
+                        generation,
+                    )
+            else:
+                self._publish_if_current(
+                    RecorderSnapshot(RecorderState.RECORDING_SILENT, generation=generation),
+                    generation,
+                )
         Thread(
             target=self._watch_result,
             args=(handle, generation),
@@ -288,20 +387,46 @@ class MicrophoneRecorderController:
         self._publish(RecorderSnapshot(RecorderState.RECORDING_SILENT, generation=generation))
 
     def _watch_result(self, handle: MicrophoneRecordingHandle, generation: int) -> None:
-        try:
-            result = handle.wait()
-        except Exception:
-            logger.exception("microphone result wait failed")
-            self._publish_error(generation, "microphone recording failed")
+        while True:
+            try:
+                result = handle.wait()
+            except Exception:
+                logger.exception("microphone result wait failed")
+                self._publish_if_current(
+                    RecorderSnapshot(
+                        RecorderState.RECOVERY_PENDING,
+                        message="microphone completion is still pending",
+                        generation=generation,
+                    ),
+                    generation,
+                )
+                if handle.is_done:
+                    with self._lock:
+                        if generation == self._generation:
+                            self._handle = None
+                            self._clear_level_subscription_locked()
+                    return
+                time.sleep(0.1)
+                continue
+            self._publish_result(generation, result, handle)
             return
-        self._publish_result(generation, result)
 
-    def _publish_result(self, generation: int, result: RecordingResult) -> None:
+    def _publish_result(
+        self,
+        generation: int,
+        result: RecordingResult,
+        handle: MicrophoneRecordingHandle,
+    ) -> None:
+        recovery_pending = handle.recovery_pending
         with self._lock:
             if generation != self._generation:
                 return
-            self._handle = None
-            self._clear_level_subscription_locked()
+            was_stopping = self._snapshot.state is RecorderState.STOPPING
+            if not recovery_pending:
+                self._handle = None
+                self._clear_level_subscription_locked()
+        if was_stopping and result.state is not RecordingState.CANCELLED:
+            self._publish(RecorderSnapshot(RecorderState.PROCESSING, generation=generation))
         if result.state is RecordingState.CANCELLED:
             snapshot = RecorderSnapshot(RecorderState.CANCELLED, generation=generation)
         elif result.state is RecordingState.EMPTY:
@@ -316,7 +441,7 @@ class MicrophoneRecorderController:
         elif (
             isinstance(result.error, CaptureError)
             and result.error.code is CaptureErrorCode.CLEANUP_FAILED
-        ):
+        ) or (recovery_pending and isinstance(result.error, RuntimeRecoveryPendingError)):
             snapshot = RecorderSnapshot(
                 RecorderState.RECOVERY_PENDING,
                 message="microphone cleanup is still pending",
