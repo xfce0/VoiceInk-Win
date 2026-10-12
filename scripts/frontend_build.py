@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
@@ -27,17 +26,12 @@ SIDEBAR_ICON_SOURCE = ROOT / "packaging" / "voiceink-shell-windows-x64" / "voice
 ICON_BUILDER = ROOT / "scripts" / "build_icon.py"
 ICON_OUTPUT = ICON_BUILD_DIR / "voiceink-transcribe.ico"
 RUNTIME_ICON_DESTINATION = "."
-PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README.txt"
+PACKAGE_README = ROOT / "packaging" / "voiceink-shell-windows-x64" / "README-frontend.txt"
 VALIDATOR = ROOT / "scripts" / "frontend_package_smoke.py"
 ENTRYPOINT = ROOT / "scripts" / "frontend_entrypoint.py"
 MIGRATION_SOURCE = ROOT / "src" / "voiceink_win" / "infrastructure" / "migrations"
 MIGRATION_DESTINATION = "voiceink_win/infrastructure/migrations"
-EXPECTED_OUTPUTS = {
-    "README.txt",
-    "voiceink-shell.exe",
-    "voiceink-shell-smoke.exe",
-}
-SMOKE_TIMEOUT_SECONDS = 120
+EXPECTED_OUTPUTS = {"README.txt", "voiceink-shell.exe"}
 
 
 class FrontendBuildError(RuntimeError):
@@ -164,10 +158,7 @@ def _generate_icon(python: str) -> None:
 
 
 def _validate_package(python: str, profile: WindowsPlatform) -> None:
-    for name, subsystem in (
-        ("voiceink-shell.exe", "gui"),
-        ("voiceink-shell-smoke.exe", "console"),
-    ):
+    for name in ("voiceink-shell.exe",):
         executable = DIST / name
         if not executable.is_file() or executable.stat().st_size == 0:
             raise FrontendBuildError(f"PyInstaller did not produce a non-empty {executable}")
@@ -176,8 +167,6 @@ def _validate_package(python: str, profile: WindowsPlatform) -> None:
                 python,
                 str(VALIDATOR),
                 str(executable),
-                "--subsystem",
-                subsystem,
                 "--architecture",
                 profile.target_architecture,
             ]
@@ -195,79 +184,6 @@ def _validate_package(python: str, profile: WindowsPlatform) -> None:
         raise FrontendBuildError(f"Unexpected entries in dist/: {', '.join(unexpected)}")
 
 
-def _format_process_output(output: str | bytes | None) -> str:
-    if output is None:
-        return "<no output>"
-    if isinstance(output, bytes):
-        output = output.decode("utf-8", errors="replace")
-    return output.strip() or "<no output>"
-
-
-def _terminate_smoke_process(process: subprocess.Popen[str]) -> None:
-    if os.name == "nt":
-        try:
-            result = subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-            if result.returncode == 0:
-                return
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    try:
-        process.kill()
-    except ProcessLookupError:
-        pass
-
-
-def _run_smoke() -> None:
-    environment = os.environ.copy()
-    environment["QT_QPA_PLATFORM"] = "offscreen"
-    command = [str(DIST / "voiceink-shell-smoke.exe"), "--smoke"]
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        close_fds=True,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=SMOKE_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        _terminate_smoke_process(process)
-        cleanup_error = None
-        try:
-            stdout, stderr = process.communicate(timeout=10)
-        except subprocess.TimeoutExpired as error_after_cleanup:
-            _terminate_smoke_process(process)
-            cleanup_error = error_after_cleanup
-            stdout, stderr = "", ""
-        stdout = stdout or error.stdout
-        stderr = stderr or error.stderr
-        cleanup_note = (
-            "\nProcess cleanup did not finish within 10 seconds."
-            if cleanup_error is not None
-            else ""
-        )
-        raise FrontendBuildError(
-            f"Frontend smoke timed out after {SMOKE_TIMEOUT_SECONDS} seconds.\n"
-            f"stdout:\n{_format_process_output(stdout)}\n"
-            f"stderr:\n{_format_process_output(stderr)}{cleanup_note}"
-        ) from error
-
-    if process.returncode != 0:
-        raise FrontendBuildError(
-            f"Frontend smoke failed with exit code {process.returncode}.\n"
-            f"stdout:\n{_format_process_output(stdout)}\n"
-            f"stderr:\n{_format_process_output(stderr)}"
-        )
-
-
 def main() -> int:
     try:
         profile = _require_supported_host()
@@ -279,9 +195,7 @@ def main() -> int:
         python = sys.executable
         _generate_icon(python)
         _build_executable("voiceink-shell", "--windowed", python)
-        _build_executable("voiceink-shell-smoke", "--console", python)
         _validate_package(python, profile)
-        _run_smoke()
     except FrontendBuildError as error:
         print(f"frontend build: {error}", file=sys.stderr)
         return 1

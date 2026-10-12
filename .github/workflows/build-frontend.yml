@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build Windows x64 GUI and smoke executables
+    name: Build Windows x64 GUI executable
     runs-on: windows-2022
     timeout-minutes: 20
 
@@ -29,12 +29,12 @@ jobs:
           architecture: x64
           cache: pip
 
-      - name: Build frontend shell executables
+      - name: Build frontend shell
         shell: bash
-        run: make build
+        run: make frontend-build
 
       - name: Upload frontend shell artifact
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
         with:
-          name: voiceink-shell-windows-x64
+          name: voiceink-shell-windows-x64-frontend
           path: dist/

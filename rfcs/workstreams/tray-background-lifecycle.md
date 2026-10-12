@@ -48,10 +48,9 @@ The current repository has the following lifecycle seams and gaps:
   idempotent, drains the transcribe controller, closes the backend, history
   deletion, and persistence. It must run only for terminal shutdown, not for a
   user-requested hide.
-- `scripts/frontend_build.py` already builds `voiceink-shell.exe` with
-  PyInstaller `--windowed` and `voiceink-shell-smoke.exe` with `--console`.
-  `scripts/frontend_package_smoke.py` checks the PE subsystem. This distinction
-  must remain a regression contract.
+- `scripts/frontend_build.py` builds `voiceink-shell.exe` with PyInstaller
+  `--windowed`; `scripts/frontend_package_smoke.py` checks its PE subsystem.
+  Release validation runs this same executable with `--package-smoke`.
 - The portable package also writes `voiceink-shell.cmd`. A command-script
   launcher is a likely source of a transient console when launched from
   Explorer; the canonical user launch must therefore be the GUI executable,
@@ -295,8 +294,8 @@ Requirements:
 - a crash cannot permanently block relaunch; the kernel-owned mutex naturally
   satisfies this better than a manually deleted marker file;
 - the lease identity is stable across source and packaged launches of the same
-  user-facing product; smoke executables must use a separate identity or remain
-  excluded from interactive singleton validation; and
+  user-facing product; package validation must not create a separate
+  interactive product identity; and
 - the first implementation does not need to activate the existing window from
   a second launch. That IPC/activation enhancement is explicitly deferred.
 
@@ -305,17 +304,17 @@ kernel operation.
 
 ### Packaging and launch contract
 
-The build contract remains deliberately split:
+The build contract produces one GUI executable; package validation uses its
+existing `--package-smoke` mode rather than a second executable:
 
 | Artifact | PyInstaller mode | Purpose | User-facing |
 |---|---|---|---|
-| `voiceink-shell.exe` | `--onefile --windowed` | Installed/portable tray application | Yes |
-| `voiceink-shell-smoke.exe` | `--onefile --console` | Offscreen CI smoke test | No |
+| `voiceink-shell.exe` | `--onefile --windowed` | Installed/portable tray application and package validation | Yes |
 
 The GUI artifact must continue to be validated as an x64 PE32+ image with
-Windows subsystem `2` (`IMAGE_SUBSYSTEM_WINDOWS_GUI`). The smoke artifact may
-remain subsystem `3` and is never the launch target in documentation, a
-shortcut, or a package association.
+Windows subsystem `2` (`IMAGE_SUBSYSTEM_WINDOWS_GUI`). Release packaging starts
+the same GUI executable with `--package-smoke` from a relocated path with
+spaces and requires a successful backend readiness check.
 
 The portable package can retain package-relative runtime discovery because the
 application already resolves `voiceink-package.json` beside
@@ -366,14 +365,12 @@ or tests.
 
 ### Packaging contract tests
 
-- Source-level build tests assert that the GUI command contains
-  `--windowed`, the smoke command contains `--console`, and both retain the
-  expected runtime data and icon inputs.
+- Source-level build tests assert that the GUI command contains `--windowed`
+  and retains the expected runtime data and icon inputs.
 - PE validation asserts x64 PE32+ plus subsystem `2` for
-  `voiceink-shell.exe` and subsystem `3` only for `voiceink-shell-smoke.exe`.
+  `voiceink-shell.exe`.
 - Package tests assert that the documented/canonical launch target is the GUI
-  executable and that no user-facing shortcut or package instruction points to
-  the console smoke artifact.
+  executable and that the release package uses `--package-smoke` for validation.
 - A packaged runtime started from a path containing spaces still discovers the
   package descriptor and starts without requiring a command-shell environment
   variable.
@@ -406,9 +403,9 @@ x64 interactive-desktop validation has passed:
    conflict.
 7. Exercise Windows logoff/shutdown or application termination notification and
    confirm the same cleanup path runs without leaving a child runtime process.
-8. Run the existing relocation/package smoke after the lifecycle checks. The
-   smoke executable remains a console/offscreen CI binary and is not evidence
-   for GUI tray behavior.
+8. Run the existing relocation/package smoke after the lifecycle checks. It
+    launches `voiceink-shell.exe --package-smoke` from the relocated package;
+    this is backend evidence, not GUI tray behavior.
 
 The Windows evidence must record OS build, Python version, x64 architecture,
 PySide6/PyInstaller pins, artifact names, launch method, and the observed
@@ -425,7 +422,7 @@ This RFC can move to Approved when:
   with its lifetime moved from `MainWindow` to the session coordinator;
 - the single-instance policy and no-IPC v1 limitation are accepted;
 - the direct GUI-executable launch contract is accepted, including the
-  `--windowed`/`--console` split and `.cmd` risk treatment; and
+  the `--windowed` launch and `.cmd` risk treatment; and
 - all open questions below have an explicit decision or are recorded as
   implementation constraints.
 

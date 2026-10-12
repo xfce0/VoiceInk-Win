@@ -26,25 +26,26 @@ def test_windows_release_workflow_uses_tracked_pins_and_publishes_bundle() -> No
 
     assert "runs-on: windows-2022" in workflow
     assert "architecture: x64" in workflow
-    assert "make windows-release-smoke" in workflow
+    assert "make build" in workflow
     assert ".github/native-smoke/artifact-lock.template.json" in makefile
     assert "scripts/windows_release_package.py" in makefile
     assert "voiceink-shell-windows-x64.zip" in workflow
-    assert "windows-release-smoke.json" in workflow
+    assert "windows-release-package.json" in workflow
     assert "actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808" in workflow
     assert "secrets." not in workflow
     assert "vars." not in workflow
 
 
-def test_windows_release_runner_owns_lock_download_and_relocation_contract() -> None:
+def test_windows_release_runner_owns_lock_download_and_package_contract() -> None:
     source = RUNNER.read_text(encoding="utf-8")
 
     assert "load_native_smoke_lock(lock_path)" in source
     assert "archive_sha256" in source
     assert "executable_sha256" in source
     assert 'model["sha256"]' in source
-    assert "voiceink release smoke " in source
-    assert "voiceink-shell-smoke.exe" in source
+    assert "release package" in source
+    assert "voiceink-shell-smoke.exe" not in source
+    assert "_run_package_smoke" in source
     assert '"--package-smoke"' in source
     assert "build_package(" in source
     assert "make_archive" in source
@@ -73,7 +74,80 @@ def test_extract_archive_rejects_path_traversal(tmp_path: Path) -> None:
     assert not (tmp_path / "outside.exe").exists()
 
 
-def test_build_release_package_publishes_after_relocation_smoke(
+def test_run_package_smoke_uses_relocated_gui_and_clears_external_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "release with spaces" / "voiceink-shell-windows-x64"
+    package.mkdir(parents=True)
+    executable = package / "voiceink-shell.exe"
+    executable.write_bytes(b"shell")
+    captured: dict[str, object] = {}
+
+    class Process:
+        pid = 42
+        returncode = 0
+
+        def communicate(self, *, timeout: int) -> tuple[str, str]:
+            assert timeout == release_package.PACKAGE_SMOKE_TIMEOUT_SECONDS
+            return "", ""
+
+    def fake_popen(command, *, cwd, env, **_kwargs):
+        captured.update(command=command, cwd=cwd, env=env)
+        return Process()
+
+    monkeypatch.setattr(release_package.subprocess, "Popen", fake_popen)
+
+    release_package._run_package_smoke(package)
+
+    assert captured["command"] == [str(executable), "--package-smoke"]
+    assert captured["cwd"] == package
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert environment["QT_QPA_PLATFORM"] == "offscreen"
+    assert all(
+        name not in environment
+        for name in (
+            "VOICEINK_PACKAGE_ROOT",
+            "VOICEINK_RUNTIME_MANIFEST",
+            "VOICEINK_ARTIFACT_LOCK",
+            "VOICEINK_ARTIFACT_LOCK_SHA256",
+        )
+    )
+
+
+def test_run_package_smoke_terminates_a_hung_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "release" / "voiceink-shell-windows-x64"
+    package.mkdir(parents=True)
+    (package / "voiceink-shell.exe").write_bytes(b"shell")
+
+    class HungProcess:
+        pid = 42
+        returncode = None
+        killed = False
+        calls = 0
+
+        def communicate(self, *, timeout: int):
+            self.calls += 1
+            if self.calls == 1:
+                raise release_package.subprocess.TimeoutExpired("shell", timeout)
+            return "", ""
+
+        def kill(self) -> None:
+            self.killed = True
+
+    process = HungProcess()
+    monkeypatch.setattr(release_package.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(release_package, "_terminate_process", lambda candidate: candidate.kill())
+
+    with pytest.raises(WindowsReleasePackageError, match="timed out"):
+        release_package._run_package_smoke(package)
+
+    assert process.killed
+
+
+def test_build_release_package_publishes_verified_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ffmpeg = b"ffmpeg"
@@ -129,7 +203,6 @@ def test_build_release_package_publishes_after_relocation_smoke(
     shell_dist = tmp_path / "dist"
     shell_dist.mkdir()
     (shell_dist / "voiceink-shell.exe").write_bytes(b"shell")
-    (shell_dist / "voiceink-shell-smoke.exe").write_bytes(b"smoke")
     sources = {
         "FFmpeg archive": tmp_path / "ffmpeg.exe",
         "sidecar archive": tmp_path / "sidecar.exe",
@@ -151,11 +224,10 @@ def test_build_release_package_publishes_after_relocation_smoke(
             "FFmpeg archive" if label == "FFmpeg" else "sidecar archive"
         ],
     )
-    monkeypatch.setattr(release_package, "_run_relocation_smoke", lambda _package: None)
-
+    monkeypatch.setattr(release_package, "_run_package_smoke", lambda _package: None)
     output = tmp_path / "release" / "voiceink-shell-windows-x64"
     bundle = tmp_path / "release" / "voiceink-shell-windows-x64.zip"
-    report = tmp_path / "release" / "windows-release-smoke.json"
+    report = tmp_path / "release" / "windows-release-package.json"
     build_release_package(
         lock_path=lock_path,
         shell_dist=shell_dist,
@@ -167,4 +239,5 @@ def test_build_release_package_publishes_after_relocation_smoke(
     assert output.is_dir()
     assert (output / "runtime" / "nemo-speech.exe").is_file()
     assert bundle.is_file()
+    assert '"relocation_path_with_spaces": true' in report.read_text(encoding="utf-8")
     assert '"status": "passed"' in report.read_text(encoding="utf-8")

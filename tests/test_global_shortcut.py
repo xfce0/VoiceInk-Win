@@ -129,14 +129,14 @@ def test_global_shortcut_exposes_registration_failure_without_raising(
     assert status.message == str(error)
 
 
-def test_unavailable_controller_does_not_register_global_shortcut() -> None:
+def test_global_shortcut_registers_before_recording_backend_is_ready() -> None:
     port = _ShortcutPort()
     service = GlobalToggleShortcutService(ShellController.unavailable(), port)
 
     status = service.register()
 
-    assert status.availability is ShortcutAvailability.UNAVAILABLE
-    assert port.shortcuts == []
+    assert status.availability is ShortcutAvailability.REGISTERED
+    assert [shortcut.value for shortcut in port.shortcuts] == ["Ctrl+Space"]
 
 
 def test_updating_registered_shortcut_replaces_the_single_registration() -> None:
@@ -205,6 +205,20 @@ def test_hotkey_settings_persists_only_after_registration() -> None:
     assert result.availability is ShortcutAvailability.REGISTERED
     assert persistence.changes == [{"hotkeys.start_stop": "Alt+Space"}]
     assert shortcut.status.shortcut.value == "Alt+Space"
+
+
+def test_hotkey_settings_load_replaces_an_early_default_registration() -> None:
+    port = _ShortcutPort()
+    shortcut = GlobalToggleShortcutService(ShellController.unavailable(), port)
+    shortcut.register()
+    settings = GlobalHotkeySettingsService(shortcut, _Persistence())
+
+    result = settings.load(Settings(hotkeys={"start_stop": "Alt+Space"}))
+
+    assert result.availability is ShortcutAvailability.REGISTERED
+    assert result.shortcut.value == "Alt+Space"
+    assert [item.value for item in port.shortcuts] == ["Ctrl+Space", "Alt+Space"]
+    assert port.registrations[0].unregister_calls == 1
 
 
 def test_hotkey_settings_restores_previous_registration_when_persistence_fails() -> None:

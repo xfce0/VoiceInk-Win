@@ -1,4 +1,4 @@
-"""Build and smoke-test the pinned relocatable Windows x64 release package."""
+"""Build the pinned relocatable Windows x64 release package."""
 
 from __future__ import annotations
 
@@ -25,11 +25,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK = ROOT / ".github" / "native-smoke" / "artifact-lock.template.json"
 DEFAULT_OUTPUT = ROOT / "release" / "voiceink-shell-windows-x64"
 DEFAULT_BUNDLE = ROOT / "release" / "voiceink-shell-windows-x64.zip"
-DEFAULT_REPORT = ROOT / "release" / "windows-release-smoke.json"
+DEFAULT_REPORT = ROOT / "release" / "windows-release-package.json"
 SIDECAR_ID = "nemo-speech-cpp-windows-amd64"
 MODEL_ID = "parakeet-tdt-0.6b-v3.oss-align.q8_0"
 DOWNLOAD_TIMEOUT_SECONDS = 300
-SMOKE_TIMEOUT_SECONDS = 360
+PACKAGE_SMOKE_TIMEOUT_SECONDS = 360
 
 
 class WindowsReleasePackageError(RuntimeError):
@@ -46,7 +46,7 @@ def _sha256(path: Path) -> str:
 
 def _download_verified(url: str, expected_sha256: str, destination: Path, label: str) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    request = Request(url, headers={"User-Agent": "VoiceInk-Win release package smoke"})
+    request = Request(url, headers={"User-Agent": "VoiceInk-Win release package"})
     try:
         with (
             urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response,
@@ -140,10 +140,10 @@ def _output_text(value: str | bytes | None) -> str:
     return (value or "<no output>").strip()[-4000:]
 
 
-def _run_relocation_smoke(package: Path) -> None:
-    executable = package / "voiceink-shell-smoke.exe"
+def _run_package_smoke(package: Path) -> None:
+    executable = package / "voiceink-shell.exe"
     if not executable.is_file():
-        raise WindowsReleasePackageError("relocated package is missing voiceink-shell-smoke.exe")
+        raise WindowsReleasePackageError("relocated package is missing voiceink-shell.exe")
     environment = os.environ.copy()
     for name in (
         "VOICEINK_PACKAGE_ROOT",
@@ -154,7 +154,7 @@ def _run_relocation_smoke(package: Path) -> None:
         environment.pop(name, None)
     environment["QT_QPA_PLATFORM"] = "offscreen"
     process = subprocess.Popen(
-        [str(executable), "--smoke", "--package-smoke"],
+        [str(executable), "--package-smoke"],
         cwd=package,
         env=environment,
         stdout=subprocess.PIPE,
@@ -163,23 +163,24 @@ def _run_relocation_smoke(package: Path) -> None:
         close_fds=True,
     )
     try:
-        stdout, stderr = process.communicate(timeout=SMOKE_TIMEOUT_SECONDS)
+        stdout, stderr = process.communicate(timeout=PACKAGE_SMOKE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as error:
         _terminate_process(process)
-        cleanup_note = ""
         try:
             stdout, stderr = process.communicate(timeout=10)
         except subprocess.TimeoutExpired:
             _terminate_process(process)
             try:
-                stdout, stderr = process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                stdout, stderr = "<process cleanup timed out>", "<process cleanup timed out>"
-            cleanup_note = "\nProcess cleanup required a second termination."
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired as wait_error:
+                raise WindowsReleasePackageError(
+                    "relocated package smoke process cleanup timed out"
+                ) from wait_error
+            stdout, stderr = "<process cleanup timed out>", "<process cleanup timed out>"
         raise WindowsReleasePackageError(
             "relocated package smoke timed out\n"
             f"stdout:\n{_output_text(stdout or error.stdout)}\n"
-            f"stderr:\n{_output_text(stderr or error.stderr)}{cleanup_note}"
+            f"stderr:\n{_output_text(stderr or error.stderr)}"
         ) from error
     if process.returncode != 0:
         raise WindowsReleasePackageError(
@@ -232,11 +233,11 @@ def _stage_release_package(
             lock_template=lock_path,
         )
         with tempfile.TemporaryDirectory(
-            prefix="voiceink release smoke ", dir=staged_output.parent
+            prefix="voiceink release package ", dir=staged_output.parent
         ) as temporary:
             relocated = Path(temporary) / staged_output.name
             shutil.copytree(package, relocated)
-            _run_relocation_smoke(relocated)
+            _run_package_smoke(relocated)
         shutil.move(str(package), staged_output)
 
 
@@ -306,7 +307,7 @@ def build_release_package(
             temporary_report.write_text(
                 json.dumps(
                     {
-                        "schema": "voiceink.windows-release-package-smoke.v1",
+                        "schema": "voiceink.windows-release-package.v1",
                         "status": "passed",
                         "package": output.name,
                         "relocation_path_with_spaces": True,

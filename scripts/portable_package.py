@@ -102,13 +102,7 @@ def build_package(
     """Build a package from already downloaded, hash-pinned artifacts."""
     if output.exists():
         raise PackageBuildError(f"refusing to replace existing output: {output}")
-    shell_files = {
-        name: _regular_file(shell_dist / name, f"shell artifact {name}")
-        for name in (
-            "voiceink-shell.exe",
-            "voiceink-shell-smoke.exe",
-        )
-    }
+    shell_file = _regular_file(shell_dist / "voiceink-shell.exe", "shell artifact")
     readme = _regular_file(PACKAGE_README, "package README")
     lock = _load_lock(lock_template)
     artifacts = lock["artifacts"]
@@ -138,8 +132,7 @@ def build_package(
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{output.name}.", dir=output.parent) as temporary:
         staged = Path(temporary)
-        shutil.copy2(shell_files["voiceink-shell.exe"], staged / "voiceink-shell.exe")
-        shutil.copy2(shell_files["voiceink-shell-smoke.exe"], staged / "voiceink-shell-smoke.exe")
+        shutil.copy2(shell_file, staged / "voiceink-shell.exe")
         shutil.copy2(readme, staged / "README.txt")
         _copy_verified(
             ffmpeg, staged / "tools" / "ffmpeg.exe", ffmpeg_lock["executable_sha256"], "FFmpeg"

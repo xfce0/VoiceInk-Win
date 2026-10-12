@@ -51,14 +51,14 @@ make push
 ## Windows Frontend Shell Artifact
 
 After a clean clone, `make build` is the reproducible Windows packaging command.
-It creates or updates only the frontend outputs in `dist/`, installs the exact
-`.[gui,build]` extras into `.venv`, validates both x64 PE subsystems, and runs
-the console executable with Qt's offscreen platform. It requires 64-bit Windows
-10/11 and GNU Make. The bootstrap selects a compatible 64-bit Python 3.12
-runtime automatically and downloads Python 3.12.10 when no matching interpreter
-is installed. 32-bit Windows is rejected because the pinned PySide6 build has no
-32-bit wheel. On an ARM64 host, x64 Python runs through Windows emulation;
-native ARM64 packaging is rejected because no ARM64 artifact matrix exists.
+It builds the GUI and stages the complete relocatable package with the pinned
+FFmpeg, NeMo Speech sidecar, and Parakeet model. It does not create a smoke
+executable. It requires 64-bit Windows 10/11 and GNU Make. The bootstrap selects
+a compatible 64-bit Python 3.12 runtime automatically and downloads Python
+3.12.10 when no matching interpreter is installed. 32-bit Windows is rejected
+because the pinned PySide6 build has no 32-bit wheel. On an ARM64 host, x64
+Python runs through Windows emulation; native ARM64 packaging is rejected
+because no ARM64 artifact matrix exists.
 macOS and Linux are intentionally rejected for this target; use `make check` there.
 
 Run `make platform-check` first for the detected Windows version, host/process
@@ -95,38 +95,43 @@ python --version  # 3.12.x, 3.13.x, or 3.14.x
 make build
 ```
 
-The command produces exactly these package files:
+The command produces the complete package under `release/`:
 
 ```text
-dist/
-  README.txt
+release/voiceink-shell-windows-x64/
   voiceink-shell.exe          # user-facing GUI executable
-  voiceink-shell-smoke.exe    # console/offscreen smoke executable
+  voiceink-package.json       # packaged backend manifest
+  runtime/nemo-speech.exe
+  models/parakeet.gguf
+  tools/ffmpeg.exe
 ```
 
 If `dist/` contains unrelated files, the build refuses to overwrite them. Move
 those files or explicitly run `make clean` before retrying. `make clean` removes
 all generated `dist/` and build directories.
 
-The `Windows Frontend Shell Build` workflow uses the same `make build` command
-and publishes the artifact `voiceink-shell-windows-x64`.
+The `Windows Frontend Shell Build` workflow uses `make frontend-build` and
+publishes only the GUI executable as `voiceink-shell-windows-x64-frontend`.
+The production workflow publishes `voiceink-shell-windows-x64-release`; its ZIP
+contains the complete package built by `make build`.
 GitHub CLI downloads and extracts it into the requested directory:
 
 ```powershell
-gh run download RUN_ID --repo xfce0/VoiceInk-Win --name voiceink-shell-windows-x64 --dir .\voiceink-shell-windows-x64
+gh run download RUN_ID --repo xfce0/VoiceInk-Win --name voiceink-shell-windows-x64-release --dir .\download
+Expand-Archive .\download\voiceink-shell-windows-x64.zip -DestinationPath .\voiceink-shell-windows-x64
 & .\voiceink-shell-windows-x64\voiceink-shell.exe
 ```
 
-Run only `voiceink-shell.exe` as the desktop application. The companion
-`voiceink-shell-smoke.exe` is a CI-only smoke-test binary, not
-`voiceink-diagnostic.exe` and not a separate user-facing CLI.
+Run `release/voiceink-shell-windows-x64/voiceink-shell.exe` as the desktop
+application. The package contains the backend runtime and model, so imported
+media transcription does not depend on developer environment variables.
 
 Replace `RUN_ID` with the workflow run ID, or download the artifact ZIP from
 the Actions page and extract it with `Expand-Archive`. The artifact includes
 the same command in its `README.txt`.
 
 To stage a complete relocatable CPU package from already downloaded, pinned
-artifacts, run this on Windows after `make build`:
+artifacts instead of downloading them in `make build`, run this on Windows:
 
 ```powershell
 make portable-package `
@@ -152,8 +157,8 @@ The packaged shell supports two explicit runtime modes:
 - **Configured imported-media mode:** when a portable package descriptor is
   present next to the executable, or the external runtime settings below are
   complete, the shell starts promptly with Transcribe loading, then enables the
-  page only after backend readiness succeeds. Microphone capture, WASAPI, and
-  native audio remain unavailable in both modes.
+  page only after backend readiness succeeds. The packaged build also exposes
+  microphone capture through the `sounddevice` PortAudio backend.
 
 External runtime mode requires these environment variables:
 
@@ -173,8 +178,9 @@ The runtime manifest and artifact lock must describe the approved model and
 sidecar executable. FFmpeg must be an approved absolute path whose metadata and
 SHA-256 pass verification. The legacy `VOICEINK_IMPORT_ROOTS` setting is
 optional and ignored for admission; regular local files may be selected from
-any directory. Global hotkeys, system tray, active-application text injection,
-and native audio behavior are not part of this imported-media slice.
+any directory. Global hotkeys and system tray behavior are part of the desktop
+shell; active-application text injection is not part of this imported-media
+slice.
 
 ## Windows Diagnostic Build
 

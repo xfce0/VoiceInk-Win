@@ -19,7 +19,7 @@ VENV_PIP := $(VENV)/bin/python -m pip
 PLATFORM_CHECK_COMMAND := $(PYTHON) scripts/windows_platform.py --check
 endif
 
-.PHONY: help setup format format-check lint spec-check wasapi-contract-check test compile platform-check build build-deps portable-package windows-release-smoke require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
+.PHONY: help setup format format-check lint spec-check wasapi-contract-check test compile platform-check build frontend-build build-deps portable-package windows-release-package require-portable-artifacts require-windows diagnostic-build native-smoke check run run-shell clean install-hooks verify-branch push
 
 ## help: Show available development commands
 help:
@@ -75,17 +75,20 @@ build-deps: require-windows
 	$(VENV_PIP) check
 	$(VENV_PYTHON) -c "import importlib.metadata as metadata; import sys; expected = {'Pillow': '12.3.0', 'PySide6': '6.12.0', 'PySide6-Addons': '6.12.0', 'PySide6-Essentials': '6.12.0', 'PySide6-Pdf': '6.12.0.140', 'PySide6-WebEngine': '6.12.0.140', 'altgraph': '0.17.5', 'packaging': '26.3', 'pefile': '2024.8.26', 'pyinstaller': '6.22.3', 'pyinstaller-hooks-contrib': '2026.8', 'pywin32-ctypes': '0.2.3', 'shiboken6': '6.12.0', 'sounddevice': '0.5.6'}; actual = {name: metadata.version(name) for name in expected}; mismatches = [name + '==' + actual[name] + ' (expected ' + version + ')' for name, version in expected.items() if actual[name] != version]; sys.exit('Build dependency pin mismatch: ' + ', '.join(mismatches)) if mismatches else print('Verified build dependency pins: ' + ', '.join(name + '==' + actual[name] for name in sorted(actual)))"
 
-## build: Build and validate the Windows GUI and console smoke executables in dist/
-build: require-windows build-deps
+## frontend-build: Build the user-facing Windows GUI executable in dist/
+frontend-build: require-windows build-deps
 	$(VENV_PYTHON) scripts/frontend_build.py
 
+## build: Build the complete relocatable Windows package, including the backend runtime
+build: frontend-build
+	$(VENV_PYTHON) scripts/windows_release_package.py --lock "$(WINDOWS_RELEASE_LOCK)" --shell-dist dist --output release/voiceink-shell-windows-x64 --bundle release/voiceink-shell-windows-x64.zip --report release/windows-release-package.json
+
 ## portable-package: Stage a relocatable CPU runtime bundle from pinned local artifacts
-portable-package: require-windows require-portable-artifacts build
+portable-package: require-windows require-portable-artifacts frontend-build
 	$(VENV_PYTHON) scripts/portable_package.py --shell-dist dist --ffmpeg "$(VOICEINK_FFMPEG_PATH)" --sidecar "$(VOICEINK_SIDECAR_PATH)" --model "$(VOICEINK_MODEL_PATH)" --output release/voiceink-shell-windows-x64
 
-## windows-release-smoke: Download tracked pins, build, relocate, smoke-test, and bundle the Windows release package
-windows-release-smoke: build
-	$(VENV_PYTHON) scripts/windows_release_package.py --lock "$(WINDOWS_RELEASE_LOCK)" --shell-dist dist --output release/voiceink-shell-windows-x64 --bundle release/voiceink-shell-windows-x64.zip --report release/windows-release-smoke.json
+## windows-release-package: Alias for the complete production package build
+windows-release-package: build
 
 ## require-portable-artifacts: Verify portable package inputs before the Windows build
 require-portable-artifacts:
